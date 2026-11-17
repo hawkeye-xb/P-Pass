@@ -164,6 +164,9 @@
     <string name="bucket_title">Photos to back up</string>
     <string name="bucket_hint">Only checked albums are backed up.</string>
     <string name="bucket_empty">No photos or videos on this phone.</string>
+    <!-- #1794：范围页始终能进（对齐 iOS）。没有相册权限时相册区说明现状并给申请入口，文件夹区照常可用。 -->
+    <string name="scope_album_no_access_body">P-Pass can’t read photos on this phone, so it can’t back them up.</string>
+    <string name="scope_album_no_access_action">Allow access to photos</string>
     <!-- 只给了部分照片（Android 14+「选择照片」/ iOS「有限访问」）时，选范围页顶部的一行。 -->
     <string name="bucket_loading">Reading albums…</string>
     <string name="bucket_count">%1$d</string>
@@ -182,8 +185,9 @@
     <!-- MOB-02 §六: 新相册徽标 -->
     <string name="bucket_new">New</string>
     <string name="backup_scope">Backup range</string>
-    <string name="backup_scope_none">None selected</string>
-    <!-- #1020: a scope was saved but can't be read ： not the same as "None selected". -->
+    <string name="backup_scope_none">No backup scope selected</string>
+    <!-- #1794: no source at all (albums or folders) — say the scope isn't selected, never "no albums". -->
+    <!-- #1020: a scope was saved but can't be read ： not the same as "No backup scope selected". -->
     <string name="backup_scope_unreadable">Can’t read the saved selection</string>
     <plurals name="backup_scope_n">
         <item quantity="one">%1$d album</item>

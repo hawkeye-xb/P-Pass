@@ -15,6 +15,8 @@ import android.os.Looper
 import android.provider.MediaStore
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
+import com.hawkeyexb.ppass.backup.folder.FolderAccess
+import com.hawkeyexb.ppass.backup.folder.isFolderId
 import com.hawkeyexb.ppass.backup.flow.AndroidFlowRuntime
 import com.hawkeyexb.ppass.backup.flow.EngineView
 import com.hawkeyexb.ppass.backup.flow.FlowCommand
@@ -134,13 +136,18 @@ class BackupUiStateHolder(
     val desktopLowSpace: State<Boolean> get() = _desktopLowSpace
 
     /**
-     * #1038：账本读不读得到（[FlowProjection.countsReadable]）、范围存没存——英雄区据此在「读不到」「未选相册」
+     * #1038：账本读不读得到（[FlowProjection.countsReadable]）、范围存没存——英雄区据此在「读不到」「未选定自动备份范围」
      * 「相册数量读取失败」之间选（[com.hawkeyexb.ppass.ui.heroRenderOf]）。
+     * #1794：判据是 [heroScopeSavedOf]——有效范围里已有来源（已登记目录也算）就不再是「未选定」。
      */
     private val _countsReadable = mutableStateOf(true)
     val countsReadable: State<Boolean> get() = _countsReadable
     private val _scopeSaved = mutableStateOf(true)
     val scopeSaved: State<Boolean> get() = _scopeSaved
+
+    /** #1794：范围里一个来源都没有（相册和目录都空）——首页据此说「未选定自动备份范围」，不说「读不到」。 */
+    private val _noSources = mutableStateOf(false)
+    val noSources: State<Boolean> get() = _noSources
 
     /**
      * #1020：一过性提示（字符串资源 id）——命令执行出错时发；首页收集后交给 UI-12 的 Snackbar。
@@ -158,6 +165,8 @@ class BackupUiStateHolder(
     @Volatile private var inScopeTotal: Long? = null
     /** #1038：当前存在的相册（MediaStore）；null = 读不到（没权限 / 查询失败）。与 n 一起在 recount 时重读。 */
     @Volatile private var existingBuckets: Set<Long>? = null
+    /** 已登记的目录来源 id（SAF）：目录也是来源，判「一个来源都没有」时要一起算。 */
+    @Volatile private var folderBuckets: Set<Long> = emptySet()
     @Volatile private var gateway: EngineGateway? = null
     private var lastBucketIds: Set<Long>? = null
     private var lastNoAlbums = false
@@ -325,6 +334,13 @@ class BackupUiStateHolder(
      */
     private fun currentFacts(recount: Boolean, bucketIds: Set<Long>?, sinceSec: Long?): FlowProjection? {
         val g = gateway ?: return null
+        // #1794：目录登记表每次刷新都重读——设置页「添加文件夹」只写 registry、不重数（recount=false），
+        // 不重读的话 onResume / 引擎 revision 之后首页来源判据还停在旧目录集合。registry 是内存单例，开销可忽略。
+        folderBuckets = try {
+            FolderAccess.registry(context).allRecords().mapTo(HashSet()) { it.bucketId }
+        } catch (_: Throwable) {
+            emptySet()
+        }
         if (recount || inScopeTotal == null) {
             inScopeTotal = try {
                 // #1263：分母跟着新范围一起算（相册 + 开始时间）。
@@ -351,12 +367,15 @@ class BackupUiStateHolder(
 
     private suspend fun refresh(recount: Boolean) {
         pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingId(pairing.pairingId))
-        // #1020：读不到的范围与「从未保存」一样不给三元组（英雄区说「未选相册」，设置行另说「读不到」），同 iOS。
-        val bucketIds = (withContext(Dispatchers.IO) { scopeStore.readScope() } as? ScopeRead.Saved)?.ids
+        // #1020：读不到的范围与「从未保存」一样不给三元组（英雄区说「未选定自动备份范围」，设置行另说「读不到」），同 iOS。
+        // #1794：known 用来区分新旧范围（旧范围会并入已登记目录），和范围一起在每次刷新时重读。
+        val (bucketIds, knownSources) = withContext(Dispatchers.IO) {
+            (scopeStore.readScope() as? ScopeRead.Saved)?.ids to scopeStore.knownBucketIds()
+        }
         val sinceSec = withContext(Dispatchers.IO) { scopeStore.sinceSec() }
         val p = withContext(Dispatchers.IO) { currentFacts(recount, bucketIds, sinceSec) } ?: return
         lastBucketIds = bucketIds
-        lastNoAlbums = noAlbumsOf(bucketIds, existingBuckets)
+        lastNoAlbums = noAlbumsOf(bucketIds, existingBuckets, folderBuckets, knownSources)
         publish(p)
     }
 
@@ -365,7 +384,8 @@ class BackupUiStateHolder(
         _projection.value = p
         _state.value = backupUiStateOf(p, noAlbums = lastNoAlbums)
         _countsReadable.value = p.countsReadable
-        _scopeSaved.value = lastBucketIds != null
+        _scopeSaved.value = heroScopeSavedOf(lastNoAlbums)
+        _noSources.value = lastNoAlbums
         _missingSourceNotice.value = flowMissingSourceNotice(p)
         _acknowledgedMissingSourceCount.value = p.missingSourceAcknowledged.toInt()
         _transferProgress.value = transferPermilleOf(p.current)?.let { it / 1000f }
@@ -491,7 +511,7 @@ private class EngineViewGateway(private val runtime: AndroidFlowRuntime) : Engin
     override val revision: Flow<Long> = engine.revision
 
     override fun facts(bucketIds: Set<Long>?, inScopeTotal: Long?, sinceSec: Long?): FlowProjection =
-        FlowProjection.facts(runtime.store, runtime.control, bucketIds, inScopeTotal, view = null, sinceSec = sinceSec)
+        FlowProjection.facts(runtime.store, runtime.control, bucketIds, inScopeTotal, view = null, sinceSec = sinceSec, scopeTimeOf = runtime.scopeTimeOf)
 
     override suspend fun pause() {
         engine.pause().await()
@@ -545,11 +565,37 @@ internal fun factsOrUnreadable(
     }
 
 /**
- * #1038（对位 iOS `AppModel.noAlbums`）：一张都不在范围内——范围从未保存 / 读不到（[bucketIds] 为 null）、保存了空集、
- * 或选中的相册都已不存在（#836 的「已选且当前存在」口径，[existing] 为 null 时沿用已选个数）。
+ * #1038 / #1794：范围内一个来源都没有。判据与引擎同一个有效范围（[effectiveBackupScope]）：
+ * 已登记的目录在「从未保存统一范围」的老路径里会被引擎并进范围并真的备份，所以不能只看已保存的
+ * [bucketIds] 里有没有目录 id；保存过统一范围且明确不选目录时，它又必须不算来源。
+ *
+ * [bucketIds] 为 null = 范围从未保存 / 读不到（= 引擎的一张都不在范围内）；[existing] 为 null =
+ * 读不到现有相册，沿用已选个数（#836 的「已选且当前存在」口径）；目录来源以 [folderBuckets]
+ * （registry 里仍登记着的）为准，[knownBucketIds] 用来区分新旧范围（与引擎同源）。
  */
-internal fun noAlbumsOf(bucketIds: Set<Long>?, existing: Set<Long>?): Boolean =
-    (selectedExistingCount(bucketIds, existing) ?: 0) == 0
+internal fun noAlbumsOf(
+    bucketIds: Set<Long>?,
+    existing: Set<Long>?,
+    folderBuckets: Set<Long> = emptySet(),
+    knownBucketIds: Set<Long>? = null,
+): Boolean {
+    val effective = effectiveBackupScope(
+        saved = bucketIds?.let { BackupScope(it, sinceSec = null) },
+        knownSourceIds = knownBucketIds,
+        existingFolderBuckets = folderBuckets,
+        sinceSec = null,
+    )?.buckets.orEmpty()
+    val albums = selectedExistingCount(effective.filterNot(::isFolderId).toSet(), existing) ?: 0
+    val folders = effective.count { isFolderId(it) && it in folderBuckets }
+    return albums == 0 && folders == 0
+}
+
+/**
+ * #1794：英雄区「范围存没存」的判据（[com.hawkeyexb.ppass.ui.heroRenderOf] 的 `scopeSaved`）。
+ * 有效范围非空（[noSources] 为 false，已登记目录也算来源）就不说「未选定自动备份范围」；
+ * 只有真正一个来源都没有时才回到「未选定」（从未保存、保存过空集、来源全删）。
+ */
+internal fun heroScopeSavedOf(noSources: Boolean): Boolean = !noSources
 
 /**
  * #1020（对位 iOS `AppModel.runCommand` / `commandFailed`）：执行一条用户命令，成功与出错各记一行日志

@@ -15,6 +15,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import com.hawkeyexb.ppass.io.atomicReplace
+import com.hawkeyexb.ppass.backup.order.mediaStoreScopeTimeSelection
 import java.io.File
 
 data class MediaItem(
@@ -283,10 +284,10 @@ class MediaScanner(private val resolver: ContentResolver?) {
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
         )) {
-            // #1263：范围带开始时间时只数进入相册不早于它的（与引擎 inScope 同一口径：DATE_ADDED）。
+            // 与引擎同一条范围时间：拍摄时间优先，缺失才回退 DATE_MODIFIED。
             val where = listOfNotNull(
                 bucketIds?.takeIf { it.isNotEmpty() }?.let { "${MediaStore.MediaColumns.BUCKET_ID} IN (${it.joinToString(",")})" },
-                sinceSec?.let { "${MediaStore.MediaColumns.DATE_ADDED} >= $it" },
+                sinceSec?.let(::mediaStoreScopeTimeSelection),
             ).takeIf { it.isNotEmpty() }?.joinToString(" AND ")
             requireResolver().query(
                 collection,

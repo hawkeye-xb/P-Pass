@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import com.hawkeyexb.ppass.ui.FolderBucketUi
 import com.hawkeyexb.ppass.ui.FolderUi
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -251,31 +252,6 @@ internal fun screenAfterPairingCleared(screen: Screen, clearedPairingId: String)
 internal fun isOnboardingScreen(screen: Screen): Boolean =
     screen is Screen.Decision || (screen is Screen.Buckets && screen.firstTime)
 
-/** MOB-03：进选相册页时权限链的第一步。 */
-internal enum class BucketPickerEntry { RequestPermission, Buckets }
-
-/**
- * #1259（10-29 改决定）：缺照片权限就直接弹系统框，前面不加说明屏——Android 的系统框不能自定义。
- * 只给了部分照片时完整权限仍算缺，照样再弹：Android 14+ 的系统框就是用户追加照片或改成「全部」的地方。
- */
-internal fun bucketPickerEntry(permissionsMissing: Boolean): BucketPickerEntry =
-    if (permissionsMissing) BucketPickerEntry.RequestPermission else BucketPickerEntry.Buckets
-
-/** MOB-03：系统照片权限框关掉之后去哪。 */
-internal enum class MediaPermissionLanding { Buckets, HomeWithDeniedDialog }
-
-/**
- * 完整授权、只给了部分照片 → 都进选范围页（10-29：部分授权也要能选范围，只备份允许的那些，
- * 页顶说明一行 `bucket_partial_access_note`；以前直接回首页、范围是空的，用户看不出为什么不传）。
- * 全拒 → 首页（`no_media_access_*` 卡）并弹人话对话框。配对成功后直接弹系统框时界面还停在配对页，
- * 拒绝也必须离开那里，不能把用户留在配对页上。
- */
-internal fun mediaPermissionLanding(allGranted: Boolean, access: MediaAccess): MediaPermissionLanding = when {
-    allGranted && access == MediaAccess.FULL -> MediaPermissionLanding.Buckets
-    access == MediaAccess.PARTIAL -> MediaPermissionLanding.Buckets
-    else -> MediaPermissionLanding.HomeWithDeniedDialog
-}
-
 /**
  * #1263：「只备份某天起的照片」那一档一律写日期（10-29 文案定稿）：没存过 → 今天（保存时落的就是今天 0 点，见
  * [sinceToSave]）；存过 → 存的那一天。几天以后看也还是那一天，不会说成「从今天起」。
@@ -389,15 +365,11 @@ fun PPassApp() {
             }
         }
     }
-    // MOB-03: 相册选择页权限链——「等授权结果后去哪」的落点。设置后由
-    // bucketMediaPermission 回调消费；不进 Buckets 的路径立即清掉。
-    var pendingBucketsPairing by remember { mutableStateOf<Pairing?>(null) }
-    var pendingBucketsFirstTime by remember { mutableStateOf(false) }
     // MOB-03: 媒体权限被拒 → 人话引导（不崩不白屏，说清为什么需要）。
     // #1272：照片权限被拒不再弹对话框，改成「自动备份」开关下方一行小字。
     var ruleHintRes by remember { mutableStateOf<Int?>(null) }
     // MOB-02 §二: 部分授权态（API 34+「部分照片」）——ON_RESUME 一起刷新
-    // （用户去系统设置改完全授权返回后引导卡消失）；bucketMediaPermission
+    // （用户去系统设置改完全授权返回后引导卡消失）；bucketAlbumPermission
     // 回调里也会即时重读。声明提前：launcher 回调需要引用。
     // MOB-94: 三档，不是布尔。全拒那一档此前落进了「正常」分支，
     // 首页因此显示「0 / 0 张已回家 · 照片都存好了」。
@@ -478,35 +450,15 @@ fun PPassApp() {
         ActivityResultContracts.RequestPermission()
     ) { granted -> screen = cameraPermissionResultTarget(granted) }
 
-    // MOB-03: 相册选择页权限链——未授权先弹系统权限，完整授权后才进列表；
-    // 部分授权 → Home 引导卡（MOB-02 §二，不显示假 0/0）；拒绝 → 人话对话框。
-    val bucketMediaPermission = rememberLauncherForActivityResult(
+    // #1794: 范围页的相册权限在页内申请（对齐 iOS：范围页始终能进，没有相册权限也能管理文件夹）。
+    // 回调只按真实权限刷新，不离开范围页——拒绝后文件夹与「添加文件夹」照常可用。
+    val bucketAlbumPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
-        val pairing = pendingBucketsPairing
-        if (pairing != null) {
-            pendingBucketsPairing = null
-            // 系统弹窗关闭后状态已落定，直接重读（比 ON_RESUME 刷新更及时）。
-            mediaAccess = mediaAccess(context)
-            mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
-            val stillNeeded = requiredMediaPermissions().filter {
-                ContextCompat.checkSelfPermission(context, it) !=
-                    PackageManager.PERMISSION_GRANTED
-            }
-            when (mediaPermissionLanding(stillNeeded.isEmpty(), mediaAccess)) {
-                MediaPermissionLanding.Buckets -> screen = Screen.Buckets(
-                    pairing,
-                    BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
-                    pendingBucketsFirstTime,
-                )
-                MediaPermissionLanding.HomeWithDeniedDialog -> {
-                    screen = Screen.Home(pairing)
-                    ruleHintRes = R.string.auto_backup_rule_denied_hint
-                }
-            }
-        }
+        mediaAccess = mediaAccess(context)
+        mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
+        PLog.i("PPassFlow", "scope: photo access after prompt=$mediaAccess")
     }
-
 
     // UPD-02: 更新状态机——检查/下载/校验/安装/回执全链状态在
     // UpdateUiController 一处汇合，这里只接线：触发节点 1（冷启动，下方
@@ -702,27 +654,19 @@ fun PPassApp() {
             BackupScopeStore(context, pairing.daemonNodeId).selectedBucketIds()?.isNotEmpty() == true
         }
 
+    // #1794：范围页始终能进——没有相册权限也直接进（对齐 iOS），相册区在页内说明现状并给申请入口，
+    // 文件夹区与「添加文件夹」照常可用；相册权限只在用户点页内申请入口时才申请。
     fun enterBucketPicker(pairing: Pairing, firstTime: Boolean) {
-        val needed = requiredMediaPermissions().filter {
-            ContextCompat.checkSelfPermission(context, it) !=
-                PackageManager.PERMISSION_GRANTED
-        }
-        when (bucketPickerEntry(needed.isNotEmpty())) {
-            BucketPickerEntry.RequestPermission -> {
-                pendingBucketsPairing = pairing
-                pendingBucketsFirstTime = firstTime
-                bucketMediaPermission.launch(withMediaLocation(needed))
-            }
-            BucketPickerEntry.Buckets -> screen = Screen.Buckets(
-                pairing,
-                BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
-                firstTime,
-            )
-        }
+        screen = Screen.Buckets(
+            pairing,
+            BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
+            firstTime,
+        )
     }
 
-    // #1272：「自动备份」规则开关。打开时才申请全部照片权限：全部允许 → 选范围页；有限访问 → 开关不开、把允许的
-    // 照片按手选链路传一次；不允许 → 开关不开、开关下方一行小字。
+    // #1272/#1794：「自动备份」规则开关。按范围实际需不需要相册判断：没有有效来源 → 先进选范围页选来源；
+    // 只有文件夹来源 → 直接开，不申请相册权限；范围含相册才走权限（全部 → 开；有限访问 → 开关不开、把允许的
+    // 照片按手选链路传一次；不允许 → 开关不开、开关下方一行小字）。
     val rulePrefs = remember { com.hawkeyexb.ppass.backup.autoBackupRulePrefs(context) }
     var ruleOn by remember { mutableStateOf(runCatching { rulePrefs.enabled() }.getOrDefault(false)) }
     var pendingRulePairing by remember { mutableStateOf<Pairing?>(null) }
@@ -734,7 +678,13 @@ fun PPassApp() {
                 rulePrefs.set(true)
                 ruleOn = true
                 ruleHintRes = null
-                screen = Screen.Buckets(pairing, BackupScopeStore(context).selectedBucketIds() ?: emptySet(), false)
+                val scopeStore = BackupScopeStore(context)
+                val folderCount = com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().size
+                if (com.hawkeyexb.ppass.backup.scopeNeedsFirstChoice(scopeStore.readScope(), folderCount)) {
+                    screen = Screen.Buckets(pairing, scopeStore.selectedBucketIds() ?: emptySet(), false)
+                } else {
+                    requestFlowWake(context, TriggerReason.MANUAL)
+                }
             }
             MediaAccess.PARTIAL -> {
                 ruleHintRes = null
@@ -772,16 +722,29 @@ fun PPassApp() {
             rulePrefs.set(false)
             ruleOn = false
             ruleHintRes = null
-        } else when (ruleEnableRoute(mediaAccess(context), canPromptForFullMediaAccess(context))) {
-            RuleEnableRoute.Apply -> applyRuleAccess(pairing, MediaAccess.FULL)
-            RuleEnableRoute.Settings -> {
-                ruleAwaitingSettings = true
-                PLog.i("PPassFlow", "auto-rule: partial photo access, prompt locked; opening app settings for full access")
-                openAppDetailsSettings(context)
-            }
-            RuleEnableRoute.Request -> {
-                pendingRulePairing = pairing
-                rulePermission.launch(withMediaLocation(requiredMediaPermissions()))
+        } else {
+            val routeScope = BackupScopeStore(context).readScope()
+            val routeFolderCount = com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().size
+            when (ruleEnableRoute(mediaAccess(context), canPromptForFullMediaAccess(context), routeScope, routeFolderCount)) {
+                RuleEnableRoute.ChooseScope -> {
+                    // #1794：没有有效来源时先打开规则开关，再进范围页让用户选（不跳系统设置，也不先要相册权限）。
+                    // 范围页以 firstTime=false 打开、保存分支不会替用户开开关，所以必须先在这里落开关，否则保存回来仍是关的。
+                    PLog.i("PPassFlow", "auto-rule: no effective scope, enabling rule then opening scope page to choose sources")
+                    rulePrefs.set(true)
+                    ruleOn = true
+                    ruleHintRes = null
+                    screen = Screen.Buckets(pairing, BackupScopeStore(context).selectedBucketIds() ?: emptySet(), false)
+                }
+                RuleEnableRoute.Apply -> applyRuleAccess(pairing, MediaAccess.FULL)
+                RuleEnableRoute.Settings -> {
+                    ruleAwaitingSettings = true
+                    PLog.i("PPassFlow", "auto-rule: partial photo access, prompt locked; opening app settings for full access")
+                    openAppDetailsSettings(context)
+                }
+                RuleEnableRoute.Request -> {
+                    pendingRulePairing = pairing
+                    rulePermission.launch(withMediaLocation(requiredMediaPermissions()))
+                }
             }
         }
     }
@@ -1328,7 +1291,8 @@ fun PPassApp() {
             // #836：「已选相册」按已选且当前存在计数（与选相册页同源：MediaStore 里实际有的相册）。
             // 先用存下的个数占位，IO 上查完相册再校正；照片权限变化、每次回到前台都重算。
             var selectedBucketCount by remember { mutableStateOf(BackupScopeStore(context).selectedBucketIds()?.size) }
-            // #1020：存了范围但读不出来——设置行说「读不到已保存的选择」，不说「未选相册」。
+            var selectedFolderCount by remember { mutableStateOf(0) }
+            // #1020：存了范围但读不出来——设置行说「读不到已保存的选择」，不说「未选定自动备份范围」。
             var scopeUnreadable by remember { mutableStateOf(false) }
             // #1263：范围的开始时间（设置行的值「3 个相册 · 10月29日起的照片」）。
             var scopeSince by remember { mutableStateOf(BackupScopeStore(context).sinceSec()) }
@@ -1344,8 +1308,17 @@ fun PPassApp() {
                         null
                     }
                 }
-                val selected = withContext(Dispatchers.IO) { BackupScopeStore(context).selectedBucketIds() }
-                selectedBucketCount = selectedExistingCount(selected, listed?.map { it.id }?.toSet())
+                val effectiveSelected = withContext(Dispatchers.IO) {
+                    val store = BackupScopeStore(context)
+                    val folderIds = com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords()
+                        .mapTo(HashSet()) { it.bucketId }
+                    com.hawkeyexb.ppass.backup.effectiveBackupScope(store.scope(), store.knownBucketIds(), folderIds, store.sinceSec())?.buckets
+                }
+                val folderIds = withContext(Dispatchers.IO) {
+                    com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().mapTo(HashSet()) { it.bucketId }
+                }
+                selectedFolderCount = effectiveSelected?.count { com.hawkeyexb.ppass.backup.folder.isFolderId(it) && it in folderIds } ?: 0
+                selectedBucketCount = selectedExistingCount(effectiveSelected, listed?.map { it.id }?.toSet()?.plus(folderIds))
             }
             val scope = rememberCoroutineScope()
             // NET-28: bind can now throw (timeout) — an uncaught throw in a
@@ -1418,6 +1391,12 @@ fun PPassApp() {
                         backgroundOn = userRequestedBackgroundBackup,
                         finished = offerDismissed,
                     )
+                    // 产品口径（2026-11-17）：首次引导只发生一次——只有从未保存过范围才出「开启范围备份」。
+                    val firstChoicePending = com.hawkeyexb.ppass.backup.scopeNeedsFirstChoice(
+                        BackupScopeStore(context).readScope(),
+                        com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().size,
+                    )
+                    val guide = guideForCurrentScope(photosGuideOf(guideFacts), firstChoicePending)
                     PhotosScreen(
                         timeline,
                         onViewerOpenChange = { photoViewerOpen = it },
@@ -1426,14 +1405,19 @@ fun PPassApp() {
                         daysUnreachable = daysUnreachable,
                         // #1322：引导位按当前开关现算（方案结论 6）；「还没有选择相册」并入「开启范围备份」这一步。
                         // 范围存了但读不出来不算「没选」（设置行另说「读不到」）。
-                        guide = photosGuideOf(guideFacts),
+                        guide = guide,
                         computerName = s.pairing.storageDeviceName,
                         // #1353：开关关着、点了会去系统设置（部分权限且系统不再弹框）→ 按钮说「去设置」。
                         guideActionGoesToSettings = !ruleOn &&
-                            ruleEnableRoute(mediaAccess, canPromptForFullMediaAccess(context)) == RuleEnableRoute.Settings,
+                            ruleEnableRoute(
+                                mediaAccess,
+                                canPromptForFullMediaAccess(context),
+                                BackupScopeStore(context).readScope(),
+                                com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().size,
+                            ) == RuleEnableRoute.Settings,
                         onGuideAction = { g ->
                             when (g) {
-                                // 开关开着、只是没选相册 → 直达选范围页；开关关着 → 走开启链路（权限 → 选范围页）。
+                                // 开关开着、只是还没有来源 → 直达选范围页；开关关着 → 走开启链路（权限 → 选范围页）。
                                 PhotosGuide.EnableScope ->
                                     if (ruleOn) enterBucketPicker(s.pairing, firstTime = false) else onToggleRule(s.pairing, true)
                                 PhotosGuide.EnableBackground -> onEnableFromOffer()
@@ -1582,9 +1566,11 @@ fun PPassApp() {
                         // T6: 备份范围——「选择相册」与「发起备份」两个动作。
                         // #836：按「已选且当前存在」计数，与选相册页同一口径。
                         selectedBucketCount = selectedBucketCount,
+                        selectedFolderCount = selectedFolderCount,
                         scopeUnreadable = scopeUnreadable,
                         scopeTimeLabel = scopeValueLabel(context, scopeSince),
                         countsReadable = holder.countsReadable.value,
+                        // #1794：有效范围非空（含已登记目录）就不算「未选定」——判据在 holder 的 scopeSaved 里。
                         scopeSaved = holder.scopeSaved.value,
                         // MOB-03: 相册选择入口走完整权限链——MOB-02 删首页手动
                         // 备份按钮时把挂在它身上的权限申请链一起删没了，
@@ -1681,12 +1667,55 @@ fun PPassApp() {
         // #1263：范围 = 相册 + 开始时间（从今天起 / 全部）；首次选完直接进首页，没有完成页。
         is Screen.Buckets -> {
             val scopeStore = remember { BackupScopeStore(context) }
+            val folderRegistry = remember { com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context) }
             var buckets by remember { mutableStateOf<List<MediaScanner.Bucket>?>(null) }
-            LaunchedEffect(Unit) {
-                buckets = withContext(Dispatchers.IO) {
-                    MediaScanner(context.contentResolver).listBuckets()
+            var folderEntries by remember { mutableStateOf(emptyList<com.hawkeyexb.ppass.backup.folder.FolderEntry>()) }
+            var folderRevision by remember { mutableStateOf(0) }
+            var pendingFolderUris by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+            var folderToReauthorize by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+            var scopeSaving by remember { mutableStateOf(false) }
+            var foldersError by remember { mutableStateOf<Int?>(null) }
+            LaunchedEffect(foldersError) {
+                foldersError?.let {
+                    snackbarHostState.showSnackbar(context.getString(it))
+                    foldersError = null
                 }
             }
+
+            // #1794：页内授权后按新权限档重读相册；没有相册权限时读不到，交给页内的现状说明。
+            LaunchedEffect(mediaAccess) {
+                buckets = if (mediaAccess == MediaAccess.NONE) {
+                    emptyList()
+                } else {
+                    withContext(Dispatchers.IO) { MediaScanner(context.contentResolver).listBuckets() }
+                }
+            }
+            LaunchedEffect(folderRevision, resumeCount) {
+                folderEntries = withContext(Dispatchers.IO) {
+                    com.hawkeyexb.ppass.backup.folder.FolderAccess.listEntries(context)
+                }
+            }
+            val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+                if (uri == null) {
+                    folderToReauthorize = null
+                    return@rememberLauncherForActivityResult
+                }
+                val reauth = folderToReauthorize
+                folderToReauthorize = null
+                if (reauth == null) {
+                    if (!pendingFolderUris.contains(uri.toString())) pendingFolderUris = ArrayList(pendingFolderUris + uri.toString())
+                } else {
+                    scope.launch(Dispatchers.IO) {
+                        val ok = com.hawkeyexb.ppass.backup.folder.FolderAccess.reauthorize(context, reauth, uri)
+                        if (!ok) foldersError = R.string.folder_reauthorize_failed
+                        if (ok) {
+                            com.hawkeyexb.ppass.backup.folder.FolderAccess.changed(context)
+                            folderRevision++
+                        }
+                    }
+                }
+            }
+
             val list = buckets
             if (list == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1695,63 +1724,139 @@ fun PPassApp() {
             } else {
                 val savedRead = remember { scopeStore.readScope() }
                 val savedSince = remember { scopeStore.sinceSec() }
+                val records = folderRegistry.allRecords()
+                val existingFolderBuckets = records.mapTo(HashSet()) { it.bucketId }
+                val knownSources = scopeStore.knownBucketIds()
+                val effective = com.hawkeyexb.ppass.backup.effectiveBackupScope(
+                    scopeStore.scope(), knownSources, existingFolderBuckets, savedSince,
+                )
+                val folderCards = records.map { record ->
+                    val entry = folderEntries.firstOrNull { it.sourceId == record.id }
+                    FolderBucketUi(
+                        key = record.id,
+                        bucket = MediaScanner.Bucket(record.bucketId, record.displayName, record.items.size),
+                        registered = true,
+                        needsPermission = entry?.needsPermission == true,
+                    )
+                } + pendingFolderUris.map { raw ->
+                    val name = android.net.Uri.parse(raw).lastPathSegment
+                        ?.substringAfterLast(':')?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+                        ?: context.getString(R.string.folder_settings_title)
+                    FolderBucketUi(raw, MediaScanner.Bucket(0L, name, 0), registered = false)
+                }
+                val selectedFolders = records.filter { effective?.buckets?.contains(it.bucketId) == true }
+                    .mapTo(HashSet()) { it.id }
+
                 BucketScreen(
                     buckets = list,
-                    // #1263：首次（这台电脑从没存过范围）默认勾上相机相册，识别不到就不勾。
                     selected = initialSelection(
-                        saved = (savedRead as? ScopeRead.Saved)?.ids,
+                        saved = (savedRead as? ScopeRead.Saved)?.ids
+                            ?.filterNot { com.hawkeyexb.ppass.backup.folder.isFolderId(it) }?.toSet(),
                         firstTime = s.firstTime,
                         cameraBucketIds = list.filter { it.isCamera }.map { it.id }.toSet(),
                     ),
                     initialTime = initialScopeTime(savedRead is ScopeRead.Saved, savedSince, mediaAccess == MediaAccess.PARTIAL),
                     sinceLabel = scopeSinceOptionLabel(context, savedSince.takeIf { savedRead is ScopeRead.Saved }),
                     firstTime = s.firstTime,
-                    // MOB-02 §六: 新相册判定基准（null = 从未选过范围，全量模式）。
-                    knownBuckets = scopeStore.knownBucketIds(),
-                    // 10-29：只给了部分照片也照常保存范围，只备份允许的那些（页顶说明一行）；
-                    // 首页英雄卡仍由部分授权引导卡顶替（MOB-02 §二：不显示假 0/0）。
-                    onDone = { sel, time ->
-                        // MOB-02 §六: 保存范围 + 记录当前全部相册（新相册
-                        // 基准）；新出现的相册默认不包含（不在 sel 里）。
-                        // MOB-20: 必须在 saveScope 覆盖旧集合**之前**算差集。
-                        // #1020：读不出来的旧范围按「从未选过」算（全部新增，宁可多扫），同 iOS。
-                        val prevScope = (BackupScopeStore(context).readScope() as? ScopeRead.Saved)?.ids
-                        val prevSince = if (prevScope != null) scopeStore.sinceSec() else null
-                        // MOB-40: `prevScope == null` = **从未选过范围**——一张都没备过，首次选择就是全部新增。
-                        val added = if (prevScope == null) sel else sel - prevScope
-                        // #1263：「从今天起」= 当天 0 点；原来就是「从某天起」的保留原来那天（不往后滑）。
-                        val since = sinceToSave(time, prevSince, System.currentTimeMillis())
-
-                        // #1020：没存上就不往下走——不进首页、不叫醒引擎，留在选范围页让用户看到提示并能重试。
-                        val saved = settingsWriter.write("backupScope", sel.size, R.string.scope_save_failed) {
-                            scopeStore.saveScope(
-                                selected = sel,
-                                allCurrent = list.map { it.id }.toSet(),
-                                sinceSec = since,
-                            )
-                        }
-                        if (!saved) return@BucketScreen
-                        val settings = BackupSettings(context.filesDir).load()
-                        val constraintsSatisfied = !settings.wifiOnly || isOnUnmetered(context)
-                        if (s.firstTime) {
-                            // #1321：决定页选了范围备份——「自动备份」规则随之打开，「连过这台」在这里落盘（快速重连只认它）。
-                            rulePrefs.set(true)
-                            ruleOn = true
-                            markDecided(s.pairing, "scope")
-                            // #1263：onboarding 里不再问后台备份——新用户默认关，首页卡片引导开启。
-                            // #1039：按「关」把意图再写一次。配对时清旧意图那一步若没写下来，这里补上——否则旧电脑留下的
-                            // 意图会在回到前台时（#540 对账）把新电脑的后台备份悄悄打开。
-                            settingsWriter.write("autoBackup", false) { disableAutoBackup(context) }
-                            requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
-                        } else if (added.isNotEmpty() || sinceWidened(prevSince, since)) {
-                            // REBUILD-05: 范围扩大（新勾的相册，或「从今天起」改成「全部」）走补扫（对账扫描置脏）。
-                            requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
-                        }
-                        triggerUserPresentBackup(context)
-                        screen = Screen.Home(s.pairing)
+                    knownBuckets = knownSources,
+                    folderBuckets = folderCards,
+                    selectedFolderKeys = selectedFolders,
+                    saving = scopeSaving,
+                    albumAccess = mediaAccess,
+                    onRequestAlbumAccess = {
+                        // #1794：相册权限只在用户点页内入口时才申请（进页不再先弹框）。
+                        bucketAlbumPermission.launch(withMediaLocation(requiredMediaPermissions()))
                     },
-                    // #1321：首次选范围是从决定页进来的，取消回决定页。
-                    onCancel = { screen = if (s.firstTime) Screen.Decision(s.pairing) else Screen.Home(s.pairing) },
+                    onAddFolder = {
+                        folderToReauthorize = null
+                        folderPicker.launch(null)
+                    },
+                    onRemoveFolder = { key ->
+                        if (pendingFolderUris.contains(key)) {
+                            pendingFolderUris = ArrayList(pendingFolderUris.filter { it != key })
+                        } else {
+                            scope.launch(Dispatchers.IO) {
+                                runCatching {
+                                    com.hawkeyexb.ppass.backup.folder.FolderAccess.removeFolder(context, key)
+                                }.onFailure { foldersError = R.string.folder_add_failed }
+                                com.hawkeyexb.ppass.backup.folder.FolderAccess.changed(context)
+                                folderRevision++
+                            }
+                        }
+                    },
+                    onReauthorizeFolder = { key ->
+                        folderToReauthorize = key
+                        folderPicker.launch(null)
+                    },
+                    onDone = { selectedAlbumIds, folderKeys, time ->
+                        if (scopeSaving) return@BucketScreen
+                        scopeSaving = true
+                        scope.launch {
+                            val previousEffective = effective?.buckets
+                            val prevSince = if (savedRead is ScopeRead.Saved) savedSince else null
+                            val since = sinceToSave(time, prevSince, System.currentTimeMillis())
+                            val pendingToAdd = folderKeys.filter { pendingFolderUris.contains(it) }
+                            val prepared = withContext(Dispatchers.IO) {
+                                val addedIds = ArrayList<String>()
+                                val idByUri = HashMap<String, String>()
+                                for (raw in pendingToAdd) {
+                                    val added = com.hawkeyexb.ppass.backup.folder.FolderAccess.addFolder(context, android.net.Uri.parse(raw))
+                                    if (added == null) {
+                                        addedIds.forEach { runCatching { com.hawkeyexb.ppass.backup.folder.FolderAccess.removeFolder(context, it) } }
+                                        return@withContext null
+                                    }
+                                    addedIds += added
+                                    idByUri[raw] = added
+                                }
+                                val current = folderRegistry.allRecords()
+                                val selected = resolveFolderBucketIds(folderKeys, idByUri, current)
+                                Triple(selected, current, addedIds)
+                            }
+                            if (prepared == null) {
+                                foldersError = R.string.folder_add_failed
+                                scopeSaving = false
+                                return@launch
+                            }
+                            val sel = selectedAlbumIds.filterNot { com.hawkeyexb.ppass.backup.folder.isFolderId(it) }.toSet() + prepared.first
+                            // #1794：范围页可能在没相册权限时保存——这时读不到相册列表，已保存的相册仍是现状的一部分，
+                            // 一并记进「已知相册」基线，免得下次拿到权限后把它们全标成「新相册」。
+                            val allCurrent = (list.map { it.id } +
+                                (savedRead as? ScopeRead.Saved)?.ids.orEmpty().filterNot { com.hawkeyexb.ppass.backup.folder.isFolderId(it) } +
+                                prepared.second.map { it.bucketId }).toSet()
+                            val saved = settingsWriter.write("backupScope", sel.size, R.string.scope_save_failed) {
+                                scopeStore.saveScope(selected = sel, allCurrent = allCurrent, sinceSec = since,)
+                            }
+                            if (!saved) {
+                                withContext(Dispatchers.IO) {
+                                    prepared.third.forEach { runCatching { com.hawkeyexb.ppass.backup.folder.FolderAccess.removeFolder(context, it) } }
+                                }
+                                scopeSaving = false
+                                return@launch
+                            }
+                            val added = if (previousEffective == null) sel else sel - previousEffective
+                            pendingFolderUris = arrayListOf()
+                            folderRevision++
+                            scopeSaving = false
+                            val settings = BackupSettings(context.filesDir).load()
+                            val constraintsSatisfied = !settings.wifiOnly || isOnUnmetered(context)
+                            if (s.firstTime) {
+                                rulePrefs.set(true)
+                                ruleOn = true
+                                markDecided(s.pairing, "scope")
+                                settingsWriter.write("autoBackup", false) { disableAutoBackup(context) }
+                                requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
+                            } else if (added.isNotEmpty() || sinceWidened(prevSince, since)) {
+                                requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
+                            }
+                            triggerUserPresentBackup(context)
+                            screen = Screen.Home(s.pairing)
+                        }
+                    },
+                    onCancel = {
+                        if (!scopeSaving) {
+                            screen = if (s.firstTime) Screen.Decision(s.pairing) else Screen.Home(s.pairing)
+                        }
+                    },
                 )
             }
         }
@@ -1776,18 +1881,42 @@ fun PPassApp() {
     }
 }
 
-/** #1353：开自动备份时按当前照片权限走哪条路。 */
-internal enum class RuleEnableRoute { Apply, Request, Settings }
+/**
+ * 产品口径（2026-11-17）：首次引导只发生一次——只有从未保存过范围（[firstChoicePending]）才给「开启范围备份」；
+ * 保存过任何值（包括空集）都是用户的明确选择，不再反复引导。第二步（开启后台备份）不受影响。
+ */
+internal fun guideForCurrentScope(guide: PhotosGuide, firstChoicePending: Boolean): PhotosGuide =
+    if (guide == PhotosGuide.EnableScope && !firstChoicePending) PhotosGuide.None else guide
+
+/** #1353：开自动备份时按当前照片权限走哪条路。#1794 加 ChooseScope：没有有效来源时先去范围页选。 */
+internal enum class RuleEnableRoute { Apply, Request, Settings, ChooseScope }
 
 /**
- * 全部 → 直接开；部分且系统还肯弹框 → 照旧申请（用户在框里能选「全部允许」）；
- * 部分且系统不再弹（拒过两次被锁，USER_FIXED）→ 去本 App 的系统设置页；没给过 / 拒绝 → 申请（被锁时系统直接回拒绝，落到小字）。
- * 部分态一定问过至少一次，所以这里的 `canPrompt == false` 只可能是被锁（Android 官方：shouldShowRequestPermissionRationale）。
+ * 开自动备份往哪走（#1794 按范围实际需不需要相册判断，不再一律要完整相册权限）：
+ * 没有有效来源 → 去范围页选来源；只有文件夹来源 → 直接开，不碰相册权限；
+ * 范围含相册 → 全部直接开、部分且系统还肯弹框就申请（框里能选「全部允许」）、
+ * 部分且被锁（USER_FIXED）去本 App 系统设置页、没给过 / 拒绝就申请。
+ * 部分态一定问过至少一次，所以 `canPrompt == false` 只可能是被锁（Android 官方：shouldShowRequestPermissionRationale）。
  */
-internal fun ruleEnableRoute(access: MediaAccess, canPrompt: Boolean): RuleEnableRoute = when {
+internal fun ruleEnableRoute(
+    access: MediaAccess,
+    canPrompt: Boolean,
+    scope: ScopeRead,
+    folderCount: Int,
+): RuleEnableRoute = when {
+    // 与「开完开关要不要引导去范围页」共用同一个判据（backup/BackupScopeTime.kt 的 scopeNeedsFirstChoice）。
+    com.hawkeyexb.ppass.backup.scopeNeedsFirstChoice(scope, folderCount) -> RuleEnableRoute.ChooseScope
+    !ruleScopeUsesAlbums(scope) -> RuleEnableRoute.Apply
     access == MediaAccess.FULL -> RuleEnableRoute.Apply
     access == MediaAccess.PARTIAL && !canPrompt -> RuleEnableRoute.Settings
     else -> RuleEnableRoute.Request
+}
+
+/** 范围里有没有相册来源（读不到按「有」处理：宁可多申请一次，不悄悄少备份相册）。 */
+internal fun ruleScopeUsesAlbums(scope: ScopeRead): Boolean = when (scope) {
+    ScopeRead.NeverSaved -> false
+    is ScopeRead.Saved -> scope.ids.any { !com.hawkeyexb.ppass.backup.folder.isFolderId(it) }
+    is ScopeRead.Unreadable -> true
 }
 
 /** 系统还会不会为「全部照片」弹框：shouldShowRequestPermissionRationale(READ_MEDIA_IMAGES)。API 33 以下没有部分权限，按会弹算。 */
@@ -1921,3 +2050,12 @@ private fun clearLocalPairing(
         }
     }
 }
+
+internal fun resolveFolderBucketIds(
+    folderKeys: Collection<String>,
+    idByUri: Map<String, String>,
+    records: List<com.hawkeyexb.ppass.backup.folder.FolderRecord>,
+): Set<Long> = folderKeys.mapNotNull { key ->
+    val sourceId = idByUri[key] ?: key
+    records.firstOrNull { it.id == sourceId }?.bucketId
+}.toSet()

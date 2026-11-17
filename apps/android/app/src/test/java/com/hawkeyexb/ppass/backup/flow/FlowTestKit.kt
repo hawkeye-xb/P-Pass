@@ -273,6 +273,11 @@ internal class Rig(
     mediaOverride: com.hawkeyexb.ppass.backup.order.MediaSnapshotSource? = null,
     /** #1762：替换范围闭包（folder 测试要放行 bit 62 的目录 bucket）。 */
     inScopeOverride: ((bucketId: Long, dateAddedSec: Long) -> Boolean)? = null,
+    /**
+     * #1778：不替换范围闭包、只放宽相册集合（folder 测试放行 bit 62 的目录 bucket——FakeMedia 的
+     * scope 仍是相册段，镜像不会从主段重复输出）。与 [inScopeOverride] 互斥使用：给了 override 以它为准。
+     */
+    val inScopeBuckets: Set<Long> = emptySet(),
     /** #1762：reconcile 轮的目录段对账入口（对位生产的 Composite.readFolderInScope）。 */
     folderDiscovery: (() -> Sequence<com.hawkeyexb.ppass.backup.order.MediaSnapshot>)? = null,
     /**
@@ -364,7 +369,28 @@ internal class Rig(
         scheduler = wakes ?: scheduler,
         control = control,
         conditions = { conditionsHook?.invoke() ?: conditions },
-        inScope = inScopeOverride ?: media::inScope,
+        inScope = { bucket, added, mediaId ->
+            if (inScopeOverride != null) {
+                inScopeOverride(bucket, added)
+            } else {
+                // #1778：旧订单重算走引擎同一条 lookup——mediaOverride（组合源）在撤权时于门槛处抛
+                // SourceUnavailable，与生产 AndroidFlowRuntime 的 scopeTimeOf 同口径；stored 只作回退。
+                // [inScopeBuckets] 只放宽相册集合（folder 测试放行 bit 62 的目录 bucket），时间判定仍按当前来源重算。
+                val source = mediaOverride ?: media
+                val scope = media.scope?.let { it + inScopeBuckets } ?: inScopeBuckets
+                val effectiveScope = com.hawkeyexb.ppass.backup.BackupScope(scope, media.since)
+                if (bucket !in effectiveScope.buckets) {
+                    false
+                } else {
+                    val effectiveAdded = if (effectiveScope.sinceSec != null) {
+                        source.lookup(mediaId)?.snapshot?.dateAddedSec ?: added
+                    } else {
+                        added
+                    }
+                    effectiveScope.contains(bucket, effectiveAdded)
+                }
+            }
+        },
         mediaAbsenceTrusted = { fullMediaAccess },
         pairingId = { pid },
         scope = scope,

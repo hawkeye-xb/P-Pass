@@ -16,6 +16,7 @@ import com.hawkeyexb.ppass.PPassApplication
 import com.hawkeyexb.ppass.backup.AutoBackupPrefs
 import com.hawkeyexb.ppass.backup.AutoBackupRulePrefs
 import com.hawkeyexb.ppass.backup.BackupScopeStore
+import com.hawkeyexb.ppass.backup.effectiveBackupScope
 import com.hawkeyexb.ppass.backup.BackupSettings
 import com.hawkeyexb.ppass.backup.WorkManagerWakeScheduler
 import com.hawkeyexb.ppass.backup.mediaAbsenceTrusted
@@ -202,7 +203,7 @@ internal fun liveFlowRuntime(): AndroidFlowRuntime? = synchronized(runtimeLock) 
 
 internal fun flowProjection(context: Context, bucketIds: Set<Long>?, inScopeTotal: Long?, remaining: Long?): FlowProjection? {
     val live = runtimeFor(context.applicationContext) ?: return null
-    return FlowProjection.of(live.store, live.engine.display.value, live.control, bucketIds, inScopeTotal, remaining)
+    return FlowProjection.of(live.store, live.engine.display.value, live.control, bucketIds, inScopeTotal, remaining, live.scopeTimeOf)
 }
 
 // ------------------------------------------------------------------ 生命周期
@@ -217,6 +218,7 @@ internal class AndroidFlowRuntime(
     private val writer: FlowWriter,
     private val scope: CoroutineScope,
     private val sqlite: SqliteOrderStore,
+    val scopeTimeOf: (mediaId: Long, storedSec: Long) -> Long,
     /** #434：运行时没了，引擎自然也不忙了（它的状态收集随 [scope] 一起取消）。 */
     private val onShutdown: () -> Unit = {},
 ) {
@@ -303,10 +305,21 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     // #1762：目录来源（素材文件夹）。registry 存 App 私有容器（树 URI + opaque 映射，跨启动恢复），
     // 与设置页共用进程级单例（两个实例同时写会互踩）；树访问走 SAF。
     // 没有目录时 FolderMediaSnapshotSource 枚举空集，零开销直通。
+    val scopeStore = BackupScopeStore(app)
     val folderRegistry = com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(app)
-    val folderSource = com.hawkeyexb.ppass.backup.folder.FolderMediaSnapshotSource(folderRegistry) { record ->
-        com.hawkeyexb.ppass.backup.folder.SafFolderTree(app, android.net.Uri.parse(record.treeUri))
+    val effectiveScope = {
+        effectiveBackupScope(
+            scopeStore.scope(), scopeStore.knownBucketIds(),
+            folderRegistry.allRecords().mapTo(HashSet()) { it.bucketId }, scopeStore.sinceSec(),
+        )
     }
+    val captureTimeReader = com.hawkeyexb.ppass.backup.folder.SafFolderCaptureTimeReader(app)
+    val folderSource = com.hawkeyexb.ppass.backup.folder.FolderMediaSnapshotSource(
+        folderRegistry,
+        treeFor = { record -> com.hawkeyexb.ppass.backup.folder.SafFolderTree(app, android.net.Uri.parse(record.treeUri)) },
+        scopeProvider = { effectiveScope() },
+        captureAtMs = captureTimeReader::read,
+    )
     val delivery = NativeFlowDeliveryPort(
         bridge = bridge,
         serve = { lease, _ -> importer.serve(lease) },
@@ -329,7 +342,6 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         log = androidLog,
         clock = SystemClock::elapsedRealtime,
     )
-    val scopeStore = BackupScopeStore(app)
     // #1272：自动备份规则开关。inScope 每张都问，读文件按 1 秒缓存（开关翻转后至多 1 秒生效，下一轮触发前早已过去）。
     val rulePrefs = com.hawkeyexb.ppass.backup.autoBackupRulePrefs(app)
     var ruleCache = false
@@ -344,9 +356,16 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     }
     // #1762：Composite 的构造要等 ruleOn / scopeStore 就位（MediaStore 段的 scope 闭包引用它们）。
     val compositeMedia = com.hawkeyexb.ppass.backup.folder.CompositeMediaSnapshotSource(
-        primary = ContentResolverMediaSnapshotSource(app, { if (ruleOn()) scopeStore.scope() else null }),
+        primary = ContentResolverMediaSnapshotSource(app, {
+            if (ruleOn()) scopeStore.scope()?.let { scope ->
+                scope.copy(buckets = scope.buckets.filterNot { com.hawkeyexb.ppass.backup.folder.isFolderId(it) }.toSet())
+            } else null
+        }),
         folder = folderSource,
     )
+    val scopeTimeOf = { mediaId: Long, storedSec: Long ->
+        compositeMedia.lookup(mediaId)?.snapshot?.dateAddedSec ?: storedSec
+    }
     val control = FlowControlStore(app.filesDir)
     // #1220：换了线路，两个端点都要换上新套接字——provider 经 network_change 重绑；控制面端点没有重绑入口，
     // 空闲时关掉，下一次用到时按新的绑定重建（忙时它连着的那张网断了自会失败重连）。
@@ -403,13 +422,16 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
                 batteryLow = isBatteryLow(app),
             )
         },
-        // #1762：目录条目绕过相册范围与时间档（ADR §4）——只看「这个 bucket 还是现存的目录来源」；
-        // 移除后 hasBucket=false，该来源的行自动退出范围：不再进待办、presence 对账不打不清（不误标源缺失）。
-        inScope = { bucket, added ->
-            ruleOn() && (
-                if (com.hawkeyexb.ppass.backup.folder.isFolderId(bucket)) folderRegistry.hasBucket(bucket)
-                else scopeStore.scope()?.contains(bucket, added) == true
-                )
+        // #1778：目录与相册使用同一来源集合和拍摄时间；旧版已登记目录由 effectiveScope 读现状保留。
+        // 旧订单查询侧重算：stored 的 date_added_sec 是旧口径（DATE_ADDED），时间门槛按当前来源重算（stored 只作回退）。
+        // 时间条件只在「非全部」范围参判：全部时不做 lookup，别让每张候选都为不需要的时间多读一次来源。
+        inScope = { bucket, added, mediaId ->
+            ruleOn() && run {
+                val effective = if (com.hawkeyexb.ppass.backup.folder.isFolderId(bucket)) effectiveScope() else scopeStore.scope()
+                if (effective == null || bucket !in effective.buckets) return@run false
+                val effectiveAdded = if (effective.sinceSec != null) scopeTimeOf(mediaId, added) else added
+                effective.contains(bucket, effectiveAdded)
+            }
         },
         mediaAbsenceTrusted = { mediaAbsenceTrustedNow(app) },
         pairingId = { pairing()?.pairingId?.takeIf { it.isNotBlank() }?.let(::PairingId) },
@@ -441,7 +463,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     // #434：引擎这一轮没结束就不回收 endpoint；一轮结束（含 afterCycle 的审计上报在飞）再由回收器等宽限期。
     scope.launch { engine.status.collect { application.networkIdleReaper.setEngineBusy(it.phase != LoopPhase.IDLE) } }
     engine.start()
-    val built = AndroidFlowRuntime(key, engine, store, control, bridge, route, writer, scope, sqlite) {
+    val built = AndroidFlowRuntime(key, engine, store, control, bridge, route, writer, scope, sqlite, scopeTimeOf) {
         application.networkIdleReaper.setEngineBusy(false)
     }
     synchronized(runtimeLock) {

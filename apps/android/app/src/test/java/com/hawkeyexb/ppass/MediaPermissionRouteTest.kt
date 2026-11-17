@@ -1,8 +1,6 @@
 package com.hawkeyexb.ppass
 
-import com.hawkeyexb.ppass.backup.MediaAccess
 import java.io.File
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -19,38 +17,37 @@ class MediaPermissionRouteTest {
         listOf("values", "values-zh").associateWith { File(r, "$it/strings.xml").readText() }
     }
 
+    /**
+     * #1794：范围页始终能进——没有相册权限也能进去管理文件夹（对齐 iOS），
+     * 相册区在页内说明并给申请入口，不再在进页前先弹照片权限框。
+     * 反证：改回「进页前先申请」，或把申请入口挪回 enterBucketPicker，本条红。
+     */
     @Test
-    fun missing_permission_requests_the_system_prompt_directly() {
-        assertEquals(BucketPickerEntry.RequestPermission, bucketPickerEntry(permissionsMissing = true))
-        assertEquals(BucketPickerEntry.Buckets, bucketPickerEntry(permissionsMissing = false))
-        // 反证：缺权限那一支要是改回先进某个中间屏，这里就不再是直接 launch。
+    fun scope_page_opens_without_asking_for_photo_permission_first() {
         val picker = main.substringAfter("fun enterBucketPicker(").substringBefore("\n    }\n")
-        val requestBranch = picker.substringAfter("BucketPickerEntry.RequestPermission -> {").substringBefore("}")
-        assertTrue(requestBranch.contains("bucketMediaPermission.launch(withMediaLocation(needed))"))
-        assertEquals("系统框只有 enterBucketPicker 这一个入口", 1, Regex("bucketMediaPermission\\.launch\\(").findAll(main).count())
+        assertTrue("范围页直接打开", picker.contains("screen = Screen.Buckets("))
+        assertFalse("进范围页不再先申请相册权限", picker.contains("launch("))
+        assertFalse("旧的「进页前申请」通道已撤", main.contains("bucketMediaPermission"))
+        assertFalse("旧的进页分支枚举已撤", main.contains("bucketPickerEntry"))
     }
 
+    /** 相册权限在页内申请：拒绝后仍停在范围页，文件夹照常管理。 */
     @Test
-    fun full_access_goes_on_to_the_scope_page() {
-        assertEquals(MediaPermissionLanding.Buckets, mediaPermissionLanding(allGranted = true, access = MediaAccess.FULL))
+    fun denying_album_access_keeps_the_scope_page() {
+        val launcher = main.substringAfter("val bucketAlbumPermission = rememberLauncherForActivityResult")
+            .substringBefore("\n    }\n")
+        assertFalse("拒绝后不能把人踢出范围页", launcher.contains("screen = "))
+        assertTrue("按真实权限刷新", launcher.contains("mediaAccess = mediaAccess(context)"))
+        assertTrue("范围页拿得到当前权限档", main.contains("albumAccess = mediaAccess"))
     }
 
     /** 10-29：部分授权以前直接回首页、范围是空的，三星上 `pending=0 nothing to transfer`，用户看不出为什么不传。 */
     @Test
     fun partial_access_goes_to_the_scope_page_and_can_save() {
-        assertEquals(MediaPermissionLanding.Buckets, mediaPermissionLanding(allGranted = false, access = MediaAccess.PARTIAL))
         val buckets = main.substringAfter("is Screen.Buckets -> {").substringBefore("onCancel = { screen = Screen.Home(s.pairing) },")
         assertFalse("#1272：选范围页的部分授权说明已删（进选范围页的前提是有全部权限）", buckets.contains("partialAccess"))
         assertFalse("部分授权不许再跳过保存范围", buckets.contains("hasPartialMediaAccess"))
         assertTrue(buckets.contains("scopeStore.saveScope("))
-    }
-
-    @Test
-    fun denial_leaves_the_pairing_page_for_home_and_explains() {
-        assertEquals(MediaPermissionLanding.HomeWithDeniedDialog, mediaPermissionLanding(allGranted = false, access = MediaAccess.NONE))
-        val denied = main.substringAfter("MediaPermissionLanding.HomeWithDeniedDialog -> {").substringBefore("}")
-        assertTrue("拒绝后不能停在配对页", denied.contains("screen = Screen.Home(pairing)"))
-        assertTrue(denied.contains("ruleHintRes = R.string.auto_backup_rule_denied_hint"))
     }
 
     @Test

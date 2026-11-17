@@ -4,8 +4,10 @@
 // JVM 走 java.io.File 实现；SAF 实现的可信依赖（DocumentFile 查询、权限撤销）在 E3 真机核。
 package com.hawkeyexb.ppass.backup.folder
 
+import com.hawkeyexb.ppass.backup.BackupScope
 import com.hawkeyexb.ppass.backup.flow.SourceUnavailableException
 import java.io.File
+import java.util.TimeZone
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -200,6 +202,128 @@ class FolderMediaSourceTest {
             throw AssertionError("expected SourceUnavailableException")
         } catch (expected: SourceUnavailableException) {
         }
+    }
+
+    @Test
+    fun `scope uses capture before mtime and applies recursively`() {
+        val (root, registry, sourceId) = setup()
+        write(root, "old-capture.jpg", "old").setLastModified(5_000_000L)
+        write(root, "nested/new-capture.mp4", "new").setLastModified(1_000L)
+        write(root, "nested/fallback.jpg", "fallback").setLastModified(1_000_000L)
+        val captures = mapOf(
+            "old-capture.jpg" to 500_000L,
+            "nested/new-capture.mp4" to 2_000_000L,
+            "nested/fallback.jpg" to null,
+        )
+        val scope = BackupScope(setOf(registry.bucketIdOf(sourceId)!!), sinceSec = 1_000L)
+        val src = FolderMediaSnapshotSource(
+            registry,
+            scopeProvider = { scope },
+            captureAtMs = { _, file -> captures[file.relativePath] },
+            treeFor = { FileFolderTree(root) },
+        )
+
+        val snapshots = src.readInScope(0L) { it.toList() }
+        val byPath = snapshots.associateBy { registry.relativePath(sourceId, registry.opaqueIdOfMedia(it.mediaId)!!) }
+        assertEquals(setOf("nested/new-capture.mp4", "nested/fallback.jpg"), byPath.keys)
+        assertEquals("拍摄新但 mtime 旧仍纳入", 2_000L, byPath["nested/new-capture.mp4"]!!.dateAddedSec)
+        assertEquals("缺拍摄才回退 mtime", 1_000L, byPath["nested/fallback.jpg"]!!.dateAddedSec)
+        assertTrue("旧拍摄即使 mtime 新也排除", "old-capture.jpg" !in byPath.keys)
+    }
+
+    @Test
+    fun `unselected folder produces no work and does not read capture metadata`() {
+        val (root, registry, sourceId) = setup()
+        write(root, "IMG_1.jpg", "one")
+        var captureReads = 0
+        val src = FolderMediaSnapshotSource(
+            registry,
+            scopeProvider = { BackupScope(emptySet(), null) },
+            captureAtMs = { _, _ -> captureReads++; 1_000L },
+            treeFor = { FileFolderTree(root) },
+        )
+
+        assertTrue(src.readInScope(0L) { it.toList() }.isEmpty())
+        assertEquals(0, captureReads)
+        assertTrue("未选目录的枚举也被跳过", registry.record(sourceId)!!.items.isEmpty())
+    }
+
+    @Test
+    fun `paged reads only resolve capture metadata for the consumed batch`() {
+        val (root, registry, sourceId) = setup()
+        write(root, "a.jpg", "a")
+        write(root, "b.jpg", "b")
+        write(root, "c.jpg", "c")
+        var captureReads = 0
+        val src = FolderMediaSnapshotSource(
+            registry,
+            scopeProvider = { BackupScope(setOf(registry.bucketIdOf(sourceId)!!), null) },
+            captureAtMs = { _, _ -> captureReads++; 1_000L },
+            treeFor = { FileFolderTree(root) },
+        )
+
+        val firstPage = src.readInScope(0L) { it.take(1).toList() }
+        assertEquals(1, firstPage.size)
+        assertEquals("本页只消费一项，不能预先读完整目录的拍摄时间", 1, captureReads)
+    }
+
+    @Test
+    fun `paged reads merge all folders by global media id`() {
+        val rootA = tmp.newFolder("ordered-a")
+        val rootB = tmp.newFolder("ordered-b")
+        val registry = registry()
+        val sourceA = registry.addFolder("file://ordered-a", "ordered-a")
+        val sourceB = registry.addFolder("file://ordered-b", "ordered-b")
+        val roots = mapOf(sourceA to rootA, sourceB to rootB)
+        val firstInRecordOrder = registry.allRecords().first().id
+        val secondRoot = roots[registry.allRecords()[1].id]!!
+        val firstRoot = roots[firstInRecordOrder]!!
+        val src = FolderMediaSnapshotSource(registry) { record -> FileFolderTree(roots[record.id]!!) }
+
+        // 后排来源先取得较小 ID；随后给排前来源新增文件，它会取得更大的 ID。
+        write(secondRoot, "second.jpg", "second")
+        val lowerId = src.readInScope(0L) { it.single().mediaId }
+        write(firstRoot, "first.jpg", "first")
+
+        val all = src.readInScope(0L) { it.toList() }
+        assertEquals("不同目录必须按全局 mediaId 归并", all.sortedBy { it.mediaId }, all)
+        assertEquals("构造前提：排前来源的新项 ID 更大", lowerId, all.first().mediaId)
+        val firstPage = all.take(1)
+        val nextPage = src.readInScope(firstPage.last().mediaId) { it.toList() }
+        assertEquals("游标不能越过另一来源的较小 ID", all.drop(1), nextPage)
+    }
+
+    @Test
+    fun `existing ids does not reread capture metadata`() {
+        val (root, registry, sourceId) = setup()
+        write(root, "IMG_1.jpg", "one")
+        var captureReads = 0
+        val scope = BackupScope(setOf(registry.bucketIdOf(sourceId)!!), null)
+        val src = FolderMediaSnapshotSource(
+            registry,
+            scopeProvider = { scope },
+            captureAtMs = { _, _ -> captureReads++; 1_000L },
+            treeFor = { FileFolderTree(root) },
+        )
+        val mediaId = src.readInScope(0L) { it.single().mediaId }
+        assertEquals(1, captureReads)
+
+        captureReads = 0
+        assertEquals(setOf(mediaId), src.existingIds(listOf(mediaId)))
+        assertEquals("缺席对账只需要路径，不能再次解析每个文件", 0, captureReads)
+    }
+
+    @Test
+    fun `exif offset time determines the capture instant before device timezone fallback`() {
+        val defaultZone = TimeZone.getTimeZone("Asia/Shanghai")
+        val expected = java.util.GregorianCalendar(2026, 10, 15, 15, 30, 0).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }.time.time
+        assertEquals(
+            "00:30 +09:00 在上海是前一天 23:30，不能按手机时区算成当天",
+            expected,
+            parseExifDateTime("2026:11:16 00:30:00", "+09:00", defaultZone),
+        )
     }
 
     private fun fail(message: String) {
