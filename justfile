@@ -303,9 +303,9 @@ mobile-static-check:
 # 断言：两端都从 PPF_BUILD_STAMP 取值；stamp 为空时版本行只显示版本号+构建号、非空时追加；
 # 设备测试 recipe 带 leaveApksInstalledAfterRun=true；本地 `just dev` 用 date '+%m-%d %H:%M' 生成时间戳。
 # recipe 级断言只看对应配方/构建脚本的正文（不看整份文件，避免匹配到注释或断言自身的字符串），
-# 六条 Android/Swift 字面量断言只看非注释行，并带反证：
-# 删掉时间戳注入、删掉 connected 命令、删掉/注释掉 iOS 的 Add 行、删掉或注释掉 trim 任一段、
-# 注释掉 Android 的 System.getenv 并改回返回空串时必须判红。
+# 六条 Android/Swift 字面量断言只看非注释行（含跨行 /* ... */ 块注释），配方级断言忽略缩进注释，并带反证：
+# 删掉或缩进注释掉时间戳注入与 connected 命令、删掉/注释掉 iOS 的 Add 行、删掉或注释掉 trim 任一段、
+# 注释掉（// 或 /* */ 包起来）Android 的 System.getenv 并改回返回空串时必须判红。
 build-stamp-check:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -313,8 +313,44 @@ build-stamp-check:
     fail=0
     ok() { printf '  ✅ %s\n' "$1"; }
     ko() { printf '  ❌ %s\n' "$1"; fail=1; }
-    noncomment() { # <file>：去掉注释行（行注释 //、块注释行 /* 与 *、#），注释里的字面量不算
-      grep -Ev '^[[:space:]]*(//|/\*|\*|#)' -- "$1"
+    noncomment() { # <file>：去掉注释（跨行 /* ... */、行注释 // 与 #、块注释续行 *），注释里的字面量不算
+      # 逐字符扫，字符串引号内的 // 与 /* 不算注释（如 "crates/proto/**"）。
+      awk '
+        function strip(s,   out, i, n, ch, nx, closed, q) {
+          out = ""; n = length(s); i = 1
+          while (i <= n) {
+            ch = substr(s, i, 1)
+            if (q != "") {
+              out = out ch
+              if (ch == "\\" && i < n) { out = out substr(s, i + 1, 1); i += 2; continue }
+              if (ch == q) q = ""
+              i++; continue
+            }
+            if (ch == "\"") { q = ch; out = out ch; i++; continue }
+            if (ch == "/" && i < n) {
+              nx = substr(s, i + 1, 1)
+              if (nx == "/") return out
+              if (nx == "*") {
+                i += 2; closed = 0
+                while (i < n) {
+                  if (substr(s, i, 1) == "*" && substr(s, i + 1, 1) == "/") { i += 2; closed = 1; break }
+                  i++
+                }
+                if (!closed) { inblock = 1; return out }
+                continue
+              }
+            }
+            out = out ch; i++
+          }
+          return out
+        }
+        inblock {
+          b = index($0, "*/")
+          if (b == 0) next
+          $0 = substr($0, b + 2); inblock = 0
+        }
+        { print strip($0) }
+      ' "$1"
     }
     has_literal() { # <file> <literal>：只在非注释行里找字面量
       noncomment "$1" | grep -Fq -- "$2"
@@ -325,13 +361,13 @@ build-stamp-check:
     recipe_body() { # <justfile> <配方头正则>：从配方头到下一个配方头（列 0 的小写名 + 空格/冒号）
       sed -n "/^$2/,/^[a-z][a-z0-9-]*[ :]/p" "$1"
     }
-    has_dev_stamp() { # 时间戳注入只在 dev 配方正文里找
-      recipe_body "$1" 'dev \*args:' | grep -Fq 'export PPF_BUILD_STAMP=' &&
-        recipe_body "$1" 'dev \*args:' | grep -Fq "date '+%m-%d %H:%M'"
+    has_dev_stamp() { # 时间戳注入只在 dev 配方正文里找（缩进注释不算）
+      recipe_body "$1" 'dev \*args:' | grep -Ev '^[[:space:]]*#' | grep -Fq 'export PPF_BUILD_STAMP=' &&
+        recipe_body "$1" 'dev \*args:' | grep -Ev '^[[:space:]]*#' | grep -Fq "date '+%m-%d %H:%M'"
     }
-    has_keep_apks() { # 设备测试命令与参数只在 android-instrumented 正文里找
-      recipe_body "$1" 'android-instrumented \*args:' | grep -Fq -- 'connectedDebugAndroidTest' &&
-        recipe_body "$1" 'android-instrumented \*args:' | grep -Fq -- 'android.injected.androidTest.leaveApksInstalledAfterRun=true'
+    has_keep_apks() { # 设备测试命令与参数只在 android-instrumented 正文里找（缩进注释不算）
+      recipe_body "$1" 'android-instrumented \*args:' | grep -Ev '^[[:space:]]*#' | grep -Fq -- 'connectedDebugAndroidTest' &&
+        recipe_body "$1" 'android-instrumented \*args:' | grep -Ev '^[[:space:]]*#' | grep -Fq -- 'android.injected.androidTest.leaveApksInstalledAfterRun=true'
     }
     ios_stamp_script() { # <project.yml>：只取「Stamp build time」脚本正文（按缩进判定，注释/Delete 行在外面）
       awk '
@@ -421,17 +457,38 @@ build-stamp-check:
     else
       ok "反证：删掉时间戳注入 → 判红"
     fi
+    sed 's/^\( *\)export PPF_BUILD_STAMP=/\1# export PPF_BUILD_STAMP=/' justfile >"$tmp/justfile-commented-stamp"
+    if has_dev_stamp "$tmp/justfile-commented-stamp"; then
+      ko "反证：把时间戳注入缩进注释掉后检查仍通过"
+    else
+      ok "反证：把时间戳注入缩进注释掉 → 判红"
+    fi
     grep -v 'connectedDebugAndroidTest' justfile >"$tmp/justfile-no-connected"
     if has_keep_apks "$tmp/justfile-no-connected"; then
       ko "反证：删掉 connected 命令后检查仍通过"
     else
       ok "反证：删掉 connected 命令 → 判红"
     fi
+    sed '/connectedDebugAndroidTest/ s/^\( *\)/\1# /' justfile >"$tmp/justfile-commented-connected"
+    if has_keep_apks "$tmp/justfile-commented-connected"; then
+      ko "反证：把 connected 命令缩进注释掉后检查仍通过"
+    else
+      ok "反证：把 connected 命令缩进注释掉 → 判红"
+    fi
     # 注释掉 System.getenv 并改回返回空串：非注释断言必须判红，注释副本保留 buildConfigField 行作对照。
     awk '
       /System.getenv\("PPF_BUILD_STAMP"\)/ { print "// " $0; print "    \"\""; next }
       { print }
     ' apps/android/app/build.gradle.kts >"$tmp/build-commented-stamp.kts"
+    awk '
+      /System.getenv\("PPF_BUILD_STAMP"\)/ { print "/*"; print $0; print "*/"; print "    \"\""; next }
+      { print }
+    ' apps/android/app/build.gradle.kts >"$tmp/build-block-commented-stamp.kts"
+    if has_literal "$tmp/build-block-commented-stamp.kts" 'System.getenv("PPF_BUILD_STAMP")'; then
+      ko "反证：把 System.getenv(\"PPF_BUILD_STAMP\") 包进 /* */ 并返回空串后检查仍通过"
+    else
+      ok "反证：把 System.getenv(\"PPF_BUILD_STAMP\") 包进 /* */ 并返回空串 → 判红"
+    fi
     if has_literal "$tmp/build-commented-stamp.kts" 'System.getenv("PPF_BUILD_STAMP")'; then
       ko "反证：注释掉 System.getenv(\"PPF_BUILD_STAMP\") 并返回空串后检查仍通过"
     else
