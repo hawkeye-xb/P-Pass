@@ -265,7 +265,8 @@ act() {
   record_state "$cb" after-fail
   capture_daemon_log "$cb" after-fail
   # 先释放锁再采样：锁还占着时即使想拉起 daemon 也起不来，采样要能抓到「解锁后仍不该被拉起」。
-  win_unlock_daemon stopped || echo "用例2 释放锁失败"
+  # 解锁失败就停下：锁还占着时「没被拉起」是锁挡的，不是 wanted-state=stopped 挡的，会误报通过。
+  win_unlock_daemon stopped || { echo "用例2 释放锁失败"; return 1; }
   : >"$cb/stopped-samples.txt"
   for i in 5 10 15; do
     sleep 5
@@ -340,10 +341,14 @@ counter() {
   record_state "$ca" pre
   win_lock_daemon running || { echo "反证锁文件失败"; return 1; }
   install_pkg "$cand" "$ca/install.txt" || true
+  # 反证前提：安装器必须真的跑过并识别出失败、写了 update-failed。否则 judge 的红可能来自
+  # 「update-failed 缺失」（应失败判据）而不是「daemon 没恢复」（应恢复判据），反证就白跑。
+  update_failed_present || { echo "反证前提没建立：候选安装器没跑或没写 update-failed"; return 1; }
   record_update_failed "$ca" after-fail
   record_state "$ca" after-fail
   capture_daemon_log "$ca" after-fail
-  win_unlock_daemon running || echo "反证释放锁失败"
+  # 解锁失败就停下：不释放锁就没法验证「释放后 daemon 仍不被拉起」，锁本身会挡住 daemon。
+  win_unlock_daemon running || { echo "反证释放锁失败"; return 1; }
   # 关键：不手动 Start-Service。给 SCM failure recovery 一个「万一有重试」的窗口（实测不会来），
   # 再采样 after-recover，确认 daemon 仍是停的。
   sleep 5
