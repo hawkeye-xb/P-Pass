@@ -115,6 +115,9 @@
 "backup_scope" = "备份范围";
 "backup_scope_none" = "未选相册";
 "backup_scope_unreadable" = "读不到已保存的选择";
+"scope_sources" = "备份来源";
+"scope_sources_albums" = "相册";
+"scope_sources_folders" = "文件夹";
 "storage_computer" = "存储电脑";
 "setting_wifi_only" = "仅 Wi-Fi 时备份";
 "wifi_off_confirm_title" = "用移动网络备份？";
