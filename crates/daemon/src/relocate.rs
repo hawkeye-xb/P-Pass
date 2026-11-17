@@ -220,6 +220,9 @@ pub fn check_with(
     local_base: &Path,
     probes: &Probes,
 ) -> Result<Check, String> {
+    // #1826：选的位置是敏感目录（系统 / 用户标准目录 / 同步盘 / 应用自身 / 卷根）就拒绝。
+    // 必须排在建目录之前——不能先把库建进桌面、报了错再回滚。
+    crate::library_location::check_library_path(chosen, local_base)?;
     let id = layout::read_library_id(from)
         .or_else(|| layout::recorded_library_id(local_base))
         .ok_or_else(|| ui_err("ui.err_relocate_no_library_id", &[]))?;
@@ -1572,5 +1575,30 @@ mod tests {
         };
         assert!(remove_source(&plan).is_err());
         assert!(from.exists(), "新位置不是这个库，原目录一个文件都不删");
+    }
+
+    /// #1826：目标是敏感目录（家目录里的「文稿」）⇒ 预检就拒绝，**一个目录都不建**。
+    /// 反证：去掉 [`check_with`] 开头那行 `check_library_path` ⇒ 预检通过、目标被建出来，红。
+    #[test]
+    fn sensitive_destination_is_refused_before_the_folder_is_created() {
+        use platform::PlatformAdapter as _;
+        let home = platform::adapter().home_dir().expect("测试机有家目录");
+        let tmp = tempfile::tempdir().unwrap();
+        let (from, _id) = library(tmp.path(), "Lib");
+        let local_base = tmp.path().join("local");
+        std::fs::create_dir_all(&local_base).unwrap();
+        let chosen = home.join("Documents").join("ppass-1826-relocate-sentinel");
+
+        let p = probes(&|_, _| Some(true), &|_| Some(u64::MAX), &|_| false);
+        let err = check_with(&from, &chosen, &local_base, &p).unwrap_err();
+        assert!(err.contains("ui.err_library_sensitive"), "{err}");
+        assert!(!chosen.exists(), "预检不许建目录");
+
+        // 落计划那条入口同样在 `create_dir_all` 之前拒绝。
+        let err = plan(&from, &chosen, &local_base).unwrap_err();
+        assert!(err.contains("ui.err_library_sensitive"), "{err}");
+        assert!(!chosen.exists(), "落计划入口也不许建目录");
+        assert!(pending(&local_base).is_none(), "不许落搬迁计划");
+        assert!(from.exists(), "原库不动");
     }
 }
