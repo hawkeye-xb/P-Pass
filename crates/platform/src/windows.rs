@@ -336,11 +336,42 @@ const DATA_DIR_NAME: &str = "com.hawkeyexb.ppass.desktop";
 /// #1043：`SHGetKnownFolderPath`。读不到（极少见：漫游配置坏了、服务账户）
 /// 返回 `None`，调用方自己决定怎么兜底，这里不编路径。
 fn known_folder(id: &windows::core::GUID) -> Option<PathBuf> {
+    known_folder_impl(id, None)
+}
+
+/// #1826：按**指定用户**的令牌取 Known Folder（服务形态下读主人的 profile / 「图片」）。
+///
+/// 依据 Microsoft Learn `SHGetKnownFolderPath`：要取特定用户的目录就把那个用户的 hToken
+/// 作为第三个参数传入（令牌需 `TOKEN_DUPLICATE`，且该用户的 hive 已挂载——正在连接的
+/// 交互桌面用户总是已挂载）。读不到就 `None`，不编路径、不退回服务账户。
+pub(crate) fn known_folder_for_token(
+    id: &windows::core::GUID,
+    token: windows_sys::Win32::Foundation::HANDLE,
+) -> Option<PathBuf> {
+    known_folder_impl(id, Some(windows::Win32::Foundation::HANDLE(token)))
+}
+
+/// #1826：主人的家目录（`FOLDERID_PROFILE`）与「图片」（`FOLDERID_Pictures`）。
+/// 两者各自可能读不到（`None`），调用方据此拒绝而不是猜。
+pub(crate) fn peer_known_folders(
+    token: windows_sys::Win32::Foundation::HANDLE,
+) -> (Option<PathBuf>, Option<PathBuf>) {
+    use windows::Win32::UI::Shell::{FOLDERID_Pictures, FOLDERID_Profile};
+    (
+        known_folder_for_token(&FOLDERID_Profile, token),
+        known_folder_for_token(&FOLDERID_Pictures, token),
+    )
+}
+
+fn known_folder_impl(
+    id: &windows::core::GUID,
+    token: Option<windows::Win32::Foundation::HANDLE>,
+) -> Option<PathBuf> {
     use windows::Win32::System::Com::CoTaskMemFree;
     use windows::Win32::UI::Shell::{SHGetKnownFolderPath, KF_FLAG_DEFAULT};
-    // SAFETY: id 指向 'static GUID；htoken = None 表示当前用户。成功时返回的
-    // 缓冲区归调用方，读完立刻用 CoTaskMemFree 释放。
-    let raw = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }.ok()?;
+    // SAFETY: id 指向 'static GUID；htoken = None 表示当前用户，Some 时是调用方持有的
+    // 有效令牌句柄。成功时返回的缓冲区归调用方，读完立刻用 CoTaskMemFree 释放。
+    let raw = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, token) }.ok()?;
     // SAFETY: raw 是系统刚分配的、以 NUL 结尾的 UTF-16 串。
     let text = unsafe { raw.to_string() };
     // SAFETY: raw 由 SHGetKnownFolderPath 分配，只释放这一次。

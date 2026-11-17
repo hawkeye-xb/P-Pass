@@ -184,6 +184,7 @@ async fn unconfigured_state_answers_only_status_and_set_library() {
         "1.0.0",
         0,
         &loc,
+        None,
     )
     .await;
     assert!(s.ok);
@@ -197,6 +198,7 @@ async fn unconfigured_state_answers_only_status_and_set_library() {
         "1.0.0",
         0,
         &loc,
+        None,
     )
     .await;
     assert!(sub.ok, "{:?}", sub.error);
@@ -214,6 +216,7 @@ async fn unconfigured_state_answers_only_status_and_set_library() {
             "1.0.0",
             0,
             &loc,
+            None,
         )
         .await;
         assert!(!r.ok, "未配置状态不许答 {m}");
@@ -232,6 +235,7 @@ async fn unconfigured_state_answers_only_status_and_set_library() {
         "1.0.0",
         0,
         &loc,
+        None,
     )
     .await;
     assert!(!by_daemon.ok, "daemon 自身不许写库位置");
@@ -247,6 +251,7 @@ async fn unconfigured_state_answers_only_status_and_set_library() {
         "1.0.0",
         0,
         &loc,
+        None,
     )
     .await;
     assert!(by_shell.ok, "{:?}", by_shell.error);
@@ -426,15 +431,18 @@ async fn unconfigured_token_endpoint_answers_only_config_methods() {
 /// 反证：status 改回报 unconfigured ⇒ 第一组断言红；放行 config.set_library ⇒ 末组红。
 #[test]
 fn library_missing_state_reports_the_path_and_opens_nothing() {
-    use daemon::ipc::library_missing_dispatch;
+    use daemon::ipc::{library_missing_dispatch, MissingFacts};
     let dir = std::path::Path::new("/Volumes/My Passport/P-Pass Library");
     let s = library_missing_dispatch(
         &req("status", serde_json::json!({})),
         IpcClient::Shell,
         "1.0.0",
         0,
-        dir,
-        dir,
+        MissingFacts {
+            dir,
+            local_base: dir,
+            picked_count: None,
+        },
         None,
     );
     assert!(s.ok);
@@ -448,8 +456,11 @@ fn library_missing_state_reports_the_path_and_opens_nothing() {
         IpcClient::Shell,
         "1.0.0",
         0,
-        dir,
-        dir,
+        MissingFacts {
+            dir,
+            local_base: dir,
+            picked_count: None,
+        },
         None,
     );
     assert!(sub.ok, "{:?}", sub.error);
@@ -465,8 +476,11 @@ fn library_missing_state_reports_the_path_and_opens_nothing() {
             IpcClient::Shell,
             "1.0.0",
             0,
-            dir,
-            dir,
+            MissingFacts {
+                dir,
+                local_base: dir,
+                picked_count: None,
+            },
             None,
         );
         assert!(!r.ok, "{m} 不该在库找不到时被答");
@@ -482,7 +496,7 @@ fn library_missing_state_reports_the_path_and_opens_nothing() {
 /// 只有同名空目录不算回来。反证：判据改成「目录存在」⇒ 第二段红。
 #[test]
 fn library_recheck_answers_from_the_library_marker() {
-    use daemon::ipc::library_missing_dispatch;
+    use daemon::ipc::{library_missing_dispatch, MissingFacts};
     let parent = tempfile::tempdir().unwrap();
     let dir = parent.path().join("lib");
     let recheck = || {
@@ -491,8 +505,11 @@ fn library_recheck_answers_from_the_library_marker() {
             IpcClient::Shell,
             "1.0.0",
             0,
-            &dir,
-            parent.path(),
+            MissingFacts {
+                dir: &dir,
+                local_base: parent.path(),
+                picked_count: None,
+            },
             None,
         );
         assert!(r.ok, "{:?}", r.error);
@@ -561,7 +578,7 @@ fn writes_are_refused_while_relocating() {
 /// 0 / 读不出来都不带这个字段。反证：去掉 `filter(|n| *n > 0)` → 0 也带字段，第二组断言红。
 #[test]
 fn library_missing_status_reports_the_picked_count_only_when_there_is_one() {
-    use daemon::ipc::library_missing_dispatch;
+    use daemon::ipc::{library_missing_dispatch, MissingFacts};
     let dir = std::path::Path::new("/Volumes/My Passport/P-Pass Library");
     let status = |n| {
         library_missing_dispatch(
@@ -569,9 +586,12 @@ fn library_missing_status_reports_the_picked_count_only_when_there_is_one() {
             IpcClient::Shell,
             "1.0.0",
             0,
-            dir,
-            dir,
-            n,
+            MissingFacts {
+                dir,
+                local_base: dir,
+                picked_count: n,
+            },
+            None,
         )
         .result
         .unwrap()

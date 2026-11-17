@@ -502,6 +502,7 @@ async fn set_library_resp(
     id: String,
     location: Arc<crate::library_location::LibraryLocation>,
     params: &serde_json::Value,
+    user: Option<&platform::PeerUser>,
 ) -> Resp {
     let Some(library) = params
         .get("library")
@@ -510,7 +511,8 @@ async fn set_library_resp(
     else {
         return Resp::err(id, RespError::new(Reason::BadRequest));
     };
-    match tokio::task::spawn_blocking(move || location.set(&library)).await {
+    let user = user.cloned();
+    match tokio::task::spawn_blocking(move || location.set(&library, user.as_ref())).await {
         Ok(Ok(cfg)) => Resp::ok(
             id,
             serde_json::json!({ "config": cfg.display().to_string(), "restart_required": true }),
@@ -530,6 +532,7 @@ fn relocate_resp(
     library: &std::path::Path,
     local_base: &std::path::Path,
     params: &serde_json::Value,
+    user: Option<&platform::PeerUser>,
 ) -> Resp {
     let Some(target) = params.get("target").and_then(|v| v.as_str()) else {
         return Resp::err(id, RespError::new(Reason::BadRequest));
@@ -537,7 +540,7 @@ fn relocate_resp(
     let target = std::path::Path::new(target);
     // 预检（窗口确认前调）：不落盘，告诉窗口最终位置、文件夹里是否已有别的东西。
     if params.get("dry_run").and_then(|v| v.as_bool()) == Some(true) {
-        return match crate::relocate::check(library, target, local_base) {
+        return match crate::relocate::check(library, target, local_base, user) {
             Ok(c) => Resp::ok(
                 id,
                 serde_json::json!({
@@ -552,7 +555,7 @@ fn relocate_resp(
             ),
         };
     }
-    match crate::relocate::plan(library, target, local_base) {
+    match crate::relocate::plan(library, target, local_base, user) {
         Ok(check) => {
             let plan = check.plan;
             tokio::spawn(async move {
@@ -802,7 +805,8 @@ async fn unconfigured_session(
         };
         let mut resp = match waiting {
             Waiting::Unconfigured(location) => {
-                unconfigured_dispatch(&req, client, version, started_at, location).await
+                unconfigured_dispatch(&req, client, version, started_at, location, user.as_ref())
+                    .await
             }
             Waiting::LibraryMissing {
                 dir,
@@ -813,9 +817,12 @@ async fn unconfigured_session(
                 client,
                 version,
                 started_at,
-                dir,
-                local_base,
-                *picked_count,
+                MissingFacts {
+                    dir,
+                    local_base,
+                    picked_count: *picked_count,
+                },
+                user.as_ref(),
             ),
             Waiting::Relocating(live) => {
                 relocating_dispatch(&req, client, version, started_at, live)
@@ -879,6 +886,7 @@ pub async fn unconfigured_dispatch(
     version: &str,
     started_at: i64,
     location: &Arc<crate::library_location::LibraryLocation>,
+    user: Option<&platform::PeerUser>,
 ) -> Resp {
     let id = req.id.clone();
     if !client.may_call(&req.method) {
@@ -899,10 +907,17 @@ pub async fn unconfigured_dispatch(
         // 「运行中」（DESK-63 的就绪信号）而不是「不可达」，也就不会去自愈拉它。写好库位置后
         // 进程退出、连接断开，壳照常重连带库重启的新实例。
         "events.subscribe" => Resp::ok(id, serde_json::json!({ "subscribed": true })),
-        "config.set_library" => set_library_resp(id, Arc::clone(location), &req.params).await,
+        "config.set_library" => set_library_resp(id, Arc::clone(location), &req.params, user).await,
         // 其余一律：还没有库。
         _ => Resp::err(id, RespError::new(Reason::LibraryUnavailable)),
     }
+}
+
+/// #1253：库找不到状态的事实（库目录、本机服务数据目录、手动挑选的张数）。
+pub struct MissingFacts<'a> {
+    pub dir: &'a std::path::Path,
+    pub local_base: &'a std::path::Path,
+    pub picked_count: Option<i64>,
 }
 
 /// #1253：库找不到状态能答的方法。`status` 报 `library_missing` 与路径（窗口据此说明原因，
@@ -914,10 +929,14 @@ pub fn library_missing_dispatch(
     client: IpcClient,
     version: &str,
     started_at: i64,
-    dir: &std::path::Path,
-    local_base: &std::path::Path,
-    picked_count: Option<i64>,
+    facts: MissingFacts<'_>,
+    user: Option<&platform::PeerUser>,
 ) -> Resp {
+    let MissingFacts {
+        dir,
+        local_base,
+        picked_count,
+    } = facts;
     let id = req.id.clone();
     if !client.may_call(&req.method) {
         return Resp::err(id, RespError::new(Reason::RoleForbidden));
@@ -948,7 +967,7 @@ pub fn library_missing_dispatch(
             Resp::err(id, RespError::new(Reason::LibraryUnavailable))
         }
         // #639：找不到照片库时指向新位置——新位置上已经是这个库（用户自己搬过去了）⇒ 只改指向。
-        "library.relocate" => relocate_resp(id, dir, local_base, &req.params),
+        "library.relocate" => relocate_resp(id, dir, local_base, &req.params, user),
         // 窗口上的「重新检查」：库回来了 ⇒ 应答后以 EXIT_CONFIGURED_RESTART 退出、带着库重启；
         // 还不在 ⇒ 如实回答，状态不变（不轮询、不自动重启——库是用户自己处理的）。
         "library.recheck" => Resp::ok(
@@ -1412,17 +1431,20 @@ impl IpcServer {
                         &[platform::PeerRole::Shell, platform::PeerRole::Daemon],
                         &floor,
                     );
-                    (conn, check)
+                    // #1826：这条连接的主人家目录与「图片」——敏感目录判定要用主人的
+                    // 目录事实（Windows 服务形态下服务账户自己的不是主人的）。
+                    let user = platform::local_peer_user(&conn);
+                    (conn, check, user)
                 })
                 .await;
-                let (conn, client) = match checked {
-                    Ok((conn, platform::PeerCheck::Verified(platform::PeerRole::Shell))) => {
-                        (conn, IpcClient::Shell)
+                let (conn, client, user) = match checked {
+                    Ok((conn, platform::PeerCheck::Verified(platform::PeerRole::Shell), user)) => {
+                        (conn, IpcClient::Shell, user)
                     }
-                    Ok((conn, platform::PeerCheck::Verified(platform::PeerRole::Daemon))) => {
-                        (conn, IpcClient::Daemon)
+                    Ok((conn, platform::PeerCheck::Verified(platform::PeerRole::Daemon), user)) => {
+                        (conn, IpcClient::Daemon, user)
                     }
-                    Ok((_, other)) => {
+                    Ok((_, other, _)) => {
                         tracing::warn!("#1115/#1150: 拒绝 IPC 连接——对端身份不在白名单，或版本低于本 daemon：{other:?}");
                         server.note_rejected("ipc.bad_peer").await;
                         return;
@@ -1434,7 +1456,7 @@ impl IpcServer {
                 };
                 let (rx, tx) = conn.split();
                 let lines = req_lines(prefix, rx);
-                if let Err(e) = server.session(lines, tx, client).await {
+                if let Err(e) = server.session(lines, tx, client, user).await {
                     tracing::debug!("ipc conn ended: {e}");
                 }
             });
@@ -1468,7 +1490,8 @@ impl IpcServer {
             return Ok(()); // drop the connection, say nothing
         }
         // 持令牌的客户端 = 窗口程序（测试沙盒、Windows / Linux 上的令牌模式）。
-        self.session(lines, tx, IpcClient::Shell).await
+        // 令牌模式不认连接方身份，没有主人的目录事实（#1826：`None`）。
+        self.session(lines, tx, IpcClient::Shell, None).await
     }
 
     /// 认证之后的请求循环。`client` 决定能调哪些方法（#1115）。
@@ -1477,6 +1500,7 @@ impl IpcServer {
         mut lines: ReqLines,
         mut tx: interprocess::local_socket::tokio::SendHalf,
         client: IpcClient,
+        user: Option<platform::PeerUser>,
     ) -> anyhow::Result<()> {
         while let Some(line) = lines.next_line().await? {
             if line.trim().is_empty() {
@@ -1515,10 +1539,10 @@ impl IpcServer {
                 out.push('\n');
                 tx.write_all(out.as_bytes()).await?;
                 return self
-                    .serve_subscription(&mut lines, &mut tx, &req, rx, client)
+                    .serve_subscription(&mut lines, &mut tx, &req, rx, client, user.as_ref())
                     .await;
             }
-            let resp = self.dispatch(req).await;
+            let resp = self.dispatch(req, user.as_ref()).await;
             let mut out = serde_json::to_string(&resp)?;
             out.push('\n');
             tx.write_all(out.as_bytes()).await?;
@@ -1538,6 +1562,7 @@ impl IpcServer {
         req: &Req,
         mut rx: tokio::sync::broadcast::Receiver<serde_json::Value>,
         client: IpcClient,
+        user: Option<&platform::PeerUser>,
     ) -> anyhow::Result<()> {
         let filter: Option<HashSet<String>> = req
             .params
@@ -1574,7 +1599,7 @@ impl IpcServer {
                         continue;
                     }
                     // 订阅期间的其他请求照常应答（客户端可随时查状态）。
-                    let resp = self.dispatch(req).await;
+                    let resp = self.dispatch(req, user).await;
                     let mut out = serde_json::to_string(&resp)?;
                     out.push('\n');
                     tx.write_all(out.as_bytes()).await?;
@@ -1600,7 +1625,7 @@ impl IpcServer {
         }
     }
 
-    async fn dispatch(&self, req: Req) -> Resp {
+    async fn dispatch(&self, req: Req, user: Option<&platform::PeerUser>) -> Resp {
         let id = req.id.clone();
         let internal = |id: String| Resp::err(id, RespError::new(Reason::Internal));
         match req.method.as_str() {
@@ -1610,7 +1635,7 @@ impl IpcServer {
                 let Some(location) = self.library_location.clone() else {
                     return Resp::err(id, RespError::new(Reason::RoleForbidden));
                 };
-                set_library_resp(id, location, &req.params).await
+                set_library_resp(id, location, &req.params, user).await
             }
             // #639：更改照片库位置 = 整库搬迁。校验、计划落盘后退出，重启时接着搬（见 daemon::relocate）。
             // 只有窗口程序能调；新位置由窗口程序从系统对话框取（网页递不进路径，#1150）。
@@ -1618,7 +1643,13 @@ impl IpcServer {
                 let Some(location) = self.library_location.clone() else {
                     return Resp::err(id, RespError::new(Reason::RoleForbidden));
                 };
-                relocate_resp(id, &self.data_dir, location.platform_dir(), &req.params)
+                relocate_resp(
+                    id,
+                    &self.data_dir,
+                    location.platform_dir(),
+                    &req.params,
+                    user,
+                )
             }
             "status" => match self
                 .status(
@@ -2930,12 +2961,15 @@ mod tests {
 
         let server = test_server(&db, dir.path());
         let resp = server
-            .dispatch(Req {
-                id: "revoke".into(),
-                method: "device.revoke".into(),
-                params: serde_json::json!({ "node_id": hex(&node) }),
-                ..Default::default()
-            })
+            .dispatch(
+                Req {
+                    id: "revoke".into(),
+                    method: "device.revoke".into(),
+                    params: serde_json::json!({ "node_id": hex(&node) }),
+                    ..Default::default()
+                },
+                None,
+            )
             .await;
         assert!(resp.ok, "revoke 失败：{resp:?}");
 
@@ -2953,12 +2987,15 @@ mod tests {
             .await
             .unwrap();
         let again = server
-            .dispatch(Req {
-                id: "revoke-again".into(),
-                method: "device.revoke".into(),
-                params: serde_json::json!({ "node_id": hex(&node) }),
-                ..Default::default()
-            })
+            .dispatch(
+                Req {
+                    id: "revoke-again".into(),
+                    method: "device.revoke".into(),
+                    params: serde_json::json!({ "node_id": hex(&node) }),
+                    ..Default::default()
+                },
+                None,
+            )
             .await;
         assert!(again.ok, "第二次 revoke 失败：{again:?}");
         assert_eq!(again.result.unwrap()["revoked"], true);

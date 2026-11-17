@@ -115,7 +115,7 @@ fn first_set_writes_the_shell_template() {
     let home = tempfile::tempdir().unwrap();
     let library = home.path().join("Pictures").join("P-Pass 家庭照片库");
     let loc = location(home.path());
-    let cfg = loc.set(library.to_str().unwrap()).unwrap();
+    let cfg = loc.set(library.to_str().unwrap(), None).unwrap();
     assert_eq!(cfg, home.path().join("platform/config.toml"));
     assert!(library.is_dir(), "首启必须把库目录建出来（DESK-57）");
     assert_eq!(
@@ -133,7 +133,7 @@ fn uncreatable_library_fails_and_writes_nothing() {
     std::fs::write(&blocker, b"file").unwrap();
     let library = blocker.join("P-Pass 家庭照片库");
     let err = location(home.path())
-        .set(library.to_str().unwrap())
+        .set(library.to_str().unwrap(), None)
         .unwrap_err();
     assert!(
         err.starts_with(&format!("{}: ", library.display())),
@@ -149,12 +149,12 @@ fn changing_the_library_rewrites_one_line() {
     let new = home.path().join("new-lib");
     std::fs::create_dir_all(&new).unwrap();
     let loc = location(home.path());
-    let cfg = loc.set(old.to_str().unwrap()).unwrap();
+    let cfg = loc.set(old.to_str().unwrap(), None).unwrap();
     // 用户 / 发版流程留下的其它内容必须逐字节保留。
     let mut doc = std::fs::read_to_string(&cfg).unwrap();
     doc.push_str("\n[telemetry]\nenabled = false\n");
     std::fs::write(&cfg, &doc).unwrap();
-    assert_eq!(loc.set(new.to_str().unwrap()).unwrap(), cfg);
+    assert_eq!(loc.set(new.to_str().unwrap(), None).unwrap(), cfg);
     assert_eq!(
         std::fs::read_to_string(&cfg).unwrap(),
         merge_library_dir(&doc, new.to_str().unwrap())
@@ -167,7 +167,7 @@ fn verdict_errors_are_keyed_json_and_write_nothing() {
     let home = tempfile::tempdir().unwrap();
     let lib = home.path().join("lib");
     let loc = location(home.path());
-    let cfg = loc.set(lib.to_str().unwrap()).unwrap();
+    let cfg = loc.set(lib.to_str().unwrap(), None).unwrap();
     let before = std::fs::read(&cfg).unwrap();
     let missing = home.path().join("nope");
     let nested = lib.join("sub");
@@ -184,7 +184,7 @@ fn verdict_errors_are_keyed_json_and_write_nothing() {
             serde_json::json!({}),
         ),
     ] {
-        let err = loc.set(target.to_str().unwrap()).unwrap_err();
+        let err = loc.set(target.to_str().unwrap(), None).unwrap_err();
         let v: serde_json::Value = serde_json::from_str(err.trim()).expect("keyed JSON");
         assert_eq!(v, serde_json::json!({ "key": key, "params": params }));
         assert_eq!(std::fs::read(&cfg).unwrap(), before, "校验失败不得写文件");

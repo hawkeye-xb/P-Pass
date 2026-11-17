@@ -47,14 +47,46 @@ pub enum PeerCheck {
 }
 
 /// #1167：连接方的系统用户（Windows：SID 字符串）。只有 Windows 管道的**服务端**取得到；
-/// 用途只有一个——首启向导写好库位置时把它记成主人（`PlatformAdapter::claim_resident_owner`）。
+/// 用途有两个——首启向导写好库位置时把它记成主人（`PlatformAdapter::claim_resident_owner`），
+/// 以及敏感目录判定要知道主人的家目录与「图片」目录（#1826）。
+///
+/// #1826：家目录与「图片」目录随这次连接一起解析（用该连接已验证用户的 token 调
+/// `SHGetKnownFolderPath`）。服务形态下服务账户读不到主人的这两个目录，取不到就是
+/// `None`——调用方必须拒绝本次选择，不拿服务账户的目录代答，也不按路径形状猜。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PeerUser(pub(crate) String);
+pub struct PeerUser {
+    pub(crate) sid: String,
+    pub(crate) home: Option<std::path::PathBuf>,
+    pub(crate) pictures: Option<std::path::PathBuf>,
+}
 
 impl PeerUser {
+    /// 平台实现与测试构造用。
+    pub fn new(
+        sid: String,
+        home: Option<std::path::PathBuf>,
+        pictures: Option<std::path::PathBuf>,
+    ) -> Self {
+        Self {
+            sid,
+            home,
+            pictures,
+        }
+    }
+
     /// 给日志与错误说明用的标识（Windows：SID）。
     pub fn id(&self) -> &str {
-        &self.0
+        &self.sid
+    }
+
+    /// 主人的家目录；读不到 = `None`。
+    pub fn home_dir(&self) -> Option<&std::path::Path> {
+        self.home.as_deref()
+    }
+
+    /// 主人的「图片」目录；读不到 = `None`。
+    pub fn pictures_dir(&self) -> Option<&std::path::Path> {
+        self.pictures.as_deref()
     }
 }
 

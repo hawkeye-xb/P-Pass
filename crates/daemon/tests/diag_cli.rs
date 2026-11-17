@@ -65,7 +65,7 @@ fn init_platform(home: &Path) -> (Vec<PathBuf>, PathBuf) {
     let dirs = platform_dir_candidates(home);
     for dir in &dirs {
         daemon::library_location::LibraryLocation::with(None, dir.clone())
-            .set(library.to_str().unwrap())
+            .set(library.to_str().unwrap(), None)
             .unwrap();
     }
     (dirs, library)
