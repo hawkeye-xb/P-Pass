@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -61,6 +62,8 @@ private fun sourceCardColors(selected: Boolean) = CardDefaults.cardColors(
 @Composable
 private fun SourceCellFrame(
     selected: Boolean,
+    role: Role,
+    stateDescription: String?,
     tag: String?,
     onClick: () -> Unit,
     cover: @Composable BoxScope.() -> Unit,
@@ -68,21 +71,31 @@ private fun SourceCellFrame(
 ) {
     Card(
         onClick = onClick,
+        // 角色、选中状态与点击动作挂在同一个可点击节点上：屏幕阅读器对带标题的节点
+        // 执行双击时，语义动作就在这个节点自身，能真正触发 onClick。
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (tag == null) Modifier else Modifier.testTag(tag)),
+            .then(if (tag == null) Modifier else Modifier.testTag(tag))
+            .semantics(mergeDescendants = true) {
+                this.role = role
+                if (stateDescription != null) {
+                    this.selected = selected
+                    this.stateDescription = stateDescription
+                }
+            },
         shape = RoundedCornerShape(16.dp),
         colors = sourceCardColors(selected),
         border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) PPColor.Ink else PPColor.Border),
     ) {
         Column {
             Box(modifier = Modifier.fillMaxWidth().height(180.dp), content = cover)
-                Row(
-                    modifier = Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    content()
-                }
+            // 内容区只给最小高度：大字号下标题换行时整行跟着长高，数量标签不会被挤成 0。
+            Row(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                content()
+            }
         }
     }
 }
@@ -104,6 +117,8 @@ fun SourceCard(
 ) {
     SourceCellFrame(
         selected = selected,
+        role = Role.Checkbox,
+        stateDescription = if (selected) selectedDescription else unselectedDescription,
         tag = tag,
         onClick = onClick,
         cover = {
@@ -125,63 +140,43 @@ fun SourceCard(
             }
         },
         content = {
-            SourceCellFrameSemantics(selected, selectedDescription, unselectedDescription) {
-                Icon(
-                    imageVector = if (kind == SourceKind.ALBUM) Icons.AutoMirrored.Filled.List else Icons.Default.Menu,
-                    contentDescription = kindLabel,
-                    modifier = Modifier.padding(end = 8.dp).size(20.dp),
-                    tint = PPColor.Ink60,
+            Icon(
+                imageVector = if (kind == SourceKind.ALBUM) Icons.AutoMirrored.Filled.List else Icons.Default.Menu,
+                contentDescription = kindLabel,
+                modifier = Modifier.padding(end = 8.dp).size(20.dp),
+                tint = PPColor.Ink60,
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(text = countLabel, style = MaterialTheme.typography.bodySmall, color = PPColor.Ink40)
-                }
-                if (menuActions.isNotEmpty()) {
-                    var expanded by remember { mutableStateOf(false) }
-                    Box {
-                        IconButton(onClick = { expanded = true }, modifier = Modifier.size(PPSize.TapMin)) {
-                            Icon(Icons.Default.MoreVert, contentDescription = menuContentDescription)
-                        }
-                        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                            menuActions.forEach { action ->
-                                DropdownMenuItem(
-                                    text = { Text(action.label) },
-                                    onClick = {
-                                        expanded = false
-                                        action.onClick()
-                                    },
-                                )
-                            }
+                Text(text = countLabel, style = MaterialTheme.typography.bodySmall, color = PPColor.Ink40)
+            }
+            if (menuActions.isNotEmpty()) {
+                var expanded by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { expanded = true }, modifier = Modifier.size(PPSize.TapMin)) {
+                        Icon(Icons.Default.MoreVert, contentDescription = menuContentDescription)
+                    }
+                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                        menuActions.forEach { action ->
+                            DropdownMenuItem(
+                                text = { Text(action.label) },
+                                onClick = {
+                                    expanded = false
+                                    action.onClick()
+                                },
+                            )
                         }
                     }
                 }
             }
         },
     )
-}
-
-@Composable
-private fun SourceCellFrameSemantics(
-    selected: Boolean,
-    selectedDescription: String,
-    unselectedDescription: String,
-    content: @Composable () -> Unit,
-) {
-    Box(
-        modifier = Modifier.semantics(mergeDescendants = true) {
-            role = Role.Checkbox
-            this.selected = selected
-            stateDescription = if (selected) selectedDescription else unselectedDescription
-        },
-    ) {
-        content()
-    }
 }
 
 @Composable
@@ -193,6 +188,8 @@ fun AddSourceCard(
 ) {
     SourceCellFrame(
         selected = false,
+        role = Role.Button,
+        stateDescription = null,
         tag = tag,
         onClick = onClick,
         cover = {
@@ -204,15 +201,13 @@ fun AddSourceCard(
             )
         },
         content = {
-            Box(modifier = Modifier.semantics(mergeDescendants = true) { role = Role.Button }) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         },
     )
 }
