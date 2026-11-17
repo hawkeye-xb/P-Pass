@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
@@ -257,6 +258,16 @@ private fun BucketCard(
     }
 }
 
+/** #1794: 来源分区标题（相册 / 文件夹），整行；卡片仍是同规格 2 列网格。 */
+@Composable
+private fun SourceSectionLabel(text: String) {
+    Text(
+        text,
+        fontSize = 13.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink40,
+        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+    )
+}
+
 data class FolderBucketUi(
     val key: String,
     val bucket: MediaScanner.Bucket,
@@ -314,6 +325,12 @@ fun BucketScreen(
                 PhotoFilterChip(stringResource(R.string.scope_time_all), time == ScopeTime.ALL) { time = ScopeTime.ALL }
             }
             Spacer(Modifier.height(14.dp))
+            // #1794: 来源卡片要能看出分类——「备份来源」总标题下分相册、文件夹两个分区。
+            Text(
+                stringResource(R.string.scope_sources),
+                fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = PPColor.Ink,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
 
             Box(Modifier.weight(1f)) {
                 LazyVerticalGrid(
@@ -321,12 +338,15 @@ fun BucketScreen(
                     horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
                     verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
                 ) {
-                    if (buckets.isEmpty() && folderBuckets.isEmpty()) {
-                        item(key = "empty") {
+                    item(key = "section-albums", span = { GridItemSpan(maxLineSpan) }) {
+                        SourceSectionLabel(stringResource(R.string.scope_sources_albums))
+                    }
+                    if (buckets.isEmpty()) {
+                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
                             Text(
                                 stringResource(R.string.bucket_empty),
                                 fontSize = 15.sp, color = PPColor.Ink40, textAlign = TextAlign.Center,
-                                modifier = Modifier.fillMaxWidth().padding(top = 40.dp),
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                             )
                         }
                     }
@@ -338,6 +358,9 @@ fun BucketScreen(
                             isFolder = false,
                             onToggle = { checked = if (b.id in checked) checked - b.id else checked + b.id },
                         )
+                    }
+                    item(key = "section-folders", span = { GridItemSpan(maxLineSpan) }) {
+                        SourceSectionLabel(stringResource(R.string.scope_sources_folders))
                     }
                     items(folderBuckets, key = { "folder:${it.key}" }) { folder ->
                         BucketCard(
