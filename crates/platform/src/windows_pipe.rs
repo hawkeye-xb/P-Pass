@@ -287,7 +287,9 @@ pub fn bind_resident(name: &str) -> io::Result<Listener> {
 /// （`SHGetKnownFolderPath` 的第三个参数），不需要继续顶着客户端身份。
 pub(crate) fn client_user(handle: RawHandle) -> io::Result<PeerUser> {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows_sys::Win32::Security::{RevertToSelf, TOKEN_DUPLICATE, TOKEN_QUERY};
+    use windows_sys::Win32::Security::{
+        RevertToSelf, TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_QUERY,
+    };
     use windows_sys::Win32::System::Pipes::ImpersonateNamedPipeClient;
     use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
 
@@ -298,12 +300,13 @@ pub(crate) fn client_user(handle: RawHandle) -> io::Result<PeerUser> {
     }
     let mut token: HANDLE = std::ptr::null_mut();
     // OpenAsSelf = TRUE：按进程自己的身份做访问检查（客户端令牌通常只到标识级）。
-    // TOKEN_DUPLICATE 是 SHGetKnownFolderPath 按用户取 Known Folder 的前提。
+    // Microsoft Learn：SHGetKnownFolderPath 按指定用户取目录要求 TOKEN_QUERY |
+    // TOKEN_IMPERSONATE；部分情况还需 TOKEN_DUPLICATE，这里一次开全，不只开查询权限。
     // SAFETY: GetCurrentThread 是伪句柄；token 是出参。
     let opened = unsafe {
         OpenThreadToken(
             GetCurrentThread(),
-            TOKEN_QUERY | TOKEN_DUPLICATE,
+            TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_IMPERSONATE,
             1,
             &mut token,
         )

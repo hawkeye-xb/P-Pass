@@ -29,9 +29,9 @@
 
 修法用 Windows 标准机制，不自己造：
 
-- 命名管道服务端已按连接 `ImpersonateNamedPipeClient` + `OpenThreadToken` 取客户端令牌；令牌权限从 `TOKEN_QUERY` 加到 `TOKEN_QUERY | TOKEN_DUPLICATE`。
-- 用该令牌调 `SHGetKnownFolderPath`（`FOLDERID_PROFILE`、`FOLDERID_Pictures`，第三个参数传该用户 hToken；依据 Microsoft Learn `SHGetKnownFolderPath`：指定用户就传该用户令牌，需 `TOKEN_DUPLICATE`、该用户 hive 已挂载——正在连接的交互桌面用户总是已挂载）。
-- 结果随 `PeerUser` 携带（SID + 家目录 + 「图片」），由常驻与未配置两条会话路径显式传到 `config.set_library` 与 `library.relocate`。不设全局「当前用户」，不把这些路径写日志。
+- 命名管道服务端已按连接 `ImpersonateNamedPipeClient` + `OpenThreadToken` 取客户端令牌；按 Microsoft Learn 对指定用户 `SHGetKnownFolderPath` 的要求，令牌开 `TOKEN_QUERY | TOKEN_IMPERSONATE`，并保留部分场景需要的 `TOKEN_DUPLICATE`。
+- 用该令牌调 `SHGetKnownFolderPath`（profile 与各用户标准目录的 Known Folder，第三个参数传该用户 hToken；该用户 hive 必须已挂载——正在连接的交互桌面用户总是已挂载）。
+- 结果随 `PeerUser` 携带（SID + 家目录 + 各用户标准目录真实位置），由常驻与未配置两条会话路径显式传到 `config.set_library` 与 `library.relocate`。不设全局「当前用户」，不把这些路径写日志。
 - 有连接方（`peer`）时只用它的目录事实；连接方存在但目录事实缺失 ⇒ 拒绝本次设置并回 `ui.err_library_user_dirs`，**不**退回服务账户、不按形状放行。没有连接方（macOS 签名 socket、令牌模式）才问平台适配器。
 
 ## 搬迁计划的提交
