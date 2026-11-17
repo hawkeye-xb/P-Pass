@@ -1,5 +1,6 @@
 package com.hawkeyexb.ppass.ui
 
+import com.hawkeyexb.ppass.backup.MediaAccess
 import java.io.File
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -63,41 +64,39 @@ class UI08BucketScreenTest {
         assertTrue("失效目录的移除仍进入原确认弹窗", folderBlock.contains("onSecondaryAction = if (folder.needsPermission) { { removing = folder } } else null"))
     }
 
+    /**
+     * #1794：范围页始终能进（对齐 iOS），没有相册权限时相册区不给选、只说明现状并给申请入口，
+     * 文件夹区和「添加文件夹」照常可用。反证：相册卡不做权限门控或「添加文件夹」被并进门控里，本条红。
+     */
     @Test
-    fun source_cards_are_grouped_into_album_and_folder_sections() {
+    fun without_photo_access_albums_are_not_selectable_but_folders_still_are() {
+        assertFalse("没有相册权限时不给选相册", bucketScreenOffersAlbumChoices(MediaAccess.NONE))
+        assertTrue(bucketScreenOffersAlbumChoices(MediaAccess.PARTIAL))
+        assertTrue(bucketScreenOffersAlbumChoices(MediaAccess.FULL))
         val source = bucketScreenSource()
-        val title = source.indexOf("R.string.scope_sources)")
-        val albumHeading = source.indexOf("R.string.scope_sources_albums")
-        val folderHeading = source.indexOf("R.string.scope_sources_folders")
-        val albums = source.indexOf("items(buckets")
-        val folders = source.indexOf("items(folderBuckets")
+        val gated = source.substringAfter("if (offersAlbums) {").substringBefore("items(folderBuckets")
+        assertTrue("相册卡按相册权限门控", gated.contains("items(buckets"))
+        assertTrue("无权限时相册区要有申请入口", source.contains("onRequestAlbumAccess"))
+        assertTrue("申请入口用无权限文案", source.contains("R.string.scope_album_no_access_action"))
         val addFolder = source.indexOf("item(key = \"add-folder\")")
-        assertTrue("时间筛选下面要有「备份来源」整行标题", title > 0)
-        assertTrue("相册分区标题必须在相册卡片之前", albumHeading in 1 until albums)
-        assertTrue("文件夹分区标题必须在相册卡片之后、文件夹卡片之前", folderHeading in albums until folders)
-        assertTrue("添加文件夹动作必须留在文件夹分区里", addFolder > folders)
-        assertTrue(
-            "分区标题必须占满整行",
-            source.split("GridItemSpan(maxLineSpan)").size - 1 >= 2,
-        )
+        val folderItems = source.indexOf("items(folderBuckets")
+        assertTrue("「添加文件夹」无条件出现", addFolder > folderItems)
+        assertFalse("「添加文件夹」不能被相册权限门控", gated.contains("add-folder"))
     }
 
+    /** 没有相册权限时读不到照片，不能把「读不到」说成整机没有照片。 */
     @Test
-    fun whole_phone_empty_copy_only_when_both_sources_empty() {
-        val source = bucketScreenSource()
-        val albumHeading = source.indexOf("R.string.scope_sources_albums")
-        val folderHeading = source.indexOf("R.string.scope_sources_folders")
-        val emptyHint = source.indexOf("R.string.bucket_empty")
-        assertTrue("空状态提示必须落在相册分区内", emptyHint in albumHeading until folderHeading)
-        assertTrue(
-            "整机空文案只在相册与文件夹都为空时显示",
-            source.contains("if (buckets.isEmpty() && folderBuckets.isEmpty())"),
+    fun whole_phone_empty_copy_needs_readable_photo_access() {
+        assertTrue(bucketScreenEmptyNoticeVisible(bucketsEmpty = true, foldersEmpty = true, access = MediaAccess.FULL))
+        assertTrue(bucketScreenEmptyNoticeVisible(bucketsEmpty = true, foldersEmpty = true, access = MediaAccess.PARTIAL))
+        assertFalse(
+            "没有相册权限时不得声称整机没有照片",
+            bucketScreenEmptyNoticeVisible(bucketsEmpty = true, foldersEmpty = true, access = MediaAccess.NONE),
         )
         assertFalse(
-            "只有文件夹来源时相册区不得声称整机没有照片",
-            source.contains("if (buckets.isEmpty())"),
+            "还有文件夹来源时不算整机为空",
+            bucketScreenEmptyNoticeVisible(bucketsEmpty = true, foldersEmpty = false, access = MediaAccess.FULL),
         )
-        assertTrue("文件夹为空也要保留添加动作", source.contains("item(key = \"add-folder\")"))
     }
 
     @Test

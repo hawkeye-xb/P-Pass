@@ -34,6 +34,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -60,6 +62,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hawkeyexb.ppass.R
+import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.backup.MediaScanner
 import com.hawkeyexb.ppass.backup.ScopeTime
 import com.hawkeyexb.ppass.backup.newAlbumIds
@@ -183,6 +186,36 @@ private fun SourceTypeGlyph(folder: Boolean) {
     }
 }
 
+/** #1794：没有相册权限时相册区的现状说明 + 申请入口（样式同首页权限卡）。 */
+@Composable
+private fun AlbumNoAccessNotice(onRequest: () -> Unit) {
+    Surface(
+        color = PPColor.ActBg,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                stringResource(R.string.no_media_access_title),
+                fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = PPColor.Ink,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                stringResource(R.string.scope_album_no_access_body),
+                fontSize = 13.sp, color = PPColor.Ink40,
+            )
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = onRequest,
+                modifier = Modifier.height(40.dp),
+                shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.4f)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = PPColor.Act),
+            ) { Text(stringResource(R.string.scope_album_no_access_action), fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+        }
+    }
+}
+
 @Composable
 private fun BucketCard(
     bucket: MediaScanner.Bucket,
@@ -258,15 +291,21 @@ private fun BucketCard(
     }
 }
 
-/** #1794: 来源分区标题（相册 / 文件夹），整行；卡片仍是同规格 2 列网格。 */
-@Composable
-private fun SourceSectionLabel(text: String) {
-    Text(
-        text,
-        fontSize = 13.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink40,
-        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-    )
-}
+/**
+ * #1794：相册区能不能选。没有相册权限时不给选，只在相册区显示现状与申请入口；
+ * 文件夹区和「添加文件夹」不受影响（对齐 iOS，范围页始终能进）。
+ */
+internal fun bucketScreenOffersAlbumChoices(access: MediaAccess): Boolean = access != MediaAccess.NONE
+
+/**
+ * 整机空文案（「手机上没有照片或视频」）只在真读得到照片、且相册与文件夹都为空时成立；
+ * 没有相册权限时读不到照片，不能说成整机没有照片。
+ */
+internal fun bucketScreenEmptyNoticeVisible(
+    bucketsEmpty: Boolean,
+    foldersEmpty: Boolean,
+    access: MediaAccess,
+): Boolean = bucketsEmpty && foldersEmpty && bucketScreenOffersAlbumChoices(access)
 
 data class FolderBucketUi(
     val key: String,
@@ -286,6 +325,8 @@ fun BucketScreen(
     folderBuckets: List<FolderBucketUi> = emptyList(),
     selectedFolderKeys: Set<String> = emptySet(),
     saving: Boolean = false,
+    albumAccess: MediaAccess = MediaAccess.FULL,
+    onRequestAlbumAccess: () -> Unit = {},
     onAddFolder: () -> Unit = {},
     onRemoveFolder: (String) -> Unit = {},
     onReauthorizeFolder: (String) -> Unit = {},
@@ -298,6 +339,7 @@ fun BucketScreen(
     var removing by remember { mutableStateOf<FolderBucketUi?>(null) }
     var time by remember { mutableStateOf(initialTime) }
     val newIds = newAlbumIds(buckets.map { it.id }.toSet(), knownBuckets)
+    val offersAlbums = bucketScreenOffersAlbumChoices(albumAccess)
 
     LaunchedEffect(folderBuckets) {
         val pending = folderBuckets.filter { !it.registered && it.key !in seenFolderKeys }.map { it.key }
@@ -325,12 +367,6 @@ fun BucketScreen(
                 PhotoFilterChip(stringResource(R.string.scope_time_all), time == ScopeTime.ALL) { time = ScopeTime.ALL }
             }
             Spacer(Modifier.height(14.dp))
-            // #1794: 来源卡片要能看出分类——「备份来源」总标题下分相册、文件夹两个分区。
-            Text(
-                stringResource(R.string.scope_sources),
-                fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = PPColor.Ink,
-                modifier = Modifier.padding(bottom = 6.dp),
-            )
 
             Box(Modifier.weight(1f)) {
                 LazyVerticalGrid(
@@ -338,31 +374,31 @@ fun BucketScreen(
                     horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
                     verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
                 ) {
-                    item(key = "section-albums", span = { GridItemSpan(maxLineSpan) }) {
-                        SourceSectionLabel(stringResource(R.string.scope_sources_albums))
+                    // #1794：没有相册权限时相册区不给选，只说现状 + 申请入口；文件夹区照常。
+                    if (!offersAlbums) {
+                        item(key = "album-no-access", span = { GridItemSpan(maxLineSpan) }) {
+                            AlbumNoAccessNotice(onRequest = onRequestAlbumAccess)
+                        }
                     }
-                    // 整机空文案（「手机上没有照片或视频」）只在两类来源都为空时成立；
-                    // 只有文件夹来源时，相册区不出现这句整机结论。
-                    if (buckets.isEmpty() && folderBuckets.isEmpty()) {
-                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
+                    if (bucketScreenEmptyNoticeVisible(buckets.isEmpty(), folderBuckets.isEmpty(), albumAccess)) {
+                        item(key = "empty") {
                             Text(
                                 stringResource(R.string.bucket_empty),
                                 fontSize = 15.sp, color = PPColor.Ink40, textAlign = TextAlign.Center,
-                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                modifier = Modifier.fillMaxWidth().padding(top = 40.dp),
                             )
                         }
                     }
-                    items(buckets, key = { "album:${it.id}" }) { b ->
-                        BucketCard(
-                            bucket = b,
-                            selected = b.id in checked,
-                            isNew = b.id in newIds,
-                            isFolder = false,
-                            onToggle = { checked = if (b.id in checked) checked - b.id else checked + b.id },
-                        )
-                    }
-                    item(key = "section-folders", span = { GridItemSpan(maxLineSpan) }) {
-                        SourceSectionLabel(stringResource(R.string.scope_sources_folders))
+                    if (offersAlbums) {
+                        items(buckets, key = { "album:${it.id}" }) { b ->
+                            BucketCard(
+                                bucket = b,
+                                selected = b.id in checked,
+                                isNew = b.id in newIds,
+                                isFolder = false,
+                                onToggle = { checked = if (b.id in checked) checked - b.id else checked + b.id },
+                            )
+                        }
                     }
                     items(folderBuckets, key = { "folder:${it.key}" }) { folder ->
                         BucketCard(
