@@ -119,6 +119,23 @@ final class LiveBackend: @unchecked Sendable {
         records.filter { $0.status != FolderMediaSource.pendingScopeStatus }.count
     }
 
+    /// 规则初值（#1272 B / #1811）：没存过值才初始化一次。完整权限且读过非空范围 ⇒ 开；读到 nil / 空集 ⇒ 关；
+    /// 范围读失败 ⇒ **不写**（返回 nil），保留「尚未初始化」，下次能读到真实范围再按现状初始化。
+    /// 已有存值直接返回，不覆盖。
+    @discardableResult
+    static func initializeAutoRuleIfAbsent(_ prefs: AutoBackupRulePrefs, access: MediaAccess,
+                                           readScope: () throws -> Set<String>?, logger: CoreLogger = NoopLogger()) -> Bool? {
+        if let stored = prefs.stored() { return stored }
+        guard access == .full else { return prefs.initIfAbsent(current: false) }
+        do {
+            let saved = try readScope()
+            return prefs.initIfAbsent(current: !(saved?.isEmpty ?? true))
+        } catch {
+            logger.log("auto-rule: scope unreadable, rule stays uninitialized: \(error)")
+            return nil
+        }
+    }
+
     /// 通知侧「还有可用来源」：目录只数登记有效的（pendingScope 不算），否则待保存目录会吞掉相册权限降级通知。
     /// [scopeReadFailed]：范围读失败时不猜来源（也不走 knownAlbums / 旧目录回退），返回 false 让降级通知照发。
     static func noticeHasUsableSource(selected: Set<String>?, knownAlbums: Set<String>, folderRecords: [FolderRecord],
@@ -210,7 +227,8 @@ final class LiveBackend: @unchecked Sendable {
                                         push: ControlPlanePush(transport: CurrentPeerTransport(plane: plane, store: pairingStore)), logger: logger, pairingLoss: pairingLoss)
         let media = self.media
         // #1272 B：规则开关没存过值 → 读现状初始化一次（有完整访问权限且已选过备份范围 ⇒ 开，否则 ⇒ 关）。
-        autoRule.initIfAbsent(current: media.access() == .full && ((try? media.savedScope()) ?? nil) != nil)
+        // #1811 评审：范围读失败时不得落关，保留「尚未初始化」，等下次能读到真实范围再按现状初始化。
+        Self.initializeAutoRuleIfAbsent(autoRule, access: media.access(), readScope: { try media.savedScope() }, logger: logger)
         let folderRegistry = FolderRegistry(directory: dir, logger: logger)
         // 读盘失败给空范围；旧版目录按当前登记并入，明确取消和 pendingScope 不并入（#971 / #1775）。
         let scope: @Sendable () -> Set<String> = {

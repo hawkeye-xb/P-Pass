@@ -183,4 +183,54 @@ final class PhotoMediaSourceAccessTests: XCTestCase {
         try await library.saveScope(["folder:f"], known: ["a", "folder:f"], since: .all)
         XCTAssertEqual(try store.selectedBucketIds(), ["folder:f"])
     }
+
+    /// #1811 评审：规则初值——savedScope 读失败不得落关（保留「尚未初始化」），下次能读到真实范围再按现状初始化；
+    /// 已有存值不覆盖。
+    /// 反证：恢复旧写法 `(try? savedScope()) ?? nil`（读失败当 nil），第一条断言红。
+    func testAutoRuleInitDefersWhenScopeUnreadable() throws {
+        struct Boom: Error {}
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let prefs = AutoBackupRulePrefs(directory: dir)
+
+        XCTAssertNil(LiveBackend.initializeAutoRuleIfAbsent(prefs, access: .full, readScope: { throw Boom() }),
+                     "读失败：这次不初始化")
+        XCTAssertNil(prefs.stored(), "读失败不能落关")
+
+        XCTAssertEqual(LiveBackend.initializeAutoRuleIfAbsent(prefs, access: .full, readScope: { ["a"] }), true,
+                       "下次读到非空范围：按现状开")
+        XCTAssertEqual(prefs.stored(), true)
+
+        XCTAssertEqual(LiveBackend.initializeAutoRuleIfAbsent(prefs, access: .full, readScope: { nil }), true,
+                       "已有存值不被覆盖")
+        XCTAssertEqual(prefs.stored(), true)
+    }
+
+    /// #1811 评审：成功读到 nil / 空集按定案关；非完整授权不读范围、直接关。
+    func testAutoRuleInitOffForNilEmptyScopeOrIncompleteAccess() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let nilDir = base.appendingPathComponent("nil")
+        try FileManager.default.createDirectory(at: nilDir, withIntermediateDirectories: true)
+        let nilPrefs = AutoBackupRulePrefs(directory: nilDir)
+        XCTAssertEqual(LiveBackend.initializeAutoRuleIfAbsent(nilPrefs, access: .full, readScope: { nil }), false,
+                       "从未保存范围 ⇒ 关")
+        XCTAssertEqual(nilPrefs.stored(), false)
+
+        let emptyDir = base.appendingPathComponent("empty")
+        try FileManager.default.createDirectory(at: emptyDir, withIntermediateDirectories: true)
+        let emptyPrefs = AutoBackupRulePrefs(directory: emptyDir)
+        XCTAssertEqual(LiveBackend.initializeAutoRuleIfAbsent(emptyPrefs, access: .full, readScope: { [] }), false,
+                       "空集 ⇒ 关")
+        XCTAssertEqual(emptyPrefs.stored(), false)
+
+        let partialDir = base.appendingPathComponent("partial")
+        try FileManager.default.createDirectory(at: partialDir, withIntermediateDirectories: true)
+        let partialPrefs = AutoBackupRulePrefs(directory: partialDir)
+        XCTAssertEqual(LiveBackend.initializeAutoRuleIfAbsent(partialPrefs, access: .partial, readScope: { ["a"] }), false,
+                       "非完整授权：不读范围，直接关")
+        XCTAssertEqual(partialPrefs.stored(), false)
+    }
 }
