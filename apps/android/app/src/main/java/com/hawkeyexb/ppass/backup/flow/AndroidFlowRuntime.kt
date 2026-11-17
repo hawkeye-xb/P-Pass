@@ -428,8 +428,9 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         inScope = { bucket, added, mediaId ->
             ruleOn() && run {
                 val effective = if (com.hawkeyexb.ppass.backup.folder.isFolderId(bucket)) effectiveScope() else scopeStore.scope()
-                val effectiveAdded = if (effective?.sinceSec != null) scopeTimeOf(mediaId, added) else added
-                effective?.contains(bucket, effectiveAdded) == true
+                if (effective == null || bucket !in effective.buckets) return@run false
+                val effectiveAdded = if (effective.sinceSec != null) scopeTimeOf(mediaId, added) else added
+                effective.contains(bucket, effectiveAdded)
             }
         },
         mediaAbsenceTrusted = { mediaAbsenceTrustedNow(app) },

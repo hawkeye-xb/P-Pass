@@ -253,26 +253,33 @@ internal class FlowEngine(
 
     /** 写者上执行。返回 true = 这次触发起了一轮新的循环。 */
     private suspend fun onTrigger(reason: TriggerReason): Boolean {
-        // 新增相册的历史照片在 G 以下：扫描置脏。暂停中也要记下（暂停期间的变化只改意图，继续后待办现算）。
-        if (reason == TriggerReason.SCOPE_ADDED) store.markScanDirty()
-        if (control.paused()) {
-            log.log("trigger $reason: paused by user, only intent recorded")
-            refreshPending()
+        try {
+            // 新增相册的历史照片在 G 以下：扫描置脏。暂停中也要记下（暂停期间的变化只改意图，继续后待办现算）。
+            if (reason == TriggerReason.SCOPE_ADDED) store.markScanDirty()
+            if (control.paused()) {
+                log.log("trigger $reason: paused by user, only intent recorded")
+                refreshPending()
+                return false
+            }
+            if (reason == TriggerReason.RESUME_SENTINEL && cycleJob?.isActive == true) {
+                // #827：哨兵到点而这一轮还在跑——进程活着，只把它往后再排一次。不进 pending：否则这一轮结束后会白跑一轮。
+                if (sentinelArmed) registerWake(WakePlan.ResumeSentinel(RESUME_SENTINEL_DELAY_MS), "round still running")
+                return false
+            }
+            pending += reason
+            if (cycleJob?.isActive == true) {
+                log.log("trigger $reason coalesced into the running cycle")
+                if (reason in RECOUNT_WHILE_RUNNING) refreshPending()
+                return false
+            }
+            cycleJob = scope.launch { drain() }
+            return true
+        } catch (unavailable: SourceUnavailableException) {
+            // 暂停刷新与运行中合并也会重算旧订单时间；失权与 start/drain 同口径进入等待，不让异常逃出触发协程。
+            log.log("trigger $reason: folder source unavailable while counting: ${unavailable.message}")
+            enterWait(WaitReason.SOURCE_UNAVAILABLE, FgsStall.NOT_GRANTED)
             return false
         }
-        if (reason == TriggerReason.RESUME_SENTINEL && cycleJob?.isActive == true) {
-            // #827：哨兵到点而这一轮还在跑——进程活着，只把它往后再排一次。不进 pending：否则这一轮结束后会白跑一轮。
-            if (sentinelArmed) registerWake(WakePlan.ResumeSentinel(RESUME_SENTINEL_DELAY_MS), "round still running")
-            return false
-        }
-        pending += reason
-        if (cycleJob?.isActive == true) {
-            log.log("trigger $reason coalesced into the running cycle")
-            if (reason in RECOUNT_WHILE_RUNNING) refreshPending()
-            return false
-        }
-        cycleJob = scope.launch { drain() }
-        return true
     }
 
     /**

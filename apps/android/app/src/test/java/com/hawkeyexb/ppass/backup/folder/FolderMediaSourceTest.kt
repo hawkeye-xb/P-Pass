@@ -268,6 +268,32 @@ class FolderMediaSourceTest {
     }
 
     @Test
+    fun `paged reads merge all folders by global media id`() {
+        val rootA = tmp.newFolder("ordered-a")
+        val rootB = tmp.newFolder("ordered-b")
+        val registry = registry()
+        val sourceA = registry.addFolder("file://ordered-a", "ordered-a")
+        val sourceB = registry.addFolder("file://ordered-b", "ordered-b")
+        val roots = mapOf(sourceA to rootA, sourceB to rootB)
+        val firstInRecordOrder = registry.allRecords().first().id
+        val secondRoot = roots[registry.allRecords()[1].id]!!
+        val firstRoot = roots[firstInRecordOrder]!!
+        val src = FolderMediaSnapshotSource(registry) { record -> FileFolderTree(roots[record.id]!!) }
+
+        // 后排来源先取得较小 ID；随后给排前来源新增文件，它会取得更大的 ID。
+        write(secondRoot, "second.jpg", "second")
+        val lowerId = src.readInScope(0L) { it.single().mediaId }
+        write(firstRoot, "first.jpg", "first")
+
+        val all = src.readInScope(0L) { it.toList() }
+        assertEquals("不同目录必须按全局 mediaId 归并", all.sortedBy { it.mediaId }, all)
+        assertEquals("构造前提：排前来源的新项 ID 更大", lowerId, all.first().mediaId)
+        val firstPage = all.take(1)
+        val nextPage = src.readInScope(firstPage.last().mediaId) { it.toList() }
+        assertEquals("游标不能越过另一来源的较小 ID", all.drop(1), nextPage)
+    }
+
+    @Test
     fun `existing ids does not reread capture metadata`() {
         val (root, registry, sourceId) = setup()
         write(root, "IMG_1.jpg", "one")

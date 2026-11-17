@@ -36,6 +36,13 @@ fun isMediaMime(mimeType: String): Boolean =
  * 目录来源。[treeFor] 把已登记来源映射到一个已授权的树访问（生产给 [SafFolderTree]，测试给 [FileFolderTree]）。
  * 线程模型：与引擎一致——对账/计数/lookup 全在引擎的 io 线程串行；registry 自带锁。
  */
+private data class FolderScanEntry(
+    val record: FolderRecord,
+    val tree: FolderTree,
+    val filesByPath: Map<String, FolderFile>,
+    val item: FolderItem,
+)
+
 class FolderMediaSnapshotSource(
     private val registry: FolderRegistry,
     private val scopeProvider: (() -> BackupScope?)? = null,
@@ -60,16 +67,18 @@ class FolderMediaSnapshotSource(
             val byPath = files.associateBy { it.relativePath }
             Triple(record, tree, byPath)
         }
+        // 先按全局 mediaId 归并目录项，再惰性读取拍摄时间；不能按来源分段产出，否则分页游标会越过较小 ID。
+        val entries = scans.flatMap { (record, tree, byPath) ->
+            val current = registry.record(record.id)
+            current?.items?.values.orEmpty().map { item -> FolderScanEntry(record, tree, byPath, item) }
+        }.sortedBy { it.item.mediaId }
         val snapshots = sequence {
-            for ((record, tree, byPath) in scans) {
-                val current = registry.record(record.id) ?: continue
-                for (item in current.items.values.sortedBy { it.mediaId }) {
-                    if (item.mediaId <= afterId) continue
-                    val file = byPath[item.relativePath] ?: continue
-                    val captured = captureAtMs(tree, file)
-                    if (scope?.contains(record.bucketId, scopeTimeSecOf(captured ?: 0L, file.modifiedAtMs / 1000)) == false) continue
-                    yield(folderSnapshot(item, record.bucketId, file, captured))
-                }
+            for ((record, tree, byPath, item) in entries) {
+                if (item.mediaId <= afterId) continue
+                val file = byPath[item.relativePath] ?: continue
+                val captured = captureAtMs(tree, file)
+                if (scope?.contains(record.bucketId, scopeTimeSecOf(captured ?: 0L, file.modifiedAtMs / 1000)) == false) continue
+                yield(folderSnapshot(item, record.bucketId, file, captured))
             }
         }
         return block(snapshots)
