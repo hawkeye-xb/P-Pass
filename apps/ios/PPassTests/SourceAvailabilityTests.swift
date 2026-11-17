@@ -13,10 +13,40 @@ final class SourceAvailabilityTests: XCTestCase {
         XCTAssertFalse(SourceAvailability(autoRule: false, photoAccess: .none, hasUsableFolder: false, hasSelectedAlbum: true).showsGlobalPhotoBlock)
     }
 
-    func testMixedScopeIsNotFolderOnlyAndKeepsLimitedPhotoBehavior() {
-        let mixed = SourceAvailability(autoRule: true, photoAccess: .partial, hasUsableFolder: true, hasSelectedAlbum: true)
-        XCTAssertFalse(mixed.folderOnly)
-        XCTAssertFalse(mixed.showsGlobalPhotoBlock, "目录侧仍可继续，相册侧降级由统一英雄区处理")
+    /// #1811：目录 + 相册混合、照片权限未完整：文件夹还在传，英雄区只说「相册未完整授权」并给「调整范围」，
+    /// 不再出「自动备份已停止」，也不用相册-only 的「去设置」出口。
+    func testMixedScopeShowsIncompleteAlbumInsteadOfStopped() {
+        let partial = SourceAvailability(autoRule: true, photoAccess: .partial, hasUsableFolder: true, hasSelectedAlbum: true)
+        XCTAssertFalse(partial.folderOnly)
+        XCTAssertFalse(partial.showsGlobalPhotoBlock)
+        XCTAssertTrue(partial.mixedAlbumIncomplete)
+        XCTAssertTrue(partial.hasUsableSource, "文件夹还能备份")
+        let denied = SourceAvailability(autoRule: true, photoAccess: .none, hasUsableFolder: true, hasSelectedAlbum: true)
+        XCTAssertFalse(denied.showsGlobalPhotoBlock)
+        XCTAssertTrue(denied.mixedAlbumIncomplete)
+        XCTAssertFalse(denied.showsDeniedPhotoHint, "文件夹照常，不说「自动备份没开」")
+        let ruleOff = SourceAvailability(autoRule: false, photoAccess: .none, hasUsableFolder: true, hasSelectedAlbum: true)
+        XCTAssertFalse(ruleOff.mixedAlbumIncomplete, "规则关着是正常状态，不出状态卡")
+    }
+
+    /// #1811：只有目录时照片权限变差不产生停止状态，也不给「去设置」出口——目录备份仍在继续。
+    func testFolderOnlyKeepsNoStopStateForAnyPhotoAccess() {
+        for access in [MediaAccess.partial, .none] {
+            let facts = SourceAvailability(autoRule: true, photoAccess: access, hasUsableFolder: true, hasSelectedAlbum: false)
+            XCTAssertFalse(facts.showsGlobalPhotoBlock, "\(access)")
+            XCTAssertFalse(facts.mixedAlbumIncomplete, "\(access)")
+            XCTAssertTrue(facts.hasUsableSource, "\(access)")
+        }
+    }
+
+    /// 通知侧判定与页面同一份口径：目录可用，或完整授权下已选且存在的相册，才算有可用来源。
+    func testUsableSourceFactMatchesWhatCanStillBeBackedUp() {
+        XCTAssertTrue(SourceAvailability.usableSource(selected: ["folder:f1"], known: [], folderCount: 1, existingAlbums: nil, photoAccess: .none))
+        XCTAssertTrue(SourceAvailability.usableSource(selected: nil, known: [], folderCount: 1, existingAlbums: nil, photoAccess: .none), "旧版目录没有勾选存值")
+        XCTAssertFalse(SourceAvailability.usableSource(selected: [], known: ["folder:f1"], folderCount: 1, existingAlbums: nil, photoAccess: .none), "明确取消勾选不是有效目录范围")
+        XCTAssertTrue(SourceAvailability.usableSource(selected: ["a"], known: [], folderCount: 0, existingAlbums: ["a"], photoAccess: .full))
+        XCTAssertFalse(SourceAvailability.usableSource(selected: ["a"], known: [], folderCount: 0, existingAlbums: ["a"], photoAccess: .partial), "有限授权：相册不进自动范围")
+        XCTAssertFalse(SourceAvailability.usableSource(selected: [], known: [], folderCount: 0, existingAlbums: nil, photoAccess: .full))
     }
 
     func testFolderOnlyDoesNotShowDeniedPhotoHintOrFullAccessRoute() {
@@ -38,5 +68,43 @@ final class SourceAvailabilityTests: XCTestCase {
         XCTAssertTrue(SourceAvailability.hasUsableFolder(selected: nil, known: [], folderCount: 1), "旧版目录没有新版勾选存值")
         XCTAssertFalse(SourceAvailability.hasUsableFolder(selected: [], known: ["folder:a"], folderCount: 1), "新版明确取消勾选不是有效目录范围")
         XCTAssertFalse(SourceAvailability.hasUsableFolder(selected: ["a"], known: [], folderCount: 0))
+    }
+
+    /// #1811（夜间 owner 复核）：「自动备份已停止」卡的「去设置」出口按两态——有可用目录来源时备份没停，不给出口。
+    /// 反证：去掉 `!hasUsableFolder`（旧三态口径），带目录来源的两条断言红。
+    func testBlockedHeroSettingsFollowsTwoStatePhotoAccess() {
+        XCTAssertTrue(AppModel.blockedHeroOffersSettings(autoRule: true, access: .partial, hasUsableFolder: false), "纯相册部分")
+        XCTAssertTrue(AppModel.blockedHeroOffersSettings(autoRule: true, access: .none, hasUsableFolder: false), "纯相册全拒")
+        XCTAssertFalse(AppModel.blockedHeroOffersSettings(autoRule: true, access: .partial, hasUsableFolder: true),
+                       "有目录来源：备份没停，不出")
+        XCTAssertFalse(AppModel.blockedHeroOffersSettings(autoRule: true, access: .none, hasUsableFolder: true),
+                       "有目录来源：不出")
+        XCTAssertFalse(AppModel.blockedHeroOffersSettings(autoRule: false, access: .none, hasUsableFolder: false), "开关关：不出")
+        XCTAssertFalse(AppModel.blockedHeroOffersSettings(autoRule: true, access: .full, hasUsableFolder: false), "全部：不出")
+    }
+
+    /// #1811 评审：通知侧「还有可用来源」的运行时口径（evaluateNotices 实际调用的 `noticeUsableSource`）：
+    /// 待保存目录（pendingScope）不能把降级通知吞掉；范围读失败时即使有有效目录也不抑制通知，且不去查现有相册。
+    /// 反证：改回 allRecords().count 第一条红；把读失败分支改回「当成 nil 继续」，第二条红且 existingAlbumIds 被调用。
+    func testNoticeUsableSourceIgnoresPendingScopeFolders() async {
+        let pending = FolderRecord(id: "p", displayName: "draft", bookmark: Data(), status: FolderMediaSource.pendingScopeStatus)
+        let active = FolderRecord(id: "a", displayName: "real", bookmark: Data())
+        let noLookup: (Set<String>) async -> Set<String>? = { _ in nil }
+
+        let pendingUsable = await LiveBackend.noticeUsableSource(
+            readScope: { [] }, knownAlbums: [], folderRecords: [pending], photoAccess: .none, existingAlbumIds: noLookup)
+        XCTAssertFalse(pendingUsable, "待保存目录不算可用来源，降级通知要照发")
+        let activeUsable = await LiveBackend.noticeUsableSource(
+            readScope: { [] }, knownAlbums: [], folderRecords: [active], photoAccess: .none, existingAlbumIds: noLookup)
+        XCTAssertTrue(activeUsable, "登记有效的目录才是「备份还在继续」")
+
+        struct Boom: Error {}
+        final class Called: @unchecked Sendable { var count = 0 }
+        let called = Called()
+        let failed = await LiveBackend.noticeUsableSource(
+            readScope: { throw Boom() }, knownAlbums: [], folderRecords: [active], photoAccess: .none,
+            existingAlbumIds: { _ in called.count += 1; return nil })
+        XCTAssertFalse(failed, "范围读失败 ≠ 没来源：读不到不能替用户判断备份还在继续")
+        XCTAssertEqual(called.count, 0, "读失败时不去查现有相册")
     }
 }

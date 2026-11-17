@@ -93,22 +93,110 @@ final class PhotoMediaSourceAccessTests: XCTestCase {
         XCTAssertEqual(auth.requests, 1)
     }
 
-    func testInitialLoadPreservesSavedAlbumsHiddenByPermission() {
-        let selected = BucketScreen.initialSelectionWithUnavailable(saved: ["saved-album"], availableAlbums: [], cameraAlbum: nil)
-        XCTAssertEqual(selected, ["saved-album"], "无权限首次加载也不能先丢失已保存相册")
-        let visible = BucketScreen.initialSelectionWithUnavailable(saved: ["saved-album"], availableAlbums: ["saved-album"], cameraAlbum: nil)
+    /// #1811 评审：状态保留——已保存的相册在编辑态里全部保留（含当前列表里看不见的），权限恢复后重新可见；
+    /// 从未保存则一律空。
+    /// 反证：恢复「看不见的已保存相册不进编辑态」，第一条红。
+    func testInitialSelectionKeepsInvisibleSavedAlbums() {
+        let hidden = BucketScreen.initialSelectionWithUnavailable(saved: ["saved-album"], availableAlbums: [], cameraAlbum: nil)
+        XCTAssertEqual(hidden, ["saved-album"], "看不见的已保存相册也要保留在编辑态（不能静默丢已存范围）")
+        let visible = BucketScreen.initialSelectionWithUnavailable(saved: ["saved-album"], availableAlbums: ["saved-album"],
+                                                                   cameraAlbum: nil)
         XCTAssertEqual(visible, ["saved-album"], "可见相册仍按同一选中语义处理")
+        XCTAssertEqual(BucketScreen.initialSelectionWithUnavailable(saved: nil, availableAlbums: ["recents"],
+                                                                    cameraAlbum: "recents"),
+                       [], "从未保存：仍然为空")
     }
 
-    func testReloadKeepsUnsavedFolderSelectionAndInvisibleSavedAlbum() {
-        let current: Set<String> = ["folder:draft", "a", "b"]
+    /// #1811（评审）：没有存过的范围一律空——相机相册即使显式可用 / 显式传入也不预选；
+    /// 有保存记录时也不预选新相册，只保留已保存的相册。
+    /// 反证：恢复 `ScopePolicy.initialSelection` 的「saved==nil 预选相机相册」，第一条红。
+    func testInitialSelectionNeverPreselectsCameraAlbum() {
+        XCTAssertEqual(BucketScreen.initialSelectionWithUnavailable(saved: nil, availableAlbums: ["recents", "favorites"],
+                                                                    cameraAlbum: "recents"),
+                       [], "没保存过就不预选相机相册")
+        XCTAssertEqual(BucketScreen.initialSelectionWithUnavailable(saved: ["mine"], availableAlbums: ["mine", "recents"],
+                                                                    cameraAlbum: "recents"),
+                       ["mine"], "有保存记录：不预选相机相册，只保留已保存的")
+    }
+
+    /// #1811 评审：刷新按「已保存 / 本次未保存」区分——
+    /// 已保存相册即使在 none / albums 为空时也留在 checked（full 恢复后重新可见）；本次未保存勾选只在能展示时保留；
+    /// 用户主动取消的已保存相册不会被刷新加回。只改编辑态，不写持久 scope。
+    /// 反证：把已保存相册按可见性过滤，第一条（none）红；把「不在 current 就加回」，取消一条红。
+    func testReloadKeepsSavedAlbumsAndDropsInvisibleUnsavedOnes() {
         let saved: Set<String> = ["a"]
-        let reloaded = BucketScreen.selectionForReload(current: current, saved: saved,
-                                                        availableAlbums: [], availableFolders: ["folder:draft"])
-        XCTAssertEqual(reloaded, ["folder:draft", "a"], "授权刷新保留未保存目录和不可见的已保存相册")
-        let removed = BucketScreen.selectionForReload(current: current, saved: saved,
-                                                       availableAlbums: [], availableFolders: [])
-        XCTAssertEqual(removed, ["a"], "已移除目录不能靠刷新复活")
+        let current: Set<String> = ["folder:draft", "a", "b"]
+
+        let partial = BucketScreen.selectionForReload(current: current, saved: saved, availableAlbums: ["a", "b"],
+                                                      availableFolders: ["folder:draft"], photoAccess: .partial)
+        XCTAssertEqual(partial, ["folder:draft", "a", "b"], "partial：已保存 + 能展示的本次勾选都保留")
+
+        let partialHidden = BucketScreen.selectionForReload(current: current, saved: saved, availableAlbums: ["a"],
+                                                            availableFolders: ["folder:draft"], photoAccess: .partial)
+        XCTAssertEqual(partialHidden, ["folder:draft", "a"], "partial：看不见的本次勾选从编辑态移除")
+
+        let none = BucketScreen.selectionForReload(current: current, saved: saved, availableAlbums: [],
+                                                   availableFolders: ["folder:draft"], photoAccess: .none)
+        XCTAssertEqual(none, ["folder:draft", "a"], "none 且 albums() 为空：已保存的 a 仍在，本次未保存勾选移除")
+
+        let backToFull = BucketScreen.selectionForReload(current: none, saved: saved, availableAlbums: ["a", "b"],
+                                                         availableFolders: ["folder:draft"], photoAccess: .full)
+        XCTAssertEqual(backToFull, ["folder:draft", "a"], "full 恢复后已保存的 a 重新可见")
+
+        let cancelled: Set<String> = ["folder:draft"]
+        let afterCancel = BucketScreen.selectionForReload(current: cancelled, saved: saved, availableAlbums: ["a"],
+                                                          availableFolders: ["folder:draft"], photoAccess: .full)
+        XCTAssertEqual(afterCancel, ["folder:draft"], "用户已主动取消的已保存相册不会被刷新加回")
+
+        let removedFolder = BucketScreen.selectionForReload(current: current, saved: saved, availableAlbums: ["a"],
+                                                            availableFolders: [], photoAccess: .partial)
+        XCTAssertEqual(removedFolder, ["a"], "已移除目录不能靠刷新复活")
+    }
+
+    /// #1811 评审：权限切换后保存不会误删原范围——编辑态保留着不可见的已保存相册，原样保存时落盘不变。
+    /// 反证：把初始选择改成「只保留可见相册」，保存端收到空集即删掉 a，本断言红。
+    func testSavingAfterPermissionRoundTripKeepsSavedScope() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = BackupScopeStore(directory: dir, daemonNodeId: "scope-round-trip")
+        try store.saveScope(selected: ["a"], allCurrent: ["a"], since: .all)
+        let library = LiveMediaLibrary(scopeStore: { store }, auth: FakeAuthorization(.limited))
+
+        let initial = BucketScreen.initialSelectionWithUnavailable(saved: ["a"], availableAlbums: [], cameraAlbum: nil)
+        XCTAssertEqual(initial, ["a"])
+        let afterNone = BucketScreen.selectionForReload(current: initial, saved: ["a"], availableAlbums: [],
+                                                        availableFolders: [], photoAccess: .none)
+        let afterFull = BucketScreen.selectionForReload(current: afterNone, saved: ["a"], availableAlbums: ["a"],
+                                                        availableFolders: [], photoAccess: .full)
+        XCTAssertEqual(afterFull, ["a"], "full→none→full 后 a 仍在编辑态")
+
+        try await library.saveScope(afterFull, known: ["a"], since: .all)
+        XCTAssertEqual(try store.selectedBucketIds(), ["a"], "原样保存不会误删已保存范围")
+    }
+
+    /// #1811：首次进范围页没有照片权限、授权回来也不自动补默认；一个来源都没选也能保存（空范围 = 不自动备份），
+    /// 页面上必须明确写「未选择任何来源」，不弹窗。相册权限 none/partial（选择隐藏）时同样要写清楚。
+    /// 反证：去掉提示（`showsEmptySelectionHint` 恒 false）或恢复「相册未完整授权不显示」，第一条断言红。
+    func testEmptySelectionIsExplicitAndGetsNoDefault() {
+        XCTAssertTrue(BucketScreen.showsEmptySelectionHint(hasLoaded: true, checked: []))
+        XCTAssertFalse(BucketScreen.showsEmptySelectionHint(hasLoaded: false, checked: []), "还没加载完不显示")
+        XCTAssertFalse(BucketScreen.showsEmptySelectionHint(hasLoaded: true, checked: ["recents"]))
+    }
+
+    /// #1811：权限两态——有限授权与拒绝在范围页是同一套「相册未完整授权」，相册不进自动范围，文件夹照常。
+    /// 未完整授权时相册卡片只显示当前编辑态里选中的（已保存 + 本次勾选），保证没有隐藏、无法取消的勾选。
+    /// 反证：`notice(for:)` 把 `.partial` 当可选项（旧行为），本组红。
+    func testIncompletePhotoAccessUsesOneNoticeState() {
+        XCTAssertEqual(BucketScreen.notice(for: .partial), BucketScreen.notice(for: .none))
+        XCTAssertEqual(BucketScreen.notice(for: .partial), .noAccess)
+        XCTAssertEqual(BucketScreen.notice(for: .full), .none)
+        let a = AlbumBucket(id: "a", name: "A", count: 1, isCameraAlbum: false)
+        let b = AlbumBucket(id: "b", name: "B", count: 2, isCameraAlbum: false)
+        XCTAssertEqual(BucketScreen.visibleAlbums([a, b], checked: ["a"], photoAccess: .partial).map(\.id), ["a"],
+                       "未完整授权只显示 checked 里的相册")
+        XCTAssertEqual(BucketScreen.visibleAlbums([a, b], checked: ["a", "b"], photoAccess: .partial).map(\.id), ["a", "b"],
+                       "full→partial 时本次勾选（未保存）的 b 也保持可见可取消")
     }
 
     func testSavingFolderScopeKeepsInvisibleSavedAlbums() async throws {
@@ -126,5 +214,75 @@ final class PhotoMediaSourceAccessTests: XCTestCase {
         // 反证：相册仍在可见来源里、但未勾选，才是明确取消。
         try await library.saveScope(["folder:f1"], known: ["a", "folder:f1"], since: .all)
         XCTAssertEqual(try store.selectedBucketIds(), ["folder:f1"])
+    }
+
+    /// #1811 评审：混合范围 [a, folder:f] 在 partial 下能看到并取消 a；保存后成为纯文件夹并已提交。
+    /// 反证：`visibleAlbums` 不显示 checked 里的相册（旧「未完整授权全隐藏」），第一步红；保存端退回「不可见就保留」，第二步红。
+    func testMixedScopeCanCancelSavedAlbumUnderPartialAccess() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = BackupScopeStore(directory: dir, daemonNodeId: "scope-mixed-cancel")
+        try store.saveScope(selected: ["a", "folder:f"], allCurrent: ["a", "folder:f"], since: .all)
+        let library = LiveMediaLibrary(scopeStore: { store }, auth: FakeAuthorization(.limited))
+
+        let album = AlbumBucket(id: "a", name: "A", count: 2, isCameraAlbum: false)
+        let newAlbum = AlbumBucket(id: "b", name: "B", count: 9, isCameraAlbum: false)
+        let visible = BucketScreen.visibleAlbums([album, newAlbum], checked: ["a", "folder:f"], photoAccess: .partial)
+        XCTAssertEqual(visible.map(\.id), ["a"], "有限授权下 checked 里的相册仍显示（可取消），没勾的新相册不显示")
+
+        // 用户在界面上取消 a 再保存：a 在可见来源里（known 带 a），落盘成为纯文件夹并提交。
+        try await library.saveScope(["folder:f"], known: ["a", "folder:f"], since: .all)
+        XCTAssertEqual(try store.selectedBucketIds(), ["folder:f"])
+    }
+
+    /// #1811 评审：规则初值——savedScope 读失败不得落关（保留「尚未初始化」），下次能读到真实范围再按现状初始化；
+    /// 已有存值不覆盖。
+    /// 反证：恢复旧写法 `(try? savedScope()) ?? nil`（读失败当 nil），第一条断言红。
+    func testAutoRuleInitDefersWhenScopeUnreadable() throws {
+        struct Boom: Error {}
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let prefs = AutoBackupRulePrefs(directory: dir)
+
+        XCTAssertNil(LiveBackend.initializeAutoRuleIfAbsent(prefs, access: .full, readScope: { throw Boom() }),
+                     "读失败：这次不初始化")
+        XCTAssertNil(prefs.stored(), "读失败不能落关")
+
+        XCTAssertEqual(LiveBackend.initializeAutoRuleIfAbsent(prefs, access: .full, readScope: { ["a"] }), true,
+                       "下次读到非空范围：按现状开")
+        XCTAssertEqual(prefs.stored(), true)
+
+        XCTAssertEqual(LiveBackend.initializeAutoRuleIfAbsent(prefs, access: .full, readScope: { nil }), true,
+                       "已有存值不被覆盖")
+        XCTAssertEqual(prefs.stored(), true)
+    }
+
+    /// #1811 评审：成功读到 nil / 空集按定案关；非完整授权不读范围、直接关。
+    func testAutoRuleInitOffForNilEmptyScopeOrIncompleteAccess() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let nilDir = base.appendingPathComponent("nil")
+        try FileManager.default.createDirectory(at: nilDir, withIntermediateDirectories: true)
+        let nilPrefs = AutoBackupRulePrefs(directory: nilDir)
+        XCTAssertEqual(LiveBackend.initializeAutoRuleIfAbsent(nilPrefs, access: .full, readScope: { nil }), false,
+                       "从未保存范围 ⇒ 关")
+        XCTAssertEqual(nilPrefs.stored(), false)
+
+        let emptyDir = base.appendingPathComponent("empty")
+        try FileManager.default.createDirectory(at: emptyDir, withIntermediateDirectories: true)
+        let emptyPrefs = AutoBackupRulePrefs(directory: emptyDir)
+        XCTAssertEqual(LiveBackend.initializeAutoRuleIfAbsent(emptyPrefs, access: .full, readScope: { [] }), false,
+                       "空集 ⇒ 关")
+        XCTAssertEqual(emptyPrefs.stored(), false)
+
+        let partialDir = base.appendingPathComponent("partial")
+        try FileManager.default.createDirectory(at: partialDir, withIntermediateDirectories: true)
+        let partialPrefs = AutoBackupRulePrefs(directory: partialDir)
+        XCTAssertEqual(LiveBackend.initializeAutoRuleIfAbsent(partialPrefs, access: .partial, readScope: { ["a"] }), false,
+                       "非完整授权：不读范围，直接关")
+        XCTAssertEqual(partialPrefs.stored(), false)
     }
 }
