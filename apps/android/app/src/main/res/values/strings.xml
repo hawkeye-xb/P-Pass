@@ -185,6 +185,10 @@
     <string name="backup_scope_none">None selected</string>
     <!-- #1020: a scope was saved but can't be read ： not the same as "None selected". -->
     <string name="backup_scope_unreadable">Can’t read the saved selection</string>
+    <!-- #1794: 范围页来源分类——总标题「备份来源」下分相册与文件夹两个分区。 -->
+    <string name="scope_sources">Backup sources</string>
+    <string name="scope_sources_albums">Albums</string>
+    <string name="scope_sources_folders">Folders</string>
     <plurals name="backup_scope_n">
         <item quantity="one">%1$d album</item>
         <item quantity="other">%1$d albums</item>

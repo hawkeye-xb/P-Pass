@@ -64,6 +64,38 @@ class UI08BucketScreenTest {
     }
 
     @Test
+    fun source_cards_are_grouped_into_album_and_folder_sections() {
+        val source = bucketScreenSource()
+        val title = source.indexOf("R.string.scope_sources)")
+        val albumHeading = source.indexOf("R.string.scope_sources_albums")
+        val folderHeading = source.indexOf("R.string.scope_sources_folders")
+        val albums = source.indexOf("items(buckets")
+        val folders = source.indexOf("items(folderBuckets")
+        val addFolder = source.indexOf("item(key = \"add-folder\")")
+        assertTrue("时间筛选下面要有「备份来源」整行标题", title > 0)
+        assertTrue("相册分区标题必须在相册卡片之前", albumHeading in 1 until albums)
+        assertTrue("文件夹分区标题必须在相册卡片之后、文件夹卡片之前", folderHeading in albums until folders)
+        assertTrue("添加文件夹动作必须留在文件夹分区里", addFolder > folders)
+        assertTrue(
+            "分区标题必须占满整行",
+            source.split("GridItemSpan(maxLineSpan)").size - 1 >= 2,
+        )
+    }
+
+    @Test
+    fun empty_album_section_keeps_hint_and_folder_entry() {
+        val source = bucketScreenSource()
+        val albumHeading = source.indexOf("R.string.scope_sources_albums")
+        val folderHeading = source.indexOf("R.string.scope_sources_folders")
+        val emptyHint = source.indexOf("R.string.bucket_empty")
+        assertTrue("相册区为空时显示现有空状态提示", emptyHint in albumHeading until folderHeading)
+        assertFalse(
+            "文件夹为空也要保留添加动作，不能被整块空状态吞掉",
+            source.contains("buckets.isEmpty() && folderBuckets.isEmpty()"),
+        )
+    }
+
+    @Test
     fun source_cards_and_add_action_share_grid_geometry_and_type_glyphs() {
         val source = bucketScreenSource()
         assertTrue("相册与文件夹必须有不同类型图标", source.contains("SourceTypeGlyph(isFolder)"))
