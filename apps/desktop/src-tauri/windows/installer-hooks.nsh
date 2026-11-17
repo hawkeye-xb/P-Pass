@@ -266,8 +266,9 @@ Var PPassDataDir
 ; #1063：安装失败 / 文件没换成时共用的恢复路径。
 ;
 ;   1. 用户主动停过服务（wanted-state = stopped）⇒ 不恢复，保持停止；
-;      否则服务存在就起它；
+;      否则服务存在就起它，带退避重试直到真实 RUNNING（#1817）；
 ;   2. 写 `update-failed` 标记，下次 App 启动读它显示「上次更新失败」横幅；
+;      service=1 只在服务真实 RUNNING 时写，起不来如实写 service=0，不谎报恢复；
 ;   3. 静默安装（应用内更新）不弹窗，提示留给下次启动横幅。
 ;
 ; #1167：两个标记都**不**放 $LOCALAPPDATA——安装器是提权进程，换一个管理员来装，
@@ -300,9 +301,36 @@ Function UpdateFailureRecover
       ; 服务会永久失去崩溃自动重启（SCM 配置是持久的，不是本次进程的状态）。
       nsExec::ExecToLog '"$SYSDIR\sc.exe" failure "${PPASS_SERVICE}" reset= 86400 actions= restart/5000/restart/5000'
       Pop $0
-      nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${PPASS_SERVICE}"'
-      Pop $0
-      StrCpy $R9 1
+      ; #1817：一次性 sc start 在占用句柄未释放时必然失败且无人重试（sc failure 的 restart 只覆盖崩溃、
+      ; 不覆盖 start 失败）。改成退避重试 + sc query 轮询，覆盖「杀软/残留进程占用 ppf-daemon.exe」的
+      ; 释放窗口；只有真实 RUNNING 才写 service=1，启动仍失败就如实写 service=0。
+      StrCpy $R1 0
+      ppass_recover_retry:
+        nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${PPASS_SERVICE}"'
+        Pop $0
+        ; 等它真的到 RUNNING（每次最多约 5 秒：10 × 500ms）
+        StrCpy $R2 0
+        ppass_recover_wait:
+          nsExec::ExecToStack '"$SYSDIR\sc.exe" query "${PPASS_SERVICE}"'
+          Pop $0
+          Pop $1
+          ${StrStr} $R7 "$1" "RUNNING"
+          ${If} $R7 != ""
+            StrCpy $R9 1
+            Goto ppass_recover_done
+          ${EndIf}
+          IntOp $R2 $R2 + 1
+          ${If} $R2 >= 10
+            Goto ppass_recover_wait_done
+          ${EndIf}
+          Sleep 500
+          Goto ppass_recover_wait
+        ppass_recover_wait_done:
+        IntOp $R1 $R1 + 1
+        ${If} $R1 < 12
+          Goto ppass_recover_retry
+        ${EndIf}
+      ppass_recover_done:
     ${EndIf}
   ${EndIf}
 
@@ -325,7 +353,11 @@ Function UpdateFailureRecover
 
   failed_dialog:
   ${IfNot} ${Silent}
-    MessageBox MB_ICONEXCLAMATION|MB_OK "P-Pass update failed. The background service has been restored; reopen P-Pass to retry, or download the latest version from the website.$\r$\n$\r$\n更新失败，后台服务已恢复。请重新打开 P-Pass 重试，或从官网下载最新版本。"
+    ${If} $R9 == 1
+      MessageBox MB_ICONEXCLAMATION|MB_OK "P-Pass update failed. The background service has been restored; reopen P-Pass to retry, or download the latest version from the website.$\r$\n$\r$\n更新失败，后台服务已恢复。请重新打开 P-Pass 重试，或从官网下载最新版本。"
+    ${Else}
+      MessageBox MB_ICONEXCLAMATION|MB_OK "P-Pass update failed and the background service could not be restored; reopen P-Pass or start the P-Pass service manually to retry.$\r$\n$\r$\n更新失败，后台服务未能自动恢复。请重新打开 P-Pass 或手动启动 P-Pass 服务后重试。"
+    ${EndIf}
   ${EndIf}
 FunctionEnd
 
