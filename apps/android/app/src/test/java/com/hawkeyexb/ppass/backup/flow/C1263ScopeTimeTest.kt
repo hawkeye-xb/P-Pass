@@ -408,4 +408,50 @@ class C1263ScopeTimeTest {
         assertEquals(OrderState.PENDING, rig.state(img9))
         rig.close()
     }
+
+    // 评审 PRRT_kwDOTiNAK864OXUP：运行中合并进来的触发重算遇到撤权，要先停掉活动循环再进等待——
+    // 只 enterWait 的话界面已显示等待，在飞的传输照常跑完，并把等待原因清掉。
+    // 反证（撤掉修复）：在飞那张不被取消、跑完后等待原因变 null，红。
+    @Test
+    fun `a revoked folder recount while a transfer is running stops the loop before waiting`() = runTest {
+        val root = tmp.newFolder("media-root-running-revoke")
+        val registry = FolderRegistry(File(tmp.root, "registry-running-revoke.json"))
+        registry.addFolder("file://tree-running-revoke", "media-root-running-revoke")
+        File(root, "IMG_9.jpg").writeText("nine")
+        val folder = SwitchableFolder(FolderMediaSnapshotSource(registry) { FileFolderTree(root) })
+        val album = com.hawkeyexb.ppass.backup.order.FakeMedia()
+        val composite = CompositeMediaSnapshotSource(album, folder)
+        val bucket = registry.allRecords().single().bucketId
+        val rig = Rig(this, mediaOverride = composite, primaryMedia = album, inScopeBuckets = setOf(bucket))
+        advanceUntilIdle()
+        rig.store.finishScan()
+        rig.media.since = today
+        val img9 = com.hawkeyexb.ppass.backup.folder.FOLDER_ID_FLAG or 2L
+        // 另一个已选目录的在途旧订单：运行中重算判它的范围 → 撤权时在门槛处抛 SourceUnavailable。
+        oldRow(rig, img9, "v1", bucket, storedDateAddedSec = today)
+        // 相册里一张新照片：这一轮它先进传输并挂住，循环保持在跑。
+        rig.photo(1, generation = 1, dateAdded = today)
+        rig.delivery.hold = true
+        rig.engine.trigger(TriggerReason.APP_FOREGROUND)
+        advanceUntilIdle()
+        assertEquals("前提：一张照片正在传", listOf(1L), rig.delivery.deliveredMediaIds)
+        assertEquals("前提：这一轮还在跑", GlobalState.RUNNING, rig.engine.view.value.state)
+
+        // 运行中合并进来的 MEDIA_CHANGE → 重算待办，旧目录订单判范围时撤权抛。
+        folder.revoked = true
+        rig.engine.trigger(TriggerReason.MEDIA_CHANGE)
+        advanceUntilIdle()
+        assertEquals(WaitReason.SOURCE_UNAVAILABLE, rig.control.wait)
+        assertEquals("活动循环已停：在飞的那张被取消", 1, rig.delivery.cancelled.size)
+        assertEquals(rig.store.currentForMedia(1)!!.id, rig.delivery.cancelled.single())
+
+        // 等待之后不再推进传输，等待原因也不会被后续传输清掉。
+        rig.delivery.release()
+        advanceUntilIdle()
+        assertEquals("等待原因不被后续传输清掉", WaitReason.SOURCE_UNAVAILABLE, rig.control.wait)
+        assertEquals(GlobalState.WAITING, rig.engine.view.value.state)
+        assertEquals("不再有新的传输请求", listOf(1L), rig.delivery.deliveredMediaIds)
+        assertEquals("在飞那张没有传成", OrderState.TRANSFERRING, rig.state(1))
+        rig.close()
+    }
 }
