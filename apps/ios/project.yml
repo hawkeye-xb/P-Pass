@@ -74,6 +74,18 @@ targets:
         inputFiles:
           - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
         basedOnDependencyAnalysis: false
+      # #1820：本地开发包的构建时间。只有本地 `just dev` 注入 PPF_BUILD_STAMP 时才写进产物；
+      # 正式/CI 构建没有这个变量 ⇒ 删掉旧键，版本行只显示版本号与构建号（对位 Android 的 BUILD_STAMP）。
+      - name: Stamp build time
+        script: |
+          PLIST="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          /usr/libexec/PlistBuddy -c "Delete :PPassBuildStamp" "$PLIST" 2>/dev/null || true
+          if [ -n "${PPF_BUILD_STAMP:-}" ]; then
+            /usr/libexec/PlistBuddy -c "Add :PPassBuildStamp string ${PPF_BUILD_STAMP}" "$PLIST"
+          fi
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
+        basedOnDependencyAnalysis: false
   PPassTests:
     type: bundle.unit-test
     platform: iOS

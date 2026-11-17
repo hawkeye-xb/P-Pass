@@ -76,6 +76,9 @@ android {
                 ?.removePrefix("v")
                 ?: "0.11.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // #1820：本地开发包的构建时间（`MM-DD HH:MM`）。只由本地 `just dev` 注入 PPF_BUILD_STAMP；
+        // 正式/CI 构建不设这个变量 ⇒ 空串，版本行后面不显示任何时间，版本号与更新通道不变。
+        buildConfigField("String", "BUILD_STAMP", "\"${buildStampForLocalDev()}\"")
         // #1121：更新验签公钥，按通道各一把，构建期从仓库里唯一的来源读：
         //   stable = 桌面 tauri.conf.json 的 updater pubkey（两端同一把）；
         //   test   = release/update-keys/test.pub，没有就留空——test 包拒收一切更新
@@ -279,6 +282,15 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
+
+// #1820：本地构建时间戳。只在本地 `just dev` 里由 `date '+%m-%d %H:%M'` 注入；
+// 空白（含全空格）一律视为未设置，避免版本行后面挂一串空格。转义后串进 BuildConfig。
+fun buildStampForLocalDev(): String =
+    (System.getenv("PPF_BUILD_STAMP") ?: "")
+        .trim()
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\n", " ")
 
 // #1121：见 defaultConfig 里的 UPDATE_PUBKEY_* 注释。
 fun updatePubkeyStable(): String {
