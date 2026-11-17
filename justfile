@@ -302,6 +302,10 @@ mobile-static-check:
 # #1820 本地构建时间与设备测试保留 App 的口径自测（纯 shell，几秒；进 ci / ci-docs）。
 # 断言：两端都从 PPF_BUILD_STAMP 取值；stamp 为空时版本行只显示版本号+构建号、非空时追加；
 # 设备测试 recipe 带 leaveApksInstalledAfterRun=true；本地 `just dev` 用 date '+%m-%d %H:%M' 生成时间戳。
+# recipe 级断言只看对应配方/构建脚本的正文（不看整份文件，避免匹配到注释或断言自身的字符串），
+# 六条 Android/Swift 字面量断言只看非注释行（含跨行 /* ... */ 块注释），配方级断言忽略缩进注释，并带反证：
+# 删掉或缩进注释掉时间戳注入与 connected 命令、删掉/注释掉 iOS 的 Add 行、删掉或注释掉 trim 任一段、
+# 注释掉（// 或 /* */ 包起来）Android 的 System.getenv 并改回返回空串时必须判红。
 build-stamp-check:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -309,13 +313,93 @@ build-stamp-check:
     fail=0
     ok() { printf '  ✅ %s\n' "$1"; }
     ko() { printf '  ❌ %s\n' "$1"; fail=1; }
-    need() { # <file> <literal> <说明>
-      if grep -Fq -- "$2" "$1"; then ok "$3"; else ko "$3（$1 里找不到「$2」）"; fi
+    noncomment() { # <file>：去掉注释（跨行 /* ... */、行注释 // 与 #、块注释续行 *），注释里的字面量不算
+      # 逐字符扫，字符串引号内的 // 与 /* 不算注释（如 "crates/proto/**"）。
+      awk '
+        function strip(s,   out, i, n, ch, nx, closed, q) {
+          out = ""; n = length(s); i = 1
+          while (i <= n) {
+            ch = substr(s, i, 1)
+            if (q != "") {
+              out = out ch
+              if (ch == "\\" && i < n) { out = out substr(s, i + 1, 1); i += 2; continue }
+              if (ch == q) q = ""
+              i++; continue
+            }
+            if (ch == "\"") { q = ch; out = out ch; i++; continue }
+            if (ch == "/" && i < n) {
+              nx = substr(s, i + 1, 1)
+              if (nx == "/") return out
+              if (nx == "*") {
+                i += 2; closed = 0
+                while (i < n) {
+                  if (substr(s, i, 1) == "*" && substr(s, i + 1, 1) == "/") { i += 2; closed = 1; break }
+                  i++
+                }
+                if (!closed) { inblock = 1; return out }
+                continue
+              }
+            }
+            out = out ch; i++
+          }
+          return out
+        }
+        inblock {
+          b = index($0, "*/")
+          if (b == 0) next
+          $0 = substr($0, b + 2); inblock = 0
+        }
+        { print strip($0) }
+      ' "$1"
     }
+    has_literal() { # <file> <literal>：只在非注释行里找字面量
+      noncomment "$1" | grep -Fq -- "$2"
+    }
+    need() { # <file> <literal> <说明>
+      if has_literal "$1" "$2"; then ok "$3"; else ko "$3（$1 里找不到「$2」）"; fi
+    }
+    recipe_body() { # <justfile> <配方头正则>：从配方头到下一个配方头（列 0 的小写名 + 空格/冒号）
+      sed -n "/^$2/,/^[a-z][a-z0-9-]*[ :]/p" "$1"
+    }
+    has_dev_stamp() { # 时间戳注入只在 dev 配方正文里找（缩进注释不算）
+      recipe_body "$1" 'dev \*args:' | grep -Ev '^[[:space:]]*#' | grep -Fq 'export PPF_BUILD_STAMP=' &&
+        recipe_body "$1" 'dev \*args:' | grep -Ev '^[[:space:]]*#' | grep -Fq "date '+%m-%d %H:%M'"
+    }
+    has_keep_apks() { # 设备测试命令与参数只在 android-instrumented 正文里找（缩进注释不算）
+      recipe_body "$1" 'android-instrumented \*args:' | grep -Ev '^[[:space:]]*#' | grep -Fq -- 'connectedDebugAndroidTest' &&
+        recipe_body "$1" 'android-instrumented \*args:' | grep -Ev '^[[:space:]]*#' | grep -Fq -- 'android.injected.androidTest.leaveApksInstalledAfterRun=true'
+    }
+    ios_stamp_script() { # <project.yml>：只取「Stamp build time」脚本正文（按缩进判定，注释/Delete 行在外面）
+      awk '
+        { match($0, /^ */); ind = RLENGTH }
+        !inblock && /- name: Stamp build time/ { inblock = 1; next }
+        inblock && !inscript && /script: \|/ { inscript = 1; scriptind = ind; next }
+        inscript {
+          if ($0 ~ /^[[:space:]]*$/) next
+          if (ind > scriptind) { sub(/^ +/, ""); print; next }
+          exit
+        }
+      ' "$1"
+    }
+    ios_has_env() { ios_stamp_script "$1" | grep -Ev '^[[:space:]]*#' | grep -Fq 'PPF_BUILD_STAMP'; }
+    ios_has_add() { # 真正的（非注释）Add 命令行
+      ios_stamp_script "$1" | grep -Eq '^[[:space:]]*/usr/libexec/PlistBuddy -c "Add :PPassBuildStamp string'
+    }
+    ios_has_trim() { # tr -d 与首尾 trim 三段都在（注释行不算，与 ios_has_env 同一口径）
+      local b
+      b="$(ios_stamp_script "$1" | grep -Ev '^[[:space:]]*#')"
+      printf '%s\n' "$b" | grep -Fq 'tr -d' &&
+        printf '%s\n' "$b" | grep -Fq 's/^[[:space:]]*//' &&
+        printf '%s\n' "$b" | grep -Fq 's/[[:space:]]*$//'
+    }
+    remove_seg() { # <file> <literal>：删掉第一处字面量（反证用）
+      awk -v seg="$2" '{ i = index($0, seg); if (i > 0) $0 = substr($0, 1, i-1) substr($0, i+length(seg)); print }' "$1"
+    }
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/ppass-stamp.XXXXXX")" || { ko "建临时目录失败，反证跑不了"; exit 1; }
+    trap 'rm -rf "$tmp"' EXIT
 
-    # 1) 时间戳来源：本地 recipe 用 date 生成，格式能分辨先后（MM-DD HH:MM）。
-    need justfile "PPF_BUILD_STAMP" "just dev 注入 PPF_BUILD_STAMP"
-    need justfile "date '+%m-%d %H:%M'" "just dev 用 date '+%m-%d %H:%M' 生成时间戳"
+    # 1) 时间戳来源：只看 dev 配方正文，格式能分辨先后（MM-DD HH:MM）。
+    if has_dev_stamp justfile; then ok "just dev 配方用 date 注入 PPF_BUILD_STAMP"; else ko "just dev 配方缺少时间戳注入"; fi
     stamp="$(date '+%m-%d %H:%M')"
     case "$stamp" in
       [0-9][0-9]-[0-9][0-9]" "[0-9][0-9]:[0-9][0-9]) ok "date 产出 MM-DD HH:MM（${stamp}）" ;;
@@ -330,26 +414,127 @@ build-stamp-check:
     need apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt '${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})' "空 stamp 分支只显示版本号+构建号"
     need apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt '$buildStamp' "非空 stamp 追加到版本行"
 
-    # 3) iOS：构建期只有 PPF_BUILD_STAMP 非空才写 PPassBuildStamp；版本行空/非空两条分支都在。
-    need apps/ios/project.yml 'PPF_BUILD_STAMP' "iOS 构建读 PPF_BUILD_STAMP"
-    need apps/ios/project.yml 'PPassBuildStamp' "iOS 写 Info.plist 的 PPassBuildStamp"
-    need apps/ios/project.yml 'if [ -n "${PPF_BUILD_STAMP:-}" ]' "stamp 为空时不写 PPassBuildStamp"
+    # 3) iOS：只看「Stamp build time」脚本正文；注释、Delete 行都不算。
+    ios_body="$(ios_stamp_script apps/ios/project.yml)"
+    if [ -n "$ios_body" ]; then ok "提取到 Stamp build time 脚本正文"; else ko "找不到 Stamp build time 脚本正文"; fi
+    if ios_has_env apps/ios/project.yml; then ok "iOS 构建脚本读 PPF_BUILD_STAMP"; else ko "iOS 构建脚本没读 PPF_BUILD_STAMP"; fi
+    if ios_has_add apps/ios/project.yml; then ok "iOS 构建脚本真正 Add PPassBuildStamp（非注释）"; else ko "iOS 构建脚本没有非注释的 Add :PPassBuildStamp 行"; fi
+    if ios_has_trim apps/ios/project.yml; then ok "iOS 写入前 trim 换行/首尾空白（tr -d + 两段 sed）"; else ko "iOS 写入前 trim 不完整"; fi
+    if printf '%s\n' "$ios_body" | grep -Fq '[ -n "$stamp" ]'; then ok "stamp 为空时不写 PPassBuildStamp"; else ko "stamp 为空时的判断缺失"; fi
     need apps/ios/PPass/Diagnostics/AppVersion.swift 'info["PPassBuildStamp"]' "AppVersion 读 PPassBuildStamp"
     need apps/ios/PPass/Diagnostics/AppVersion.swift 'let stamp = buildStamp.trimmingCharacters(in: .whitespaces)' "空/空白 stamp 归一处理"
     need apps/ios/PPass/Diagnostics/AppVersion.swift 'stamp.isEmpty ? base :' "空 stamp 只显示 base、非空追加"
+    # 用构建阶段的真实脚本跑临时 plist：含空格（首尾也带空白）的值应被 trim 后写入；空值应删除键。
+    if command -v plutil >/dev/null 2>&1 && [ -x /usr/libexec/PlistBuddy ]; then
+      mkdir -p "$tmp/build"
+      cp apps/ios/PPass/Info.plist "$tmp/build/Info.plist"
+      TARGET_BUILD_DIR="$tmp/build" INFOPLIST_PATH=Info.plist PPF_BUILD_STAMP='  11-17 11:30  ' bash -c "$ios_body"
+      got="$(/usr/libexec/PlistBuddy -c "Print :PPassBuildStamp" "$tmp/build/Info.plist" 2>/dev/null || true)"
+      if [ "$got" = "11-17 11:30" ]; then ok "真实脚本写入含空格值并 trim 后读回一致"; else ko "真实脚本读回不一致（得到「${got}」）"; fi
+      cp apps/ios/PPass/Info.plist "$tmp/build/Info.plist"
+      TARGET_BUILD_DIR="$tmp/build" INFOPLIST_PATH=Info.plist env -u PPF_BUILD_STAMP bash -c "$ios_body"
+      if /usr/libexec/PlistBuddy -c "Print :PPassBuildStamp" "$tmp/build/Info.plist" >/dev/null 2>&1; then
+        ko "空 stamp 仍在 plist 里写入 PPassBuildStamp"
+      else
+        ok "真实脚本在空 stamp 时不写 PPassBuildStamp"
+      fi
+    else
+      echo "  ⏭ 非 macOS：跳过 PlistBuddy 真实写入测试"
+    fi
 
-    # 4) 设备测试：保留 App/数据的参数在；just android-test（JVM 单测）语义不变。
-    need justfile 'android.injected.androidTest.leaveApksInstalledAfterRun=true' "设备测试 recipe 带 leaveApksInstalledAfterRun=true"
-    need justfile 'connectedDebugAndroidTest' "设备测试跑 instrumented 用例"
+    # 4) 设备测试：只看 android-instrumented 正文；just android-test（JVM 单测）语义不变。
+    if has_keep_apks justfile; then ok "android-instrumented 跑 connected 并带 keep-apks 参数"; else ko "android-instrumented 缺少 connected 命令或 keep-apks 参数"; fi
     if sed -n '/^android-test:/,/^[a-z][a-z0-9-]*[ :]/p' justfile | grep -Fq -- 'connectedDebugAndroidTest'; then
       ko "just android-test 仍是 JVM 单测，不该跑 connectedDebugAndroidTest"
     else
       ok "just android-test 仍是 JVM 单测（未跑 connectedDebugAndroidTest）"
     fi
-    if sed -n '/^android-instrumented \*args:/,/^[a-z][a-z0-9-]*[ :]/p' justfile | grep -Fq -- 'leaveApksInstalledAfterRun=true'; then
-      ok "keep-apks 参数挂在 android-instrumented 上"
+
+    # 5) 反证：删掉时间戳注入 / connected 命令 / iOS 的 Add 行 / trim 任一段后，上面的断言必须判红。
+    grep -v 'export PPF_BUILD_STAMP=' justfile >"$tmp/justfile-no-stamp"
+    if has_dev_stamp "$tmp/justfile-no-stamp"; then
+      ko "反证：删掉时间戳注入后检查仍通过"
     else
-      ko "android-instrumented recipe 里没有 keep-apks 参数"
+      ok "反证：删掉时间戳注入 → 判红"
+    fi
+    sed 's/^\( *\)export PPF_BUILD_STAMP=/\1# export PPF_BUILD_STAMP=/' justfile >"$tmp/justfile-commented-stamp"
+    if has_dev_stamp "$tmp/justfile-commented-stamp"; then
+      ko "反证：把时间戳注入缩进注释掉后检查仍通过"
+    else
+      ok "反证：把时间戳注入缩进注释掉 → 判红"
+    fi
+    grep -v 'connectedDebugAndroidTest' justfile >"$tmp/justfile-no-connected"
+    if has_keep_apks "$tmp/justfile-no-connected"; then
+      ko "反证：删掉 connected 命令后检查仍通过"
+    else
+      ok "反证：删掉 connected 命令 → 判红"
+    fi
+    sed '/connectedDebugAndroidTest/ s/^\( *\)/\1# /' justfile >"$tmp/justfile-commented-connected"
+    if has_keep_apks "$tmp/justfile-commented-connected"; then
+      ko "反证：把 connected 命令缩进注释掉后检查仍通过"
+    else
+      ok "反证：把 connected 命令缩进注释掉 → 判红"
+    fi
+    # 注释掉 System.getenv 并改回返回空串：非注释断言必须判红，注释副本保留 buildConfigField 行作对照。
+    awk '
+      /System.getenv\("PPF_BUILD_STAMP"\)/ { print "// " $0; print "    \"\""; next }
+      { print }
+    ' apps/android/app/build.gradle.kts >"$tmp/build-commented-stamp.kts"
+    awk '
+      /System.getenv\("PPF_BUILD_STAMP"\)/ { print "/*"; print $0; print "*/"; print "    \"\""; next }
+      { print }
+    ' apps/android/app/build.gradle.kts >"$tmp/build-block-commented-stamp.kts"
+    if has_literal "$tmp/build-block-commented-stamp.kts" 'System.getenv("PPF_BUILD_STAMP")'; then
+      ko "反证：把 System.getenv(\"PPF_BUILD_STAMP\") 包进 /* */ 并返回空串后检查仍通过"
+    else
+      ok "反证：把 System.getenv(\"PPF_BUILD_STAMP\") 包进 /* */ 并返回空串 → 判红"
+    fi
+    if has_literal "$tmp/build-commented-stamp.kts" 'System.getenv("PPF_BUILD_STAMP")'; then
+      ko "反证：注释掉 System.getenv(\"PPF_BUILD_STAMP\") 并返回空串后检查仍通过"
+    else
+      ok "反证：注释掉 System.getenv(\"PPF_BUILD_STAMP\") 并返回空串 → 判红"
+    fi
+    if has_literal "$tmp/build-commented-stamp.kts" 'buildConfigField("String", "BUILD_STAMP"'; then
+      ok "对照：注释副本仍保留 buildConfigField 行，红的只是 getenv 断言"
+    else
+      ko "反证副本意外丢了 buildConfigField 行，红的不是 getenv 断言"
+    fi
+    remove_seg apps/ios/project.yml 'Add :PPassBuildStamp string' >"$tmp/project-no-add.yml"
+    if ios_has_add "$tmp/project-no-add.yml"; then
+      ko "反证：删掉 iOS 的 Add 行后检查仍通过"
+    else
+      ok "反证：删掉 iOS 的 Add 行 → 判红"
+    fi
+    sed '/PlistBuddy -c "Add :PPassBuildStamp string/ s/^\( *\)/\1# /' apps/ios/project.yml >"$tmp/project-commented-add.yml"
+    if ios_has_add "$tmp/project-commented-add.yml"; then
+      ko "反证：注释掉 iOS 的 Add 行后检查仍通过"
+    else
+      ok "反证：注释掉 iOS 的 Add 行 → 判红"
+    fi
+    remove_seg apps/ios/project.yml 'tr -d' >"$tmp/project-no-tr.yml"
+    if ios_has_trim "$tmp/project-no-tr.yml"; then
+      ko "反证：删掉 tr -d 后检查仍通过"
+    else
+      ok "反证：删掉 tr -d → 判红"
+    fi
+    remove_seg apps/ios/project.yml 's/^[[:space:]]*//' >"$tmp/project-no-lead.yml"
+    if ios_has_trim "$tmp/project-no-lead.yml"; then
+      ko "反证：删掉首部 trim 后检查仍通过"
+    else
+      ok "反证：删掉首部 trim → 判红"
+    fi
+    remove_seg apps/ios/project.yml 's/[[:space:]]*$//' >"$tmp/project-no-trail.yml"
+    if ios_has_trim "$tmp/project-no-trail.yml"; then
+      ko "反证：删掉尾部 trim 后检查仍通过"
+    else
+      ok "反证：删掉尾部 trim → 判红"
+    fi
+    # 注释掉真正带 trim 的那一行（trim 只剩在注释里）：注释行不算数，必须判红。
+    sed '/tr -d/ s/^\( *\)/\1# /' apps/ios/project.yml >"$tmp/project-commented-trim.yml"
+    if ios_has_trim "$tmp/project-commented-trim.yml"; then
+      ko "反证：注释掉真正带 trim 的行后检查仍通过"
+    else
+      ok "反证：注释掉真正带 trim 的行 → 判红"
     fi
 
     exit "$fail"
