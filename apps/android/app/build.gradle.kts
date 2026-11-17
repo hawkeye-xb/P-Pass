@@ -185,6 +185,7 @@ tasks.named("preBuild").configure {
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
+    androidTestImplementation(composeBom)
 
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.core:core-ktx:1.15.0")
@@ -268,6 +269,7 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     // #1119：断开后 unique work 的状态要查 WorkManager 自己的（在设备上跑，lane 只编译）。
     androidTestImplementation("androidx.work:work-testing:2.10.0")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     // Desktop JNA for JVM unit tests — the @aar above only carries Android natives. Tests that
     // touch the generated bindings load a host build of libtransport (live-daemon tests only;
@@ -275,6 +277,7 @@ dependencies {
     testImplementation("net.java.dev.jna:jna:5.15.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
 // #1121：见 defaultConfig 里的 UPDATE_PUBKEY_* 注释。
