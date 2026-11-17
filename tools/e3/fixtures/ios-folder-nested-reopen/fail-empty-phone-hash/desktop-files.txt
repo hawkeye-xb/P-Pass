@@ -1,0 +1,3 @@
+/desk/a.jpg
+/desk/b.jpg
+/desk/c.jpg

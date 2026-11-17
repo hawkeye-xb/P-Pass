@@ -14,7 +14,7 @@ export GIT_CONFIG_GLOBAL="${_GIT_TMP}/gitconfig"
 : >"$GIT_CONFIG_GLOBAL"
 trap 'rm -rf "$_GIT_TMP"' EXIT
 
-for f in "$E3"/run "$E3"/verify "$E3"/lock "$E3"/dev "$E3"/restore "$E3"/lib/*.sh "$E3"/scenarios/*/*.sh; do
+for f in "$E3"/run "$E3"/verify "$E3"/lock "$E3"/dev "$E3"/restore "$E3"/lib/*.sh "$E3"/scenarios/*/*.sh "$E3"/scenarios/*/*.bashlib; do
   bash -n "$f" || bad "语法：$f"
 done
 for f in "$E3"/scenarios/*/*.sh; do
@@ -49,16 +49,37 @@ done
 ) || bad "E3_ANDROID_ALBUM 只接受安全的单段目录名"
 
 # 判定回放：fixtures/<场景 id 的 / 换成 ->/{pass,fail}
-for d in "$E3"/fixtures/*/; do
-  id="$(basename "$d")"
-  id="${id/-//}"
-  "$E3/run" judge "$id" "$d/pass" >/dev/null || bad "${id}：pass fixture 没判过"
-  # fail、fail-<原因>…：每个反例只让一条判据出错，删掉或放宽那条判据回放就会红
-  for f in "$d"/fail "$d"/fail-*; do
-    [ -d "$f" ] || continue
-    "$E3/run" judge "$id" "$f" >/dev/null && bad "${id}：$(basename "$f") fixture 没判红"
+replay() { # replay <附加到失败说明里的后缀>
+  local d id f
+  for d in "$E3"/fixtures/*/; do
+    id="$(basename "$d")"
+    id="${id/-//}"
+    "$E3/run" judge "$id" "$d/pass" >/dev/null || bad "${id}：pass fixture 没判过$1"
+    # fail、fail-<原因>…：每个反例只让一条判据出错，删掉或放宽那条判据回放就会红
+    for f in "$d"/fail "$d"/fail-*; do
+      [ -d "$f" ] || continue
+      "$E3/run" judge "$id" "$f" >/dev/null && bad "${id}：$(basename "$f") fixture 没判红$1"
+    done
+    # incomplete-*：反证链条不完整的反证目录。judge 必须判 0（=反证没变红），判非 0 就是把
+    # 「证据缺失」冒充成「反证已变红」——run 对任何非 0 都保持 counter_ok=1，整轮会被误放行。
+    for f in "$d"/incomplete-*; do
+      [ -d "$f" ] || continue
+      "$E3/run" judge "$id" "$f" >/dev/null || bad "${id}：$(basename "$f") 反证链条不完整却判非 0（会冒充反证已变红）$1"
+    done
   done
-done
+}
+replay ""
+# 判据不许依赖 macOS 专有的 stat -f%z：CI 在 Linux 上离线回放同一份判据，那里 stat 不认这个写法，
+# 取不到文件大小就会让 pass 证据假红（本卡 bigvideo 的 bytes=0 就是这么红的）。用一个同样拒绝
+# -f%z 的 stat 挡在 PATH 前面再回放一遍，结论必须和本机一致。反证：判据里写回 stat -f%z 这段就红。
+SHIM="$(mktemp -d)" || exit 1
+printf '#!/bin/sh\necho "stat: unrecognized option: %%" >&2\nexit 1\n' >"$SHIM/stat"
+chmod +x "$SHIM/stat"
+OLD_PATH="$PATH"
+PATH="$SHIM:$PATH"
+replay "（非 macOS stat 下）"
+PATH="$OLD_PATH"
+rm -rf "$SHIM"
 
 # #1759：子壳被 set -u 中止时，EXIT trap 仍须清理并保留原始错误；旧写法会再报 ev unbound、跳过 teardown。
 (

@@ -1,0 +1,5 @@
+{"run": "e3-x-flip", "step": "done", "done": true, "ok": true,
+ "armed": {"size": 172158382, "mode": "flip"},
+ "corrupted": {"mode": "flip", "size_before": 172158382, "offset": 172158366, "old_byte": 171, "new_byte": 84},
+ "orders_after_abort": {"states": ["TRANSFERRING"]},
+ "waiting_reconfirm": {"latest": "CONFIRMED", "history": ["TRANSFERRING", "CONFIRMED"]}}
