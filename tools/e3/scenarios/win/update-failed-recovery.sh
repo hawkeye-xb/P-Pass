@@ -48,7 +48,9 @@ svc_binpath() { win_ps "(Get-CimInstance Win32_Service -Filter \"Name='P-Pass'\"
 # —— 安装（会话已提权：直接跑 /S，不弹 UAC；未提权时 setup 返回 77 记 SKIP）——
 
 win_is_high_integrity() {
-  MSYS2_ARG_CONV_EXCL='*' /c/Windows/System32/whoami.exe /groups 2>/dev/null | tr -d '\r' | grep -q 'High Mandatory Level'
+  # 匹配完整性级别的 SID（High Mandatory Level = S-1-16-12288）：显示名会随系统语言本地化，
+  # 非英文系统上 grep 'High Mandatory Level' 会落空、误把已提权会话判成没提权而 SKIP。
+  MSYS2_ARG_CONV_EXCL='*' /c/Windows/System32/whoami.exe /groups 2>/dev/null | tr -d '\r' | grep -q 'S-1-16-12288'
 }
 
 install_pkg() { # install_pkg <setup.exe> <outfile>
@@ -84,7 +86,7 @@ while True:
     time.sleep(60)
 PY
   for i in $(seq 1 50); do [ -s "$pidfile" ] && return 0; sleep 0.2; done
-  echo "锁文件失败（$tag）" >&2
+  echo "锁文件失败（${tag}）" >&2
   return 1
 }
 
@@ -104,19 +106,20 @@ win_unlock_daemon() { # win_unlock_daemon <tag>
   pidfile="$(uf_lock_pidfile "$tag")"
   pid="$(tr -d '[:space:]' <"$pidfile" 2>/dev/null)"
   [ -n "$pid" ] && win_ps "Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue" >/dev/null 2>&1 || true
-  rm -f "$pidfile"
-  for i in $(seq 1 20); do win_daemon_file_unlocked && return 0; sleep 0.3; done
-  echo "释放锁失败（$tag）" >&2
+  # 确认持锁进程真的退出（文件能被独占打开）后再删 pidfile；杀不掉就留着给 teardown 重试。
+  for i in $(seq 1 20); do win_daemon_file_unlocked && { rm -f "$pidfile"; return 0; }; sleep 0.3; done
+  echo "释放锁失败（${tag}）" >&2
   return 1
 }
 
 win_kill_lingering_locks() { # teardown 兜底：杀掉任何残留的独占进程
-  local pf pid
+  local pf pid i
   for pf in "$E3_STATE"/win/uf-lock-*.pid; do
     [ -f "$pf" ] || continue
     pid="$(tr -d '[:space:]' <"$pf" 2>/dev/null)"
     [ -n "$pid" ] && win_ps "Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue" >/dev/null 2>&1 || true
-    rm -f "$pf"
+    # 确认进程退出后再删 pidfile：杀不掉就留着，别丢了这个兜底的唯一凭据。
+    for i in $(seq 1 20); do win_daemon_file_unlocked && { rm -f "$pf"; break; }; sleep 0.3; done
   done
 }
 
@@ -207,7 +210,7 @@ act() {
   # ---- 0) 装 base（更旧版本），作为三个用例的共同起点 ----
   echo "== 装 base $UF_BASE_VER =="
   install_pkg "$base" "$d/base-install.txt" || true
-  wait_daemon_file_version "$UF_BASE_VER" 90 || echo "base 安装后没等到 $UF_BASE_VER（继续，judge 判）"
+  wait_daemon_file_version "$UF_BASE_VER" 90 || echo "base 安装后没等到 ${UF_BASE_VER}（继续，judge 判）"
   ensure_running || echo "base 装后服务没起来（继续，judge 判）"
   record_state "$d" base
   capture_daemon_log "$d" base
@@ -245,12 +248,13 @@ act() {
   record_update_failed "$cb" after-fail
   record_state "$cb" after-fail
   capture_daemon_log "$cb" after-fail
+  # 先释放锁再采样：锁还占着时即使想拉起 daemon 也起不来，采样要能抓到「解锁后仍不该被拉起」。
+  win_unlock_daemon stopped || echo "用例2 释放锁失败"
   : >"$cb/stopped-samples.txt"
   for i in 5 10 15; do
     sleep 5
     echo "t+${i}s pid=$(win_daemon_pid) svc=$(svc_state) wanted=$(wanted_state)" >>"$cb/stopped-samples.txt"
   done
-  win_unlock_daemon stopped || echo "用例2 释放锁失败"
   ensure_running || echo "用例2 收尾没把服务拉起来"
 
   # ---- 3) 对照组：不注入文件占用，正常覆盖安装 ----
@@ -258,7 +262,7 @@ act() {
   echo "== 用例3：无占用，正常覆盖安装候选 $UF_CAND_VER =="
   record_state "$cc" pre
   install_pkg "$cand" "$cc/install.txt" || true
-  wait_daemon_file_version "$UF_CAND_VER" 90 || echo "正常安装后没等到 $UF_CAND_VER（继续，judge 判）"
+  wait_daemon_file_version "$UF_CAND_VER" 90 || echo "正常安装后没等到 ${UF_CAND_VER}（继续，judge 判）"
   diag_inst "$cc" || true
   record_state "$cc" after-install
   capture_daemon_log "$cc" after-install
@@ -279,7 +283,7 @@ judge() {
   check "用例1 失败现场服务是停止的" grep -qx 'svc_state=Stopped' "$ca/after-fail-state.txt"
   check "用例1 释放后 daemon 恢复运行" grep -Eq '^daemon_pid=[0-9]+' "$ca/after-recover-state.txt"
   check "用例1 释放后 IPC 可应答（diag daemon_reachable）" diag_daemon_reachable "$ca"
-  check "用例1 版本与安装结果一致（失败=仍是 base $UF_BASE_VER）" grep -Fqx "daemon_file_version=$UF_BASE_VER" "$ca/after-recover-state.txt"
+  check "用例1 版本与安装结果一致（失败=仍是 base ${UF_BASE_VER}）" grep -Fqx "daemon_file_version=$UF_BASE_VER" "$ca/after-recover-state.txt"
   check "用例1 释放后服务在运行" grep -qx 'svc_state=Running' "$ca/after-recover-state.txt"
 
   # 用例2：用户停过 → service=0、不拉起、不新增自启
@@ -314,8 +318,10 @@ counter() {
   cand="$(win_release_file "$UF_CAND_TAG" '*_x64-setup.exe')"
   # 先降回 base，让这次安装有版本变化（成功可判）。
   install_pkg "$base" "$d/base-install.txt" || true
-  wait_daemon_file_version "$UF_BASE_VER" 90 || true
-  ensure_running || true
+  # 反证起点必须是真的 base：版本没到 base 或服务没起来，就不能证明「去掉文件占用」让安装成功，
+  # 立即停下，别把起点错误记成「反证已变红」。
+  wait_daemon_file_version "$UF_BASE_VER" 90 || { echo "反证起点没建立：base 版本没就绪"; return 1; }
+  ensure_running || { echo "反证起点没建立：base 服务没运行"; return 1; }
   record_state "$ca" pre
   install_pkg "$cand" "$ca/install.txt" || true
   wait_daemon_file_version "$UF_CAND_VER" 90 || true
