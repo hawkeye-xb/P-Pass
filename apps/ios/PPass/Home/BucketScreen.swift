@@ -75,8 +75,7 @@ struct BucketScreen: View {
                         addFolderCard
                     }
                     // 一个来源都没选：明确说清楚（空范围 = 不自动备份），不弹窗、不替用户补默认。
-                    if Self.showsEmptySelectionHint(hasLoaded: hasLoaded, checked: checked,
-                                                    offersChoices: Self.offersChoices(Self.notice(for: app.access))) {
+                    if Self.showsEmptySelectionHint(hasLoaded: hasLoaded, checked: checked) {
                         Text(L.s("bucket_no_selection")).font(PPFont.sans(15, relativeTo: .subheadline)).foregroundStyle(PPColor.ink40)
                             .multilineTextAlignment(.center).frame(maxWidth: .infinity)
                             .accessibilityIdentifier("bucketNoSelection")
@@ -101,14 +100,21 @@ struct BucketScreen: View {
     static func offersChoices(_ notice: AccessNotice) -> Bool { notice != .noAccess }
 
     /// 一个来源都没选：明确写「未选择任何来源」。空范围允许保存（= 不自动备份），不替用户补默认。
-    static func showsEmptySelectionHint(hasLoaded: Bool, checked: Set<String>, offersChoices: Bool) -> Bool {
-        hasLoaded && checked.isEmpty && offersChoices
+    /// 相册未完整授权（选择被隐藏）时同样要显示：此时页面上只有文件夹可选，不写清楚会像「已选好了」。
+    static func showsEmptySelectionHint(hasLoaded: Bool, checked: Set<String>) -> Bool {
+        hasLoaded && checked.isEmpty
     }
 
+    /// 首次加载：没有存过的范围一律空——显式传 cameraAlbum 也不预选相机相册（#1811）；
+    /// 相册选择隐藏（有限 / 拒绝授权）时只保留保存过的相册，不做任何默认预选。
     /// 首次加载也保留不可见的已保存相册，恢复权限后仍可选择；未勾选的新相册不自动加入。
-    static func initialSelectionWithUnavailable(saved: Set<String>?, availableAlbums: Set<String>, cameraAlbum: String?) -> Set<String> {
+    static func initialSelectionWithUnavailable(saved: Set<String>?, availableAlbums: Set<String>,
+                                                cameraAlbum: String?, offersChoices: Bool) -> Set<String> {
+        guard let saved else { return [] }
+        let savedAlbums = saved.filter { !$0.hasPrefix("folder:") }
+        guard offersChoices else { return savedAlbums }
         let visible = ScopePolicy.initialSelection(saved: saved, available: availableAlbums, cameraAlbum: cameraAlbum)
-        let invisibleSaved = (saved ?? []).filter { !$0.hasPrefix("folder:") && !availableAlbums.contains($0) }
+        let invisibleSaved = savedAlbums.filter { !availableAlbums.contains($0) }
         return visible.union(invisibleSaved)
     }
 
@@ -339,7 +345,8 @@ struct BucketScreen: View {
                                                   availableAlbums: Set(list.map(\.id)), availableFolders: folderIds)
             } else {
                 let selectedAlbums = Self.initialSelectionWithUnavailable(saved: saved, availableAlbums: Set(list.map(\.id)),
-                                                                          cameraAlbum: list.first(where: \.isCameraAlbum)?.id)
+                                                                          cameraAlbum: list.first(where: \.isCameraAlbum)?.id,
+                                                                          offersChoices: Self.offersChoices(Self.notice(for: app.access)))
                 let selectedFolders = ScopePolicy.initialFolderSelection(saved: saved, known: known, available: folderIds)
                 checked = selectedAlbums.union(selectedFolders)
             }

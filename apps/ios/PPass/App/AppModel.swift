@@ -222,8 +222,12 @@ final class AppModel: ObservableObject {
     }
 
     /// #1353：「自动备份已停止」状态卡带「去设置」——纯相册范围、照片权限不全。开关关着是正常状态，不给。
+    /// #1811 两态口径：有可用目录来源（folder-only / 混合）时备份没停，同样不给「去设置」。
     /// 开关本身不动；回到前台 `refresh` 重读真实权限，变成全部就不再是这张卡（对位 Android `blockedHeroOffersSettings`）。
-    nonisolated static func blockedHeroOffersSettings(autoRule: Bool, access: MediaAccess) -> Bool { autoRule && access != .full }
+    /// `hasUsableFolder` 默认 false = 旧的纯相册口径；生产路径读实例版（`sourceAvailability.showsGlobalPhotoBlock`）。
+    nonisolated static func blockedHeroOffersSettings(autoRule: Bool, access: MediaAccess, hasUsableFolder: Bool = false) -> Bool {
+        autoRule && access != .full && !hasUsableFolder
+    }
     var blockedHeroOffersSettings: Bool { sourceAvailability.showsGlobalPhotoBlock }
 
     /// 混合范围 + 照片权限未完整：文件夹还在传，状态卡给一个「调整范围」出口。

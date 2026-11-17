@@ -94,10 +94,27 @@ final class PhotoMediaSourceAccessTests: XCTestCase {
     }
 
     func testInitialLoadPreservesSavedAlbumsHiddenByPermission() {
-        let selected = BucketScreen.initialSelectionWithUnavailable(saved: ["saved-album"], availableAlbums: [], cameraAlbum: nil)
+        let selected = BucketScreen.initialSelectionWithUnavailable(saved: ["saved-album"], availableAlbums: [],
+                                                                    cameraAlbum: nil, offersChoices: true)
         XCTAssertEqual(selected, ["saved-album"], "无权限首次加载也不能先丢失已保存相册")
-        let visible = BucketScreen.initialSelectionWithUnavailable(saved: ["saved-album"], availableAlbums: ["saved-album"], cameraAlbum: nil)
+        let visible = BucketScreen.initialSelectionWithUnavailable(saved: ["saved-album"], availableAlbums: ["saved-album"],
+                                                                   cameraAlbum: nil, offersChoices: true)
         XCTAssertEqual(visible, ["saved-album"], "可见相册仍按同一选中语义处理")
+    }
+
+    /// #1811（夜间 owner 复核）：没有存过的范围一律空——相机相册即使显式可用 / 显式传入也不预选；
+    /// 相册选择隐藏（有限 / 拒绝授权）时同样不预选，但已保存的相册照样保留。
+    /// 反证：恢复 `ScopePolicy.initialSelection` 的「saved==nil 预选相机相册」或去掉 `offersChoices` 判断，前两条红。
+    func testInitialSelectionNeverPreselectsCameraAlbum() {
+        XCTAssertEqual(BucketScreen.initialSelectionWithUnavailable(saved: nil, availableAlbums: ["recents", "favorites"],
+                                                                    cameraAlbum: "recents", offersChoices: true),
+                       [], "没保存过就不预选相机相册")
+        XCTAssertEqual(BucketScreen.initialSelectionWithUnavailable(saved: nil, availableAlbums: ["recents"],
+                                                                    cameraAlbum: "recents", offersChoices: false),
+                       [], "相册选择隐藏时更不预选")
+        XCTAssertEqual(BucketScreen.initialSelectionWithUnavailable(saved: ["mine"], availableAlbums: ["mine", "recents"],
+                                                                    cameraAlbum: "recents", offersChoices: false),
+                       ["mine"], "隐藏时不丢已保存相册")
     }
 
     func testReloadKeepsUnsavedFolderSelectionAndInvisibleSavedAlbum() {
@@ -112,14 +129,12 @@ final class PhotoMediaSourceAccessTests: XCTestCase {
     }
 
     /// #1811：首次进范围页没有照片权限、授权回来也不自动补默认；一个来源都没选也能保存（空范围 = 不自动备份），
-    /// 页面上必须明确写「未选择任何来源」，不弹窗。
-    /// 反证：去掉提示（`showsEmptySelectionHint` 恒 false），第一条断言红。
+    /// 页面上必须明确写「未选择任何来源」，不弹窗。相册权限 none/partial（选择隐藏）时同样要写清楚。
+    /// 反证：去掉提示（`showsEmptySelectionHint` 恒 false）或恢复「相册未完整授权不显示」，第一条断言红。
     func testEmptySelectionIsExplicitAndGetsNoDefault() {
-        XCTAssertTrue(BucketScreen.showsEmptySelectionHint(hasLoaded: true, checked: [], offersChoices: true))
-        XCTAssertFalse(BucketScreen.showsEmptySelectionHint(hasLoaded: false, checked: [], offersChoices: true), "还没加载完不显示")
-        XCTAssertFalse(BucketScreen.showsEmptySelectionHint(hasLoaded: true, checked: ["recents"], offersChoices: true))
-        XCTAssertFalse(BucketScreen.showsEmptySelectionHint(hasLoaded: true, checked: [], offersChoices: false),
-                       "相册未完整授权已有权限提示，不重复")
+        XCTAssertTrue(BucketScreen.showsEmptySelectionHint(hasLoaded: true, checked: []))
+        XCTAssertFalse(BucketScreen.showsEmptySelectionHint(hasLoaded: false, checked: []), "还没加载完不显示")
+        XCTAssertFalse(BucketScreen.showsEmptySelectionHint(hasLoaded: true, checked: ["recents"]))
     }
 
     /// #1811：权限两态——有限授权与拒绝在范围页是同一套「相册未完整授权」，相册不进自动范围，文件夹照常。

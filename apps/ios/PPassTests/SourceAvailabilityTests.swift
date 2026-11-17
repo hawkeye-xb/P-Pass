@@ -69,4 +69,31 @@ final class SourceAvailabilityTests: XCTestCase {
         XCTAssertFalse(SourceAvailability.hasUsableFolder(selected: [], known: ["folder:a"], folderCount: 1), "新版明确取消勾选不是有效目录范围")
         XCTAssertFalse(SourceAvailability.hasUsableFolder(selected: ["a"], known: [], folderCount: 0))
     }
+
+    /// #1811（夜间 owner 复核）：「自动备份已停止」卡的「去设置」出口按两态——有可用目录来源时备份没停，不给出口。
+    /// 反证：去掉 `!hasUsableFolder`（旧三态口径），带目录来源的两条断言红。
+    func testBlockedHeroSettingsFollowsTwoStatePhotoAccess() {
+        XCTAssertTrue(AppModel.blockedHeroOffersSettings(autoRule: true, access: .partial, hasUsableFolder: false), "纯相册部分")
+        XCTAssertTrue(AppModel.blockedHeroOffersSettings(autoRule: true, access: .none, hasUsableFolder: false), "纯相册全拒")
+        XCTAssertFalse(AppModel.blockedHeroOffersSettings(autoRule: true, access: .partial, hasUsableFolder: true),
+                       "有目录来源：备份没停，不出")
+        XCTAssertFalse(AppModel.blockedHeroOffersSettings(autoRule: true, access: .none, hasUsableFolder: true),
+                       "有目录来源：不出")
+        XCTAssertFalse(AppModel.blockedHeroOffersSettings(autoRule: false, access: .none, hasUsableFolder: false), "开关关：不出")
+        XCTAssertFalse(AppModel.blockedHeroOffersSettings(autoRule: true, access: .full, hasUsableFolder: false), "全部：不出")
+    }
+
+    /// #1811（夜间 owner 复核）：通知侧「还有可用来源」只数登记有效的目录；待保存目录（pendingScope）不能
+    /// 把相册权限降级通知吞掉。
+    /// 反证：LiveBackend 通知侧改回 allRecords().count（把 pendingScope 也算上），第一条断言红。
+    func testNoticeUsableSourceIgnoresPendingScopeFolders() {
+        let pending = FolderRecord(id: "p", displayName: "draft", bookmark: Data(), status: FolderMediaSource.pendingScopeStatus)
+        let active = FolderRecord(id: "a", displayName: "real", bookmark: Data())
+        XCTAssertFalse(LiveBackend.noticeHasUsableSource(selected: [], knownAlbums: [], folderRecords: [pending],
+                                                         existingAlbums: nil, photoAccess: .none),
+                       "待保存目录不算可用来源，降级通知要照发")
+        XCTAssertTrue(LiveBackend.noticeHasUsableSource(selected: [], knownAlbums: [], folderRecords: [active],
+                                                        existingAlbums: nil, photoAccess: .none),
+                      "登记有效的目录才是「备份还在继续」")
+    }
 }

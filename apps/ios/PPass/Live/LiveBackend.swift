@@ -119,6 +119,14 @@ final class LiveBackend: @unchecked Sendable {
         records.filter { $0.status != FolderMediaSource.pendingScopeStatus }.count
     }
 
+    /// 通知侧「还有可用来源」：目录只数登记有效的（pendingScope 不算），否则待保存目录会吞掉相册权限降级通知。
+    static func noticeHasUsableSource(selected: Set<String>?, knownAlbums: Set<String>, folderRecords: [FolderRecord],
+                                      existingAlbums: Set<String>?, photoAccess: MediaAccess) -> Bool {
+        SourceAvailability.usableSource(selected: selected, known: knownAlbums,
+                                        folderCount: activeFolderCount(records: folderRecords),
+                                        existingAlbums: existingAlbums, photoAccess: photoAccess)
+    }
+
     /// 目录源与 PhotoKit 读取同一份范围存值。known 用来区分旧版目录（本来就在备份）与新版明确取消。
     static func folderScopeProvider(media: LiveMediaLibrary, logger: CoreLogger) -> FolderScopeProvider {
         {
@@ -608,8 +616,8 @@ final class LiveBackend: @unchecked Sendable {
         // 只有选中了相册才去查现有相册（#1811）；目录来源在这里就足够判断「备份还在继续」。
         let albumSelected = selected?.contains { !$0.hasPrefix("folder:") } ?? false
         let existingAlbums = albumSelected ? await media.existingAlbumIds() : nil
-        let hasUsableSource = SourceAvailability.usableSource(
-            selected: selected, known: media.knownAlbums(), folderCount: folders.allRecords().count,
+        let hasUsableSource = Self.noticeHasUsableSource(
+            selected: selected, knownAlbums: media.knownAlbums(), folderRecords: folders.allRecords(),
             existingAlbums: existingAlbums, photoAccess: LiveMediaLibrary.map(level))
         let facts = DefinitiveFacts(
             pairingId: pairingId,
