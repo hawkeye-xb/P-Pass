@@ -261,6 +261,90 @@ async fn unconfigured_state_answers_only_status_and_set_library() {
     );
 }
 
+/// #1826：未配置状态（首启向导）的 `config.set_library` 拿到的是**这条连接的 peer 目录
+/// 事实**——不是全 `None`：合成 peer 把沙盒「文稿」判成敏感 ⇒ 拒绝、什么都不写；同一条
+/// 链的普通目录照常保存（peer 不只是挡路的）；peer 的事实不齐则按 `ui.err_library_user_dirs`
+/// 拒绝。全程在临时沙盒里，不碰真实用户目录。
+/// 反证：`unconfigured_dispatch` 丢掉 `user`（传 `None`）⇒ 敏感那条变 ok，红。
+#[tokio::test]
+async fn unconfigured_set_library_judges_with_the_peer_facts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = MemStore::default();
+    let loc = Arc::new(LibraryLocation::with(
+        Some(Box::new(store.clone())),
+        tmp.path().join("platform"),
+    ));
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let peer = platform::PeerUser::new(
+        "S-1-5-21-1".into(),
+        platform::UserDirFacts::from_home(daemon::library_location::real_path(&home)),
+    );
+    let documents = home.join("Documents").join("ppass-1826");
+    async fn set(
+        loc: &Arc<LibraryLocation>,
+        library: &std::path::Path,
+        peer: Option<&platform::PeerUser>,
+    ) -> proto::Resp {
+        unconfigured_dispatch(
+            &req(
+                "config.set_library",
+                serde_json::json!({ "library": library.to_str().unwrap() }),
+            ),
+            IpcClient::Shell,
+            "1.0.0",
+            0,
+            loc,
+            peer,
+        )
+        .await
+    }
+
+    // peer 的事实判敏感 ⇒ 拒绝，一个目录都不建、正本不动。
+    let r = set(&loc, &documents, Some(&peer)).await;
+    assert!(!r.ok, "{r:?}");
+    assert!(
+        r.error
+            .as_ref()
+            .unwrap()
+            .params()
+            .get("ui_error")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .contains("ui.err_library_sensitive"),
+        "{r:?}"
+    );
+    assert!(!documents.exists(), "拒绝时不许建目录");
+    assert!(store.0.lock().unwrap().is_none(), "正本不许写");
+
+    // 同一条链、peer 的事实齐：普通目录照常保存（peer 不只是挡路的）。
+    let ordinary = home.join("PPASS_STORAGE");
+    let r = set(&loc, &ordinary, Some(&peer)).await;
+    assert!(r.ok, "{:?}", r.error);
+    assert_eq!(
+        store.0.lock().unwrap().as_deref(),
+        Some(ordinary.to_str().unwrap().as_bytes())
+    );
+
+    // peer 的事实不齐（家目录 / 各标准目录缺一）：按 keyed 错误拒绝，不退回适配器。
+    let blind = platform::PeerUser::new("S-1-5-21-1".into(), platform::UserDirFacts::default());
+    let other = home.join("PPASS_STORAGE-2");
+    let r = set(&loc, &other, Some(&blind)).await;
+    assert!(!r.ok, "{r:?}");
+    assert!(
+        r.error
+            .as_ref()
+            .unwrap()
+            .params()
+            .get("ui_error")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .contains("ui.err_library_user_dirs"),
+        "{r:?}"
+    );
+    assert!(store.0.lock().unwrap().as_deref() == Some(ordinary.to_str().unwrap().as_bytes()));
+}
+
 /// 令牌连接上调 `config.set_library`：测试沙盒（没有 library_location）拒绝；常驻 daemon
 /// （令牌模式 = Windows / Linux 的窗口程序）照写。
 #[tokio::test(flavor = "multi_thread")]

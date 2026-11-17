@@ -280,7 +280,7 @@ pub fn bind_resident(name: &str) -> io::Result<Listener> {
 }
 
 /// 服务端：按**这条连接**模拟客户端，取它的用户 SID 与这一次连接解析出的目录事实
-/// （#1826：主人的 profile 与「图片」目录，用该用户 token 调 `SHGetKnownFolderPath`）。
+/// （#1826：主人的家目录与各用户标准目录，用该用户 token 调 `SHGetKnownFolderPath`）。
 ///
 /// 调用线程在模拟期间换了身份，所以无论成败都先 `RevertToSelf` 再返回；恢复失败
 /// 就直接终止进程——带着别人的身份继续跑是绝不能接受的状态。目录事实用令牌句柄取
@@ -317,12 +317,12 @@ pub(crate) fn client_user(handle: RawHandle) -> io::Result<PeerUser> {
         return Err(open_err);
     }
     let sid = windows_programdata::token_user_sid_string(token).map_err(io::Error::other);
-    // 主人的 profile 与「图片」：必须在令牌句柄关闭前取。
-    let (home, pictures) = crate::windows::peer_known_folders(token);
+    // 主人的用户目录事实（家目录与各标准目录）：必须在令牌句柄关闭前取。
+    let dirs = crate::windows::peer_dir_facts(token);
     // SAFETY: token 是 OpenThreadToken 成功返回的真句柄。
     unsafe { CloseHandle(token) };
     let sid = sid?;
-    Ok(PeerUser::new(sid, home, pictures))
+    Ok(PeerUser::new(sid, dirs))
 }
 
 /// 客户端：管道对象的属主 SID（需要句柄上有 `READ_CONTROL`；`GENERIC_READ` 含它）。
@@ -845,6 +845,47 @@ mod tests {
     fn pipe_client_sync_connect_reports_missing_pipe_as_not_found() {
         let err = connect_identification_sync(&unique("missing")).expect_err("没有这个管道");
         assert_eq!(err.kind(), io::ErrorKind::NotFound, "{err:?}");
+    }
+
+    /// #1826：`client_user` 要一并解析这条连接（主人）的**全部**用户目录——家目录 +
+    /// 桌面 / 文稿 / 下载 / 图片 / 影片 / 音乐——用的就是这条已验证连接的 token。
+    /// 真实壳以 Identification 级连上来（`connect_identification_tokio`）之后：
+    /// `SHGetKnownFolderPath` 一个都不许失败（`selection_ready` 为真），值要与
+    /// 同一用户的直取结果、以及适配器的回答一致（身份核对链没被破坏就是连得上的
+    /// 证明：SID 与 `the_server_reads_the_clients_sid_by_impersonation` 同判据）。
+    ///
+    /// 若本用例在真实 Windows 上红了：按报错原文（哪个 Known Folder、哪个 OS 错误码）
+    /// 选标准机制（`DuplicateTokenEx`、模拟期间读取等），**不许**只往
+    /// `OpenThreadToken` 上加权限位猜。在把令牌判红修对之前，`config.set_library`
+    /// 会按 `ui.err_library_user_dirs` 拒绝全部保存。
+    #[tokio::test]
+    async fn client_user_resolves_the_interactive_users_known_folders_over_the_real_client_shape() {
+        let name = unique("kf");
+        let listener =
+            bind_with_sddl(&name, &PipePolicy::User { user: me() }.sddl()).expect("bind");
+        let (client, server) = tokio::join!(connect_identification_tokio(&name), listener.accept());
+        let (client, server) = (client.expect("connect"), server.expect("accept"));
+        {
+            use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+            (&client).write_all(b"x\n").await.expect("write");
+            let mut buf = [0u8; 2];
+            (&server).read_exact(&mut buf).await.expect("read");
+        }
+        #[allow(irrefutable_let_patterns)]
+        let interprocess::local_socket::tokio::Stream::NamedPipe(p) = &server;
+        let user = client_user(p.inner().as_raw_handle()).expect("impersonate");
+        assert_eq!(user.id(), me(), "身份核对还是同一条链");
+        let facts = user.dirs().clone();
+        assert!(
+            facts.selection_ready(),
+            "选位置要的关键事实不齐（SHGetKnownFolderPath 有失败）：{facts:?}"
+        );
+        let direct = crate::windows::current_user_dir_facts();
+        assert_eq!(facts, direct, "带 token 与直取（同一用户）必须一致");
+        use crate::PlatformAdapter as _;
+        let a = crate::adapter();
+        assert_eq!(facts.home, a.home_dir(), "home 与适配器不一致");
+        assert_eq!(facts.pictures, a.pictures_dir(), "pictures 与适配器不一致");
     }
 
     /// 主人记录：往返、同一主人重写幂等、换主人被拒、坏内容是 Err 不是「没有主人」。

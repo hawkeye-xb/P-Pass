@@ -335,7 +335,7 @@ const DATA_DIR_NAME: &str = "com.hawkeyexb.ppass.desktop";
 
 /// #1043：`SHGetKnownFolderPath`。读不到（极少见：漫游配置坏了、服务账户）
 /// 返回 `None`，调用方自己决定怎么兜底，这里不编路径。
-fn known_folder(id: &windows::core::GUID) -> Option<PathBuf> {
+pub(crate) fn known_folder(id: &windows::core::GUID) -> Option<PathBuf> {
     known_folder_impl(id, None)
 }
 
@@ -351,16 +351,50 @@ pub(crate) fn known_folder_for_token(
     known_folder_impl(id, Some(windows::Win32::Foundation::HANDLE(token)))
 }
 
-/// #1826：主人的家目录（`FOLDERID_PROFILE`）与「图片」（`FOLDERID_Pictures`）。
-/// 两者各自可能读不到（`None`），调用方据此拒绝而不是猜。
-pub(crate) fn peer_known_folders(
+/// #1826：连接方（主人）的全套用户目录事实：家目录（`FOLDERID_Profile`）、桌面、文稿、
+/// 下载、图片、影片（`FOLDERID_Videos`）、音乐，共用**这一条连接已验证的 token** 逐个取
+/// （同一个标准机制，不按路径形状猜；Windows 没有 `~/Library` 对应层，`library = None`）。
+/// 各自可能读不到（`None`），调用方据此拒绝而不是猜。
+pub(crate) fn peer_dir_facts(
     token: windows_sys::Win32::Foundation::HANDLE,
-) -> (Option<PathBuf>, Option<PathBuf>) {
-    use windows::Win32::UI::Shell::{FOLDERID_Pictures, FOLDERID_Profile};
-    (
-        known_folder_for_token(&FOLDERID_Profile, token),
-        known_folder_for_token(&FOLDERID_Pictures, token),
-    )
+) -> crate::local_peer::UserDirFacts {
+    use crate::local_peer::UserDirFacts;
+    let at = |id: &windows::core::GUID| known_folder_for_token(id, token);
+    use windows::Win32::UI::Shell::{
+        FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music,
+        FOLDERID_Pictures, FOLDERID_Profile, FOLDERID_Videos,
+    };
+    UserDirFacts {
+        home: at(&FOLDERID_Profile),
+        desktop: at(&FOLDERID_Desktop),
+        documents: at(&FOLDERID_Documents),
+        downloads: at(&FOLDERID_Downloads),
+        library: None, // Windows 没有这一层，按定义就是 None（不算事实缺失）。
+        pictures: at(&FOLDERID_Pictures),
+        videos: at(&FOLDERID_Videos),
+        music: at(&FOLDERID_Music),
+    }
+}
+
+/// #1826：**当前用户**的全套用户目录事实（没有连接方的场合：计划任务形态 daemon 跑在
+/// 用户自己名下，当前用户就是主人）。复用同一套 Known Folder 机制（不带 token）。
+pub(crate) fn current_user_dir_facts() -> crate::local_peer::UserDirFacts {
+    use crate::local_peer::UserDirFacts;
+    let at = |id: &windows::core::GUID| known_folder(id);
+    use windows::Win32::UI::Shell::{
+        FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music,
+        FOLDERID_Pictures, FOLDERID_Profile, FOLDERID_Videos,
+    };
+    UserDirFacts {
+        home: at(&FOLDERID_Profile),
+        desktop: at(&FOLDERID_Desktop),
+        documents: at(&FOLDERID_Documents),
+        downloads: at(&FOLDERID_Downloads),
+        library: None,
+        pictures: at(&FOLDERID_Pictures),
+        videos: at(&FOLDERID_Videos),
+        music: at(&FOLDERID_Music),
+    }
 }
 
 fn known_folder_impl(

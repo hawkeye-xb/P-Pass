@@ -77,27 +77,58 @@ pub const LEGACY_DEFAULT_LIBRARY_DIR_NAME: &str = "P-Pass 家庭照片库";
 pub struct LocationEnvironment {
     /// 家目录（主人）；读不到就是 `None`（不做家目录相关的判定）。
     pub home: Option<PathBuf>,
-    /// 「图片」目录（主人，可能被重定向到别的盘 / OneDrive）；读不到就是 `None`。
-    pub pictures: Option<PathBuf>,
+    /// 用户标准目录的**真实位置**（桌面 / 文稿 / 下载 / 图片 / 影片 / 音乐，macOS 的
+    /// `~/Library`）。系统允许把它们重定向到家目录外（`D:\PhotoArchive`、iCloud 接管、
+    /// symlink 出去），按名字在家目录下判不到——必须按真实位置逐个判。
+    pub user_dirs: Vec<PathBuf>,
     /// 应用自身的目录：数据目录（平台目录）、安装目录。
     pub app_dirs: Vec<PathBuf>,
-    /// 应用自己建的默认库位置（「图片」目录下的专用子目录，新旧两个默认名）。
+    /// 应用自己建的默认库位置（真实「图片」目录下的专用子目录，新旧两个默认名）。
     /// 这些是**唯一**允许落在用户「图片」目录里的位置——别的子目录照常拒绝。
     pub default_libraries: Vec<PathBuf>,
 }
 
 impl LocationEnvironment {
-    /// 本机实际环境。
+    /// 用户目录事实到判定环境的映射：每个目录取真实路径，应用目录取本进程的。
     ///
     /// `peer` 是这次连接已核验的连接方（Windows 管道服务端取得到）：**有它就只用它解析
-    /// 出来的主人目录事实**——服务形态下服务账户自己的 profile / 「图片」不是主人的，
-    /// 拿它代答会把主人的桌面当成普通目录放行。没有连接方（签名 socket、令牌模式）才问
-    /// 平台适配器。
-    ///
-    /// 应用目录一律取本进程的（安装目录与数据目录跟连接方是谁无关）。
+    /// 出来的主人目录事实**——服务形态下服务账户自己的目录不是主人的，拿它代答会把
+    /// 主人的桌面当成普通目录放行。没有连接方（签名 socket、令牌模式）才问平台。
     pub fn platform(platform_dir: &Path, peer: Option<&platform::PeerUser>) -> Self {
-        use platform::PlatformAdapter as _;
-        let adapter = platform::adapter();
+        let facts = match peer {
+            Some(peer) => peer.dirs().clone(),
+            None => platform::UserDirFacts::for_current_user(),
+        };
+        let mut env = Self::from_facts(facts);
+        env.add_app_dirs(platform_dir);
+        env
+    }
+
+    /// [`LocationEnvironment::platform`] 的用户目录部分（测试喂合成事实用）。
+    pub fn from_facts(facts: platform::UserDirFacts) -> Self {
+        let default_libraries = facts
+            .pictures
+            .as_ref()
+            .map(|p| real_path(p))
+            .map(|pictures| {
+                // 默认库位置 = 「图片」的真实路径 + 默认名，**词法拼接**、不 canonicalize
+                // 默认库本身：默认库要是链到了桌面，把它解析成桌面就会把桌面当成白名单，
+                // 正中下怀。
+                [DEFAULT_LIBRARY_DIR_NAME, LEGACY_DEFAULT_LIBRARY_DIR_NAME]
+                    .iter()
+                    .map(|name| pictures.join(name))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self {
+            home: facts.home.as_ref().map(|h| real_path(h)),
+            user_dirs: facts.standard_dirs().map(|d| real_path(d)).collect(),
+            app_dirs: vec![],
+            default_libraries,
+        }
+    }
+
+    fn add_app_dirs(&mut self, platform_dir: &Path) {
         let mut app_dirs = vec![real_path(platform_dir)];
         if let Ok(exe) = std::env::current_exe() {
             let exe = real_path(&exe);
@@ -115,33 +146,7 @@ impl LocationEnvironment {
                 }
             }
         }
-        let (home, pictures) = match peer {
-            Some(peer) => (
-                peer.home_dir().map(real_path),
-                peer.pictures_dir().map(real_path),
-            ),
-            None => (
-                adapter.home_dir().map(|h| real_path(&h)),
-                adapter.pictures_dir().map(|p| real_path(&p)),
-            ),
-        };
-        // 默认库位置 = 「图片」的真实路径 + 默认名，**词法拼接**、不 canonicalize 默认库
-        // 本身：默认库要是链到了桌面，把它解析成桌面就会把桌面当成白名单，正中下怀。
-        let default_libraries = pictures
-            .as_ref()
-            .map(|pictures| {
-                [DEFAULT_LIBRARY_DIR_NAME, LEGACY_DEFAULT_LIBRARY_DIR_NAME]
-                    .iter()
-                    .map(|name| pictures.join(name))
-                    .collect()
-            })
-            .unwrap_or_default();
-        Self {
-            home,
-            pictures,
-            app_dirs,
-            default_libraries,
-        }
+        self.app_dirs = app_dirs;
     }
 }
 
@@ -345,8 +350,8 @@ fn is_cloud_dir(name: &str) -> bool {
 
 /// #1826：真实路径落在哪一类敏感目录里；普通目录返回 `None`。
 ///
-/// 顺序：卷根 / 系统目录 → 两个精确的默认库例外 → 应用自身 → 同步盘 → 真实「图片」
-/// 目录本身及其它子目录 → 家目录与用户标准目录。
+/// 顺序：卷根 / 系统目录 → 两个精确的默认库例外 → 应用自身 → 同步盘 → 用户标准目录的
+/// 真实位置 → 家目录与用户标准目录的名字判据。
 pub fn sensitive_kind(real: &Path, env: &LocationEnvironment) -> Option<SensitiveKind> {
     if is_volume_root(real) {
         return Some(SensitiveKind::VolumeRoot);
@@ -358,7 +363,7 @@ pub fn sensitive_kind(real: &Path, env: &LocationEnvironment) -> Option<Sensitiv
     // 应用自己在「图片」下建的默认库位置：唯一的例外（产品定案：其他子目录、以及
     // 「图片」本身都拒绝）。排在同步盘与用户目录之前——Windows 的「图片」被系统重定向
     // 到 OneDrive 时，默认库位置仍然必须能用。默认库本身**不** canonicalize（见
-    // [`LocationEnvironment::platform`]），所以默认库链到桌面时这里不会把桌面放行。
+    // [`LocationEnvironment::from_facts`]），所以默认库链到桌面时这里不会把桌面放行。
     if env.default_libraries.iter().any(|d| d == real) {
         return None;
     }
@@ -371,12 +376,12 @@ pub fn sensitive_kind(real: &Path, env: &LocationEnvironment) -> Option<Sensitiv
     if n.iter().any(|c| is_cloud_dir(c)) {
         return Some(SensitiveKind::CloudDir);
     }
-    // 「图片」本身及其它子目录：「图片」可能被重定向到别的盘（`D:\PhotoArchive`），
-    // 那时它不在家目录之下，只有默认库位置那两个名字例外（上面已放行）。
-    if let Some(pictures) = env.pictures.as_deref() {
-        if under(real, pictures).is_some() {
-            return Some(SensitiveKind::UserDir);
-        }
+    // 用户标准目录的**真实位置**：桌面 / 文稿 / 下载 / 图片 / 影片 / 音乐（macOS 的
+    // `~/Library`）可能被系统重定向或 symlink 到家目录之外（`D:\PhotoArchive`、
+    // `/Volumes/Data/PersonalDocs`），只按家目录下的名字判不到它们——逐个真实位置判，
+    // 目录本身与子树一起拒（默认库例外在上面已放行）。
+    if env.user_dirs.iter().any(|d| under(real, d).is_some()) {
+        return Some(SensitiveKind::UserDir);
     }
     let home = env.home.as_deref()?;
     let rel = under(real, home)?;
@@ -399,6 +404,14 @@ pub fn check_library_path(
     platform_dir: &Path,
     peer: Option<&platform::PeerUser>,
 ) -> Result<(), String> {
+    // 有连接方却取不全它的用户目录事实（家目录与各标准目录）：服务形态下不能拿服务
+    // 账户的目录代答（那会把主人的桌面当普通目录放行），当场拒绝并说清楚。
+    if let Some(peer) = peer {
+        if !peer.dirs().selection_ready() {
+            tracing::warn!("#1826: 连接方是主人，但取不齐主人的家目录与用户标准目录，拒绝本次设置");
+            return Err(config::ui_err("ui.err_library_user_dirs", &[]));
+        }
+    }
     let Some(real) = resolve_components(target) else {
         tracing::info!("#1826: 选择的位置解析不出真实路径：{}", target.display());
         return Err(config::ui_err(
@@ -407,12 +420,6 @@ pub fn check_library_path(
         ));
     };
     let env = LocationEnvironment::platform(platform_dir, peer);
-    // 有连接方却解析不出它主人的家目录 / 「图片」：服务形态下不能拿服务账户的目录代答
-    // （那会把主人的桌面当普通目录放行），当场拒绝并说清楚。
-    if peer.is_some() && (env.home.is_none() || env.pictures.is_none()) {
-        tracing::warn!("#1826: 连接方是主人，但取不到主人的家目录或「图片」目录，拒绝本次设置");
-        return Err(config::ui_err("ui.err_library_user_dirs", &[]));
-    }
     match sensitive_kind(&real, &env) {
         Some(kind) => {
             tracing::info!(
@@ -758,20 +765,16 @@ mod tests {
 
     /// 假的家目录、应用目录与默认库位置（判据是纯函数，不需要真建这些目录）。
     fn fake_env() -> LocationEnvironment {
-        LocationEnvironment {
-            home: Some(PathBuf::from("/Users/tester")),
-            pictures: Some(PathBuf::from("/Users/tester/Pictures")),
-            app_dirs: vec![
-                PathBuf::from("/Users/tester/Library/Application Support/P-Pass"),
-                PathBuf::from("/Users/tester/Applications/P-Pass.app/Contents/MacOS"),
-                // 打包产物：bundle 根也是安装目录（开发版装在 ~/Applications）。
-                PathBuf::from("/Users/tester/Applications/P-Pass.app"),
-            ],
-            default_libraries: vec![
-                PathBuf::from("/Users/tester/Pictures/P-Pass Library"),
-                PathBuf::from("/Users/tester/Pictures/P-Pass 家庭照片库"),
-            ],
-        }
+        let mut env = LocationEnvironment::from_facts(platform::UserDirFacts::from_home(
+            PathBuf::from("/Users/tester"),
+        ));
+        env.app_dirs = vec![
+            PathBuf::from("/Users/tester/Library/Application Support/P-Pass"),
+            PathBuf::from("/Users/tester/Applications/P-Pass.app/Contents/MacOS"),
+            // 打包产物：bundle 根也是安装目录（开发版装在 ~/Applications）。
+            PathBuf::from("/Users/tester/Applications/P-Pass.app"),
+        ];
+        env
     }
 
     fn kind_of(p: &str) -> Option<SensitiveKind> {
@@ -932,12 +935,8 @@ mod tests {
         std::fs::create_dir_all(home.join("Documents").join("real_lib")).unwrap();
         std::fs::create_dir_all(home.join("Desktop")).unwrap();
         std::fs::create_dir_all(home.join("personal").join("PPASS_STORAGE")).unwrap();
-        let env = LocationEnvironment {
-            home: Some(real_path(&home)),
-            pictures: None,
-            app_dirs: vec![],
-            default_libraries: vec![],
-        };
+        let env =
+            LocationEnvironment::from_facts(platform::UserDirFacts::from_home(real_path(&home)));
 
         for (i, kind) in platform::test_support::dir_link_kinds().iter().enumerate() {
             // 普通目录的别名 → 放行。
@@ -980,31 +979,39 @@ mod tests {
     /// `..` 按真实路径回退，不是字面拼接：`~/Desktop/..` 是家目录本身（挡），
     /// `~/Desktop/../Desktop/x` 仍是桌面里的目录（挡）；`..` 退到根之上解析不出来，
     /// 调用方必须拒绝而不是按字面放行。
+    ///
+    /// 文件系统部分用隔离临时目录、期望值用平台对同一输入的真实表示（Windows 的
+    /// `canonicalize` 返回 `\\?\` 扩展路径，不期待 POSIX 字面量）；解析失败那组
+    /// （`/..`、`..`）是纯路径形状，任意平台结论一致。
     /// 反证：把 [`resolve_components`] 的 `ParentDir` 改成「原样 push」⇒ 前三条红。
     #[test]
     fn dot_dot_is_resolved_not_taken_literally() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = real_path(&tmp.path().join("home"));
+        std::fs::create_dir_all(&home).unwrap();
+        let env = LocationEnvironment::from_facts(platform::UserDirFacts::from_home(home.clone()));
+        // `Desktop` 还不存在：`..` 回退后停在已存在的家目录上。
+        let dotted = home.join("Desktop").join("..");
         assert_eq!(
-            resolve_components(Path::new("/Users/tester/Desktop/..")),
-            Some(PathBuf::from("/Users/tester"))
+            resolve_components(&dotted),
+            Some(home.clone()),
+            "…/Desktop/.. 就是家目录本身（按平台对家目录的真实表示）"
         );
         assert_eq!(
-            sensitive_kind(
-                &resolve_components(Path::new("/Users/tester/Desktop/..")).unwrap(),
-                &fake_env()
-            ),
+            sensitive_kind(&resolve_components(&dotted).unwrap(), &env),
             Some(SensitiveKind::HomeDir)
         );
         assert_eq!(
             sensitive_kind(
-                &resolve_components(Path::new("/Users/tester/Desktop/../Desktop/x")).unwrap(),
-                &fake_env()
+                &resolve_components(&home.join("Desktop").join("../Desktop/x")).unwrap(),
+                &env
             ),
             Some(SensitiveKind::UserDir)
         );
         assert_eq!(
             sensitive_kind(
-                &resolve_components(Path::new("/Users/tester/personal/../Downloads/x")).unwrap(),
-                &fake_env()
+                &resolve_components(&home.join("personal").join("../Downloads/x")).unwrap(),
+                &env
             ),
             Some(SensitiveKind::UserDir)
         );
@@ -1017,25 +1024,34 @@ mod tests {
         );
 
         // 入口处：解析不出来的位置直接报错，一个目录都不建。
-        let tmp = tempfile::tempdir().unwrap();
         let platform_dir = tmp.path().join("platform");
         let err = check_library_path(Path::new("/.."), &platform_dir, None).unwrap_err();
         assert!(err.contains("ui.err_library_target_missing"), "{err}");
     }
 
     /// 校验入口 run 在**创建库目录、写 config 之前**：命中敏感目录时磁盘上什么都不留，
-    /// 正本不动。反证：把 `init_config` / `set_library` 开头那行 `check_library_location`
-    /// 删掉 ⇒ 这里两条都红（错误变成别的、目录被建出来）。
+    /// 正本不动。全程在临时沙盒里、用合成 PeerUser 造出「主人的用户标准目录」，
+    /// 不碰真实用户目录。反证：把 `init_config` / `set_library` 开头那行
+    /// `check_library_location` 删掉 ⇒ 这里两条都红（错误变成别的、目录被建出来）。
     #[test]
     fn sensitive_targets_are_refused_before_anything_is_written() {
-        use platform::PlatformAdapter as _;
-        let home = platform::adapter().home_dir().expect("测试机有家目录");
-        let target = home.join("Documents").join("ppass-1826-should-not-exist");
         let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let peer = platform::PeerUser::new(
+            "S-1-5-21-1".into(),
+            platform::UserDirFacts::from_home(real_path(&home)),
+        );
+        let target = home.join("Documents").join("ppass-1826-should-not-exist");
         let platform_dir = tmp.path().join("platform");
 
         // 首启：不建库目录、不写 config.toml。
-        let err = config::init_config(&platform_dir, target.to_str().unwrap()).unwrap_err();
+        let err = config::init_config_with(
+            &platform_dir,
+            target.to_str().unwrap(),
+            config::LocationCheck::Selection { peer: Some(&peer) },
+        )
+        .unwrap_err();
         assert!(err.contains("ui.err_library_sensitive"), "{err}");
         assert!(!target.exists(), "命中敏感目录时不许建库目录");
         assert!(
@@ -1050,7 +1066,7 @@ mod tests {
         loc.set(good.to_str().unwrap(), None).unwrap();
         let before = mem.0.lock().unwrap().clone();
         let err = loc
-            .set(home.join("Downloads").to_str().unwrap(), None)
+            .set(home.join("Downloads").to_str().unwrap(), Some(&peer))
             .unwrap_err();
         assert!(err.contains("ui.err_library_sensitive"), "{err}");
         assert_eq!(mem.0.lock().unwrap().clone(), before, "正本不许改");
@@ -1091,15 +1107,11 @@ mod tests {
     /// 反证：`sensitive_kind` 不看真实 `pictures`（只靠家目录下的 `pictures` 名字）⇒ 第一条红。
     #[test]
     fn a_redirected_pictures_folder_is_still_sensitive_except_the_default_library() {
-        let env = LocationEnvironment {
+        let env = LocationEnvironment::from_facts(platform::UserDirFacts {
             home: Some(PathBuf::from("/Users/tester")),
             pictures: Some(PathBuf::from("/Volumes/Data/PhotoArchive")),
-            app_dirs: vec![],
-            default_libraries: vec![
-                PathBuf::from("/Volumes/Data/PhotoArchive/P-Pass Library"),
-                PathBuf::from("/Volumes/Data/PhotoArchive/P-Pass 家庭照片库"),
-            ],
-        };
+            ..Default::default()
+        });
         let k = |p: &str| sensitive_kind(Path::new(p), &env);
         assert_eq!(
             k("/Volumes/Data/PhotoArchive"),
@@ -1131,6 +1143,63 @@ mod tests {
         assert_eq!(kind_of("/private/var/folders/xy/ppass"), None);
     }
 
+    /// 用户标准目录不止「图片」会被重定向：文稿 / 桌面 / 下载等被系统或 symlink 挪到家
+    /// 目录之外后，按家目录下的名字判不到，必须按**真实位置**逐个拒——家目录之外的同
+    /// 盘其它目录不受牵连。
+    /// 反证：`sensitive_kind` 删掉 `env.user_dirs` 那条 ⇒ 前四条红（第四条也红：入口把
+    /// 解析后的真实位置放行）。
+    #[test]
+    fn redirected_user_dirs_are_rejected_at_their_real_locations() {
+        let env = LocationEnvironment::from_facts(platform::UserDirFacts {
+            home: Some(PathBuf::from("/Users/tester")),
+            desktop: Some(PathBuf::from("/Volumes/Data/Desk")),
+            documents: Some(PathBuf::from("/Volumes/Data/PersonalDocs")),
+            downloads: Some(PathBuf::from("/Volumes/Data/Downloads")),
+            library: None,
+            pictures: Some(PathBuf::from("/Users/tester/Pictures")),
+            videos: Some(PathBuf::from("/mnt/WinShape/Videos")),
+            music: None,
+        });
+        let k = |p: &str| sensitive_kind(Path::new(p), &env);
+        for dir in [
+            "/Volumes/Data/PersonalDocs",
+            "/Volumes/Data/PersonalDocs/photos",
+            "/Volumes/Data/Desk",
+            "/Volumes/Data/Downloads/lib",
+            "/Volumes/Data/Downloads",
+            "/mnt/WinShape/Videos",
+            "/mnt/WinShape/Videos/lib",
+        ] {
+            assert_eq!(k(dir), Some(SensitiveKind::UserDir), "{dir} 该按真实位置拒");
+        }
+        // 同盘上的其它普通目录不受牵连。
+        assert_eq!(k("/Volumes/Data/PPASS_STORAGE"), None);
+        assert_eq!(k("/Volumes/Data/OtherDocs"), None);
+
+        // 入口层面：链到家目录外的「文稿」的入口，解析后的真实路径同样被拒。
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let outside = tmp.path().join("PersonalDocs");
+        let real_docs = outside.join("photos");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&real_docs).unwrap();
+        for kind in platform::test_support::dir_link_kinds() {
+            let entry = home.join("docs-entry");
+            let _ = std::fs::remove_file(&entry);
+            if let Err(e) = kind.make(&outside, &entry) {
+                assert!(kind.may_need_privilege, "{kind:?} 建不出来：{e}");
+                continue;
+            }
+            let mut facts = platform::UserDirFacts::from_home(real_path(&home));
+            facts.documents = Some(real_path(&outside));
+            let peer = platform::PeerUser::new("S-1-5-21-1".into(), facts);
+            let err =
+                check_library_path(&entry, &tmp.path().join("platform"), Some(&peer)).unwrap_err();
+            assert!(err.contains("ui.err_library_sensitive"), "{kind:?}: {err}");
+            let _ = std::fs::remove_file(&entry);
+        }
+    }
+
     /// 默认库位置是「真实图片目录 + 默认名」的**词法**位置（走 `platform(peer)` 那条构造）：
     /// 把默认库做成指向桌面的链接，链接本身不能被放行。
     /// 反证：构造默认库例外时对默认库本身 canonicalize ⇒ 本用例红（桌面进了白名单）。
@@ -1150,11 +1219,9 @@ mod tests {
                 continue;
             }
             // 链接就位之后再取环境事实：这才是真实流程（先有默认库、再来选位置）。
-            let peer = platform::PeerUser::new(
-                "S-1-5-21-1".into(),
-                Some(real_path(&home)),
-                Some(real_path(&pictures)),
-            );
+            let mut facts = platform::UserDirFacts::from_home(real_path(&home));
+            facts.pictures = Some(real_path(&pictures));
+            let peer = platform::PeerUser::new("S-1-5-21-1".into(), facts);
             let env = LocationEnvironment::platform(&tmp.path().join("platform"), Some(&peer));
             assert_eq!(
                 sensitive_kind(&real_path(&link), &env),
@@ -1167,59 +1234,106 @@ mod tests {
     }
 
     /// 连接方（主人）的目录事实决定判定：`LocationEnvironment::platform(dir, Some(peer))`
-    /// 用 peer 的家目录与「图片」，默认库位置按 peer 的真实「图片」词法拼接；没有 peer 才问
-    /// 平台适配器。
-    /// 反证：`platform()` 忽略 peer、一律用适配器 ⇒ 前四条红。
+    /// 用 peer 的全套用户目录事实（家目录 + 各标准目录的真实位置），默认库位置按 peer 的
+    /// 真实「图片」词法拼接；没有 peer 才问平台。期望值用 `real_path` 对同一输入的表示
+    /// （不硬编码 POSIX 字面量——Windows 的 canonicalize 返回 `\\?\` 扩展路径）。
+    /// 反证：`platform()` 忽略 peer、一律用适配器 ⇒ 前两组断言红。
     #[test]
     fn peer_facts_drive_the_environment() {
-        use platform::PlatformAdapter as _;
         let tmp = tempfile::tempdir().unwrap();
-        let peer = platform::PeerUser::new(
-            "S-1-5-21-1".into(),
-            Some(PathBuf::from("/Users/owner")),
-            Some(PathBuf::from("/Volumes/Data/PhotoArchive")),
-        );
+        let facts = platform::UserDirFacts {
+            home: Some(tmp.path().join("owner-home").join("h")),
+            documents: Some(tmp.path().join("Data").join("PersonalDocs")),
+            desktop: Some(tmp.path().join("Data").join("Desk")),
+            downloads: Some(tmp.path().join("Data").join("Downloads")),
+            pictures: Some(tmp.path().join("Data").join("PhotoArchive")),
+            videos: Some(tmp.path().join("Data").join("Videos")),
+            music: Some(tmp.path().join("Data").join("Music")),
+            library: None,
+        };
+        let peer = platform::PeerUser::new("S-1-5-21-1".into(), facts.clone());
         let env = LocationEnvironment::platform(&tmp.path().join("platform"), Some(&peer));
-        assert_eq!(env.home, Some(PathBuf::from("/Users/owner")));
-        assert_eq!(
-            env.pictures,
-            Some(PathBuf::from("/Volumes/Data/PhotoArchive"))
-        );
+        assert_eq!(env.home, facts.home.as_ref().map(|p| real_path(p)));
+        let mut expected_user_dirs: Vec<PathBuf> = [
+            facts.desktop.as_deref(),
+            facts.documents.as_deref(),
+            facts.downloads.as_deref(),
+            facts.library.as_deref(),
+            facts.pictures.as_deref(),
+            facts.videos.as_deref(),
+            facts.music.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(real_path)
+        .collect();
+        expected_user_dirs.sort();
+        let mut actual = env.user_dirs.clone();
+        actual.sort();
+        assert_eq!(actual, expected_user_dirs, "peer 的全套标准目录各就各位");
+        let pictures = real_path(facts.pictures.as_ref().unwrap());
         assert_eq!(
             env.default_libraries,
             vec![
-                PathBuf::from("/Volumes/Data/PhotoArchive/P-Pass Library"),
-                PathBuf::from("/Volumes/Data/PhotoArchive/P-Pass 家庭照片库"),
+                pictures.join(DEFAULT_LIBRARY_DIR_NAME),
+                pictures.join(LEGACY_DEFAULT_LIBRARY_DIR_NAME),
             ],
             "默认库位置按 peer 的真实「图片」词法拼接"
         );
 
-        // 没有 peer（签名 socket / 令牌模式）：问平台适配器。
+        // 没有 peer（签名 socket / 令牌模式）：问平台当前用户的事实。
         let local = LocationEnvironment::platform(&tmp.path().join("platform"), None);
-        assert_eq!(
-            local.home,
-            platform::adapter().home_dir().map(|h| real_path(&h))
-        );
-        assert_eq!(
-            local.pictures,
-            platform::adapter().pictures_dir().map(|p| real_path(&p))
-        );
+        let current = platform::UserDirFacts::for_current_user();
+        let mut expected: Vec<PathBuf> = current.standard_dirs().map(|d| real_path(d)).collect();
+        expected.sort();
+        let mut actual = local.user_dirs.clone();
+        actual.sort();
+        assert_eq!(actual, expected, "无连接方时用平台当前用户的事实");
+        assert_eq!(local.home, current.home.as_ref().map(|h| real_path(h)));
     }
 
-    /// 有 peer 但取不到主人的家目录 / 「图片」：拒绝本次设置（不退回服务账户），
-    /// 返回专门的 keyed 错误。反证：把这条早退删掉 ⇒ 这里变成 Ok / 别的错误，红。
+    /// 有 peer 但取不全主人的用户目录事实（家目录 + 各标准目录）：拒绝本次设置
+    /// （不退回服务账户），返回专门的 keyed 错误。反证：把这条早退删掉 ⇒ 变成 Ok /
+    /// 别的错误，红。
     #[test]
     fn missing_peer_facts_refuse_the_selection() {
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("PPASS_STORAGE");
-        let no_home = platform::PeerUser::new("S-1-5-21-1".into(), None, Some(PathBuf::from("/p")));
-        let no_pictures =
-            platform::PeerUser::new("S-1-5-21-1".into(), Some(PathBuf::from("/h")), None);
-        for peer in [no_home, no_pictures] {
+        let complete = platform::UserDirFacts::from_home(PathBuf::from("/h"));
+        // 逐个挖掉一个关键事实：每一个都足以拒绝本次选择。
+        let mut cases = vec![platform::UserDirFacts::default()];
+        for field in [
+            "home",
+            "desktop",
+            "documents",
+            "downloads",
+            "pictures",
+            "videos",
+            "music",
+        ] {
+            let mut facts = complete.clone();
+            match field {
+                "home" => facts.home = None,
+                "desktop" => facts.desktop = None,
+                "documents" => facts.documents = None,
+                "downloads" => facts.downloads = None,
+                "pictures" => facts.pictures = None,
+                "videos" => facts.videos = None,
+                "music" => facts.music = None,
+                _ => unreachable!(),
+            }
+            cases.push(facts);
+        }
+        for facts in cases {
+            let peer = platform::PeerUser::new("S-1-5-21-1".into(), facts);
             let err =
                 check_library_path(&target, &tmp.path().join("platform"), Some(&peer)).unwrap_err();
             assert!(err.contains("ui.err_library_user_dirs"), "{err}");
         }
+        // 事实齐全的合成 peer 照常走到敏感目录判定（本用例负例：普通沙盒目录放行）。
+        let ok = platform::PeerUser::new("S-1-5-21-1".into(), complete);
+        check_library_path(&target, &tmp.path().join("platform"), Some(&ok))
+            .unwrap_or_else(|e| panic!("事实齐全时普通目录不该被拒：{e}"));
     }
 
     /// 默认库自己是指向桌面的链接：拒绝（默认库的例外是**词法位置**，不 canonicalize
@@ -1234,12 +1348,10 @@ mod tests {
         std::fs::create_dir_all(home.join("personal").join("PPASS_STORAGE")).unwrap();
         let home = real_path(&home);
         let pictures = home.join("Pictures");
-        let env = LocationEnvironment {
-            home: Some(home.clone()),
-            pictures: Some(pictures.clone()),
-            app_dirs: vec![],
-            default_libraries: vec![pictures.join(DEFAULT_LIBRARY_DIR_NAME)],
-        };
+        let mut env =
+            LocationEnvironment::from_facts(platform::UserDirFacts::from_home(home.clone()));
+        env.app_dirs = vec![];
+        env.default_libraries = vec![pictures.join(DEFAULT_LIBRARY_DIR_NAME)];
 
         for (i, kind) in platform::test_support::dir_link_kinds().iter().enumerate() {
             let into_desktop = pictures.join(format!("P-Pass Library {i}"));
@@ -1279,25 +1391,29 @@ mod tests {
 
     /// #1826：搬迁收尾的 commit 入口只提交已预检过的计划，**不**再当作一次新的位置选择
     /// （重启后没有连接方，拿服务账户的目录事实重判会误拒、把源和目标拆开）。
+    /// 全程在临时沙盒里、用合成 PeerUser 造「文稿」位置，不再往真实用户目录建/删任何东西。
     /// 反证：把 `commit_relocated` 改成走 `set` ⇒ 这里第二段红。
     #[test]
     fn committing_a_relocated_plan_does_not_recheck_the_selection() {
-        use platform::PlatformAdapter as _;
-        let home = platform::adapter().home_dir().expect("测试机有家目录");
         let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let peer = platform::PeerUser::new(
+            "S-1-5-21-1".into(),
+            platform::UserDirFacts::from_home(real_path(&home)),
+        );
         let loc = LibraryLocation::with(None, tmp.path().join("platform"));
         // 「文稿」里的位置：新选择要拒。
-        let target = home
-            .join("Documents")
-            .join(format!("ppass-1826-commit-{}", std::process::id()));
-        let err = loc.set(target.to_str().unwrap(), None).unwrap_err();
+        let target = home.join("Documents").join("ppass-1826-commit");
+        let err = loc.set(target.to_str().unwrap(), Some(&peer)).unwrap_err();
         assert!(err.contains("ui.err_library_sensitive"), "{err}");
+        assert!(!target.exists(), "拒绝时不许建目录");
         // 同一个位置作为已预检计划的提交：不做选择校验，照常写下去。
         let cfg = loc
             .commit_relocated(target.to_str().unwrap())
             .unwrap_or_else(|e| panic!("提交搬迁计划不该被敏感目录拦下：{e}"));
         assert!(target.join(LIBRARY_MARKER).is_dir());
         assert!(cfg.exists());
-        let _ = std::fs::remove_dir_all(&target);
+        // 清理交给 tempdir：不再手动 remove_dir_all。
     }
 }

@@ -3002,4 +3002,120 @@ mod tests {
         let unchanged = db.get_device(&node).await.unwrap().unwrap();
         assert_eq!(unchanged.profile.departed_at, Some(4242));
     }
+
+    /// #1826：常驻会话的 `config.set_library` 与 `library.relocate` 拿到的是**这条连接的
+    /// peer 目录事实**（`serve_verified` → `session` → `dispatch` 传下来的那一份）——不是
+    /// 全 `None`：peer 把沙盒里的「文稿」判成敏感 ⇒ 拒绝、什么都不建；同一位置没有
+    /// peer 就照常写——判定跟着 peer 走。relocate 用 `dry_run`（预检分支），非预检分支
+    /// 会退出进程，不在单测里跑。
+    /// 反证：`dispatch` 丢掉 `user`（传 `None`）⇒ 敏感两条变 ok、目录被建出来，红。
+    #[tokio::test]
+    async fn resident_dispatch_passes_the_peer_to_set_library_and_relocate() {
+        use crate::library_location::{LibraryLocation, LIBRARY_MARKER};
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open_in_memory().await.unwrap();
+        let platform_dir = dir.path().join("platform");
+        let mut server = test_server(&db, dir.path());
+        server.set_library_location(Arc::new(LibraryLocation::with(None, platform_dir.clone())));
+        let server = Arc::new(server);
+
+        // 合成 peer：家目录 = 沙盒 home，全套标准目录齐。
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let facts = platform::UserDirFacts::from_home(crate::library_location::real_path(&home));
+        let peer = platform::PeerUser::new("S-1-5-21-1".into(), facts);
+        let documents = home.join("Documents").join("ppass-1826");
+
+        // config.set_library：peer 的事实判敏感 ⇒ 拒绝，一个目录都不建、config 不写。
+        let resp = server
+            .dispatch(
+                Req {
+                    id: "set-sensitive".into(),
+                    method: "config.set_library".into(),
+                    params: serde_json::json!({ "library": documents.to_str().unwrap() }),
+                    ..Default::default()
+                },
+                Some(&peer),
+            )
+            .await;
+        assert!(!resp.ok, "peer 的文稿位置要被拒：{resp:?}");
+        assert!(
+            resp.error
+                .as_ref()
+                .unwrap()
+                .params()
+                .get("ui_error")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .contains("ui.err_library_sensitive"),
+            "{resp:?}"
+        );
+        assert!(!documents.exists(), "拒绝时不许建库目录");
+        assert!(!platform_dir.join("config.toml").exists(), "不许写 config");
+
+        // library.relocate 预检：同一条 peer 链 ⇒ 同样拒绝，一个目录都不建。
+        let resp = server
+            .dispatch(
+                Req {
+                    id: "relocate-sensitive".into(),
+                    method: "library.relocate".into(),
+                    params: serde_json::json!({
+                        "target": documents.to_str().unwrap(),
+                        "dry_run": true,
+                    }),
+                    ..Default::default()
+                },
+                Some(&peer),
+            )
+            .await;
+        assert!(!resp.ok, "relocate 预检同样要拒：{resp:?}");
+        assert!(
+            resp.error
+                .as_ref()
+                .unwrap()
+                .params()
+                .get("ui_error")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .contains("ui.err_library_sensitive"),
+            "{resp:?}"
+        );
+        assert!(!documents.exists(), "预检不许建目录");
+
+        // 同一条链、peer 的事实齐：普通目录照常保存（peer 不只是挡路的）。
+        let ordinary = home.join("PPASS_STORAGE");
+        let resp = server
+            .dispatch(
+                Req {
+                    id: "set-ordinary".into(),
+                    method: "config.set_library".into(),
+                    params: serde_json::json!({ "library": ordinary.to_str().unwrap() }),
+                    ..Default::default()
+                },
+                Some(&peer),
+            )
+            .await;
+        assert!(resp.ok, "普通目录要能保存：{resp:?}");
+        assert!(ordinary.join(LIBRARY_MARKER).is_dir());
+
+        // 反证对照：同一位置、没有 peer ⇒ 沙盒里的「文稿」不是任何人的敏感目录，
+        // 照常写——上面的拒绝是 peer 的事实在起作用，不是机器的事实在起作用。
+        // （改库档要求目标已存在，所以先把目录建出来；有 peer 时同一目录在校验第一关
+        // 就被拒，走不到存在性检查。）
+        std::fs::create_dir_all(&documents).unwrap();
+        let resp = server
+            .dispatch(
+                Req {
+                    id: "set-no-peer".into(),
+                    method: "config.set_library".into(),
+                    params: serde_json::json!({ "library": documents.to_str().unwrap() }),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await;
+        assert!(resp.ok, "没有连接方时同一位置不该被拒：{resp:?}");
+        assert!(documents.join(LIBRARY_MARKER).is_dir());
+    }
 }

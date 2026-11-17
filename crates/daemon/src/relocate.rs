@@ -226,7 +226,7 @@ pub fn check_with(
     probes: &Probes,
     peer: Option<&platform::PeerUser>,
 ) -> Result<Check, String> {
-    // #1826：选的位置是敏感目录（系统 / 用户标准目录 / 同步盘 / 应用自身 / 卷根）就拒绝。
+    // 选的位置是敏感目录（系统 / 用户标准目录 / 同步盘 / 应用自身 / 卷根）就拒绝。
     // 必须排在建目录之前——不能先把库建进桌面、报了错再回滚。`peer` 是本次连接已核验的
     // 主人目录事实：Windows 服务形态下不能拿服务账户的目录代答。
     crate::library_location::check_library_path(chosen, local_base, peer)?;
@@ -1597,34 +1597,43 @@ mod tests {
         assert!(from.exists(), "新位置不是这个库，原目录一个文件都不删");
     }
 
-    /// #1826：目标是敏感目录（家目录里的「文稿」）⇒ 预检就拒绝，**一个目录都不建**。
-    /// 反证：去掉 [`check_with`] 开头那行 `check_library_path` ⇒ 预检通过、目标被建出来，红。
+    /// #1826：目标是敏感目录（主人的「文稿」，合成 PeerUser 在临时沙盒里造出来）⇒ 预检
+    /// 就拒绝，**一个目录都不建**。反证：去掉 [`check_with`] 开头那行 `check_library_path`
+    /// ⇒ 预检通过、目标被建出来，红。
     #[test]
     fn sensitive_destination_is_refused_before_the_folder_is_created() {
-        use platform::PlatformAdapter as _;
-        let home = platform::adapter().home_dir().expect("测试机有家目录");
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join("Documents")).unwrap();
+        let peer = platform::PeerUser::new(
+            "S-1-5-21-1".into(),
+            platform::UserDirFacts::from_home(home.path().to_path_buf()),
+        );
         let tmp = tempfile::tempdir().unwrap();
         let (from, _id) = library(tmp.path(), "Lib");
         let local_base = tmp.path().join("local");
         std::fs::create_dir_all(&local_base).unwrap();
-        let chosen = home.join("Documents").join("ppass-1826-relocate-sentinel");
+        let chosen = home
+            .path()
+            .join("Documents")
+            .join("ppass-1826-relocate-sentinel");
 
         let p = probes(&|_, _| Some(true), &|_| Some(u64::MAX), &|_| false);
-        let err = check_with(&from, &chosen, &local_base, &p, None).unwrap_err();
+        let err = check_with(&from, &chosen, &local_base, &p, Some(&peer)).unwrap_err();
         assert!(err.contains("ui.err_library_sensitive"), "{err}");
         assert!(!chosen.exists(), "预检不许建目录");
 
         // 落计划那条入口同样在 `create_dir_all` 之前拒绝。
-        let err = plan(&from, &chosen, &local_base, None).unwrap_err();
+        let err = plan(&from, &chosen, &local_base, Some(&peer)).unwrap_err();
         assert!(err.contains("ui.err_library_sensitive"), "{err}");
         assert!(!chosen.exists(), "落计划入口也不许建目录");
         assert!(pending(&local_base).is_none(), "不许落搬迁计划");
         assert!(from.exists(), "原库不动");
     }
 
-    /// #1826：预检用**连接方（主人）**的目录事实——目标落在主人的桌面里拒绝；连接方取不到
-    /// 主人的家目录 / 「图片」时也拒绝，不退回服务账户、不按路径形状猜。
-    /// 反证：`check_with` 忽略 peer（调 `check_library_path(.., None)`）⇒ 第一条红。
+    /// #1826：预检用**连接方（主人）**的目录事实——目标落在主人的桌面 / 重定向到家目录
+    /// 外的文稿里都拒绝；连接方取不齐主人的用户目录事实时也拒绝，不退回服务账户、
+    /// 不按路径形状猜。
+    /// 反证：`check_with` 忽略 peer（调 `check_library_path(.., None)`）⇒ 前两条红。
     #[test]
     fn the_precheck_uses_the_peer_facts() {
         let home = tempfile::tempdir().unwrap();
@@ -1634,22 +1643,35 @@ mod tests {
         std::fs::create_dir_all(&dest).unwrap();
         let desktop = home.path().join("Desktop");
         std::fs::create_dir_all(&desktop).unwrap();
+        // 主人把「文稿」重定向到家目录外的独立目录：按名字判不到，只有 peer 的事实知道。
+        let redirected_documents = local.path().join("PersonalDocs");
+        std::fs::create_dir_all(&redirected_documents).unwrap();
         let p = probes(&|_, _| Some(true), &|_| Some(u64::MAX), &|_| false);
 
         // 主人的家目录 = 测试临时目录；「图片」是另一个目录（默认库例外不涉及这里）。
-        let peer = platform::PeerUser::new(
-            "S-1-5-21-1".into(),
-            Some(home.path().to_path_buf()),
-            Some(home.path().join("Pictures")),
-        );
+        let mut facts = platform::UserDirFacts::from_home(home.path().to_path_buf());
+        facts.documents = Some(redirected_documents.clone());
+        let peer = platform::PeerUser::new("S-1-5-21-1".into(), facts);
         assert!(
             check_with(&from, &dest, local.path(), &p, Some(&peer)).is_ok(),
             "普通目录照常通过"
         );
         let err = check_with(&from, &desktop, local.path(), &p, Some(&peer)).unwrap_err();
         assert!(err.contains("ui.err_library_sensitive"), "{err}");
+        let err = check_with(
+            &from,
+            &redirected_documents.join("photos"),
+            local.path(),
+            &p,
+            Some(&peer),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("ui.err_library_sensitive"),
+            "重定向到家目录外的文稿要拒：{err}"
+        );
 
-        let blind = platform::PeerUser::new("S-1-5-21-1".into(), None, None);
+        let blind = platform::PeerUser::new("S-1-5-21-1".into(), platform::UserDirFacts::default());
         let err = check_with(&from, &dest, local.path(), &p, Some(&blind)).unwrap_err();
         assert!(err.contains("ui.err_library_user_dirs"), "{err}");
     }

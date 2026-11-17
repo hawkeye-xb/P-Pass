@@ -46,32 +46,116 @@ pub enum PeerCheck {
     NotSupported(&'static str),
 }
 
+/// #1826：用户「标准目录」的事实——家目录，加上桌面 / 文稿 / 下载 / 图片 / 影片 / 音乐，
+/// 以及 macOS 的 `~/Library`。**真实位置**由系统口径给出（Windows 走 `SHGetKnownFolderPath`，
+/// 可能被重定向到家目录外、别的盘）；调用方负责解析符号链接。
+///
+/// 平台差异（怎么取）留在 [`UserDirFacts::for_current_user`] 与 Windows 的
+/// `peer_dir_facts` 里，结构本身各平台同一份，daemon 只消费这一份。
+/// Windows 没有 `~/Library` 这一层的对应物，`library` 在 Windows 的连接方事实上
+/// **按定义就是 `None`**，不算缺失。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UserDirFacts {
+    /// 家目录；读不到 = `None`。
+    pub home: Option<std::path::PathBuf>,
+    pub desktop: Option<std::path::PathBuf>,
+    pub documents: Option<std::path::PathBuf>,
+    pub downloads: Option<std::path::PathBuf>,
+    /// macOS 的 `~/Library`（应用支持、缓存、iCloud 都在它下面）；别的平台没有。
+    pub library: Option<std::path::PathBuf>,
+    pub pictures: Option<std::path::PathBuf>,
+    /// macOS 的「影片」；Windows 是 `FOLDERID_Videos`（Linux 按 XDG 的 `Videos`）。
+    pub videos: Option<std::path::PathBuf>,
+    pub music: Option<std::path::PathBuf>,
+}
+
+impl UserDirFacts {
+    /// 给定家目录、按各平台的标准名字算全套事实（测试与无 KF 机制的平台的口径）。
+    pub fn from_home(home: std::path::PathBuf) -> Self {
+        let at = |name: &str| Some(home.join(name));
+        Self {
+            desktop: at("Desktop"),
+            documents: at("Documents"),
+            downloads: at("Downloads"),
+            library: if cfg!(target_os = "macos") {
+                at("Library")
+            } else {
+                None
+            },
+            pictures: at("Pictures"),
+            videos: at(if cfg!(target_os = "macos") {
+                "Movies"
+            } else {
+                "Videos"
+            }),
+            music: at("Music"),
+            home: Some(home),
+        }
+    }
+
+    /// **没有连接方**时的事实：macOS / Linux 从平台适配器的家目录与「图片」目录算；
+    /// Windows 按当前用户的 Known Folder 逐个取（计划任务形态下 daemon 本来就跑在
+    /// 用户自己名下，当前用户 = 主人）。
+    pub fn for_current_user() -> Self {
+        #[cfg(windows)]
+        {
+            crate::windows::current_user_dir_facts()
+        }
+        #[cfg(not(windows))]
+        {
+            use crate::PlatformAdapter as _;
+            let mut facts = Self::from_home(crate::adapter().home_dir().unwrap_or_default());
+            facts.pictures = crate::adapter().pictures_dir();
+            facts
+        }
+    }
+
+    /// 遍历各标准目录（不含家目录本身——家目录单独有一类判定）。缺失的就跳过。
+    pub fn standard_dirs(&self) -> impl Iterator<Item = &std::path::PathBuf> {
+        [
+            &self.desktop,
+            &self.documents,
+            &self.downloads,
+            &self.library,
+            &self.pictures,
+            &self.videos,
+            &self.music,
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    /// #1826：选照片库位置要用的关键事实齐不齐：家目录 + 除 macOS `library` 外的
+    /// 全部标准目录（Windows 的 `library` 按 [`UserDirFacts`] 的定义就是 `None`）。
+    /// 连接方存在而事实不齐 ⇒ 调用方必须拒绝本次选择，不拿自己的目录代答、不按形状猜。
+    pub fn selection_ready(&self) -> bool {
+        self.home.is_some()
+            && self.desktop.is_some()
+            && self.documents.is_some()
+            && self.downloads.is_some()
+            && self.pictures.is_some()
+            && self.videos.is_some()
+            && self.music.is_some()
+    }
+}
+
 /// #1167：连接方的系统用户（Windows：SID 字符串）。只有 Windows 管道的**服务端**取得到；
 /// 用途有两个——首启向导写好库位置时把它记成主人（`PlatformAdapter::claim_resident_owner`），
-/// 以及敏感目录判定要知道主人的家目录与「图片」目录（#1826）。
+/// 以及敏感目录判定要知道主人的用户标准目录（#1826）。
 ///
-/// #1826：家目录与「图片」目录随这次连接一起解析（用该连接已验证用户的 token 调
-/// `SHGetKnownFolderPath`）。服务形态下服务账户读不到主人的这两个目录，取不到就是
-/// `None`——调用方必须拒绝本次选择，不拿服务账户的目录代答，也不按路径形状猜。
+/// #1826：目录事实（[`UserDirFacts`]）随这次连接一起解析（Windows：用该连接已验证用户的
+/// token 逐个调 `SHGetKnownFolderPath`）。服务形态下服务账户读不到主人的这些目录，取不到
+/// 就是 `None`——调用方必须拒绝本次选择，不拿服务账户的目录代答，也不按路径形状猜。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerUser {
     pub(crate) sid: String,
-    pub(crate) home: Option<std::path::PathBuf>,
-    pub(crate) pictures: Option<std::path::PathBuf>,
+    pub(crate) dirs: UserDirFacts,
 }
 
 impl PeerUser {
     /// 平台实现与测试构造用。
-    pub fn new(
-        sid: String,
-        home: Option<std::path::PathBuf>,
-        pictures: Option<std::path::PathBuf>,
-    ) -> Self {
-        Self {
-            sid,
-            home,
-            pictures,
-        }
+    pub fn new(sid: String, dirs: UserDirFacts) -> Self {
+        Self { sid, dirs }
     }
 
     /// 给日志与错误说明用的标识（Windows：SID）。
@@ -79,14 +163,9 @@ impl PeerUser {
         &self.sid
     }
 
-    /// 主人的家目录；读不到 = `None`。
-    pub fn home_dir(&self) -> Option<&std::path::Path> {
-        self.home.as_deref()
-    }
-
-    /// 主人的「图片」目录；读不到 = `None`。
-    pub fn pictures_dir(&self) -> Option<&std::path::Path> {
-        self.pictures.as_deref()
+    /// 连接方（主人）的用户目录事实；各字段读不到的是 `None`。
+    pub fn dirs(&self) -> &UserDirFacts {
+        &self.dirs
     }
 }
 
