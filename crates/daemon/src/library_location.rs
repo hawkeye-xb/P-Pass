@@ -765,16 +765,35 @@ mod tests {
 
     /// 假的家目录、应用目录与默认库位置（判据是纯函数，不需要真建这些目录）。
     fn fake_env() -> LocationEnvironment {
-        let mut env = LocationEnvironment::from_facts(platform::UserDirFacts::from_home(
-            PathBuf::from("/Users/tester"),
-        ));
-        env.app_dirs = vec![
-            PathBuf::from("/Users/tester/Library/Application Support/P-Pass"),
-            PathBuf::from("/Users/tester/Applications/P-Pass.app/Contents/MacOS"),
-            // 打包产物：bundle 根也是安装目录（开发版装在 ~/Applications）。
-            PathBuf::from("/Users/tester/Applications/P-Pass.app"),
-        ];
-        env
+        // 纯路径判据测试必须保留字面量：Windows 上 from_facts 会 canonicalize，
+        // 可能把 home/user_dirs 变成 \\?\ 扩展路径，和表里的 /Users/tester 不再相等。
+        let home = PathBuf::from("/Users/tester");
+        LocationEnvironment {
+            user_dirs: [
+                "Desktop",
+                "Documents",
+                "Downloads",
+                "Pictures",
+                "Movies",
+                "Music",
+                "Videos",
+                "Library",
+            ]
+            .iter()
+            .map(|name| home.join(name))
+            .collect(),
+            default_libraries: [DEFAULT_LIBRARY_DIR_NAME, LEGACY_DEFAULT_LIBRARY_DIR_NAME]
+                .iter()
+                .map(|name| home.join("Pictures").join(name))
+                .collect(),
+            home: Some(home),
+            app_dirs: vec![
+                PathBuf::from("/Users/tester/Library/Application Support/P-Pass"),
+                PathBuf::from("/Users/tester/Applications/P-Pass.app/Contents/MacOS"),
+                // 打包产物：bundle 根也是安装目录（开发版装在 ~/Applications）。
+                PathBuf::from("/Users/tester/Applications/P-Pass.app"),
+            ],
+        }
     }
 
     fn kind_of(p: &str) -> Option<SensitiveKind> {
