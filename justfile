@@ -302,6 +302,8 @@ mobile-static-check:
 # #1820 本地构建时间与设备测试保留 App 的口径自测（纯 shell，几秒；进 ci / ci-docs）。
 # 断言：两端都从 PPF_BUILD_STAMP 取值；stamp 为空时版本行只显示版本号+构建号、非空时追加；
 # 设备测试 recipe 带 leaveApksInstalledAfterRun=true；本地 `just dev` 用 date '+%m-%d %H:%M' 生成时间戳。
+# recipe 级断言只看对应配方的正文（不看整份 justfile，避免匹配到这些断言自身的字符串），并带反证：
+# 删掉时间戳注入、删掉 connected 命令时必须判红。
 build-stamp-check:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -312,10 +314,20 @@ build-stamp-check:
     need() { # <file> <literal> <说明>
       if grep -Fq -- "$2" "$1"; then ok "$3"; else ko "$3（$1 里找不到「$2」）"; fi
     }
+    recipe_body() { # <justfile> <配方头正则>：从配方头到下一个配方头（列 0 的小写名 + 空格/冒号）
+      sed -n "/^$2/,/^[a-z][a-z0-9-]*[ :]/p" "$1"
+    }
+    has_dev_stamp() { # 时间戳注入只在 dev 配方正文里找
+      recipe_body "$1" 'dev \*args:' | grep -Fq 'export PPF_BUILD_STAMP=' &&
+        recipe_body "$1" 'dev \*args:' | grep -Fq "date '+%m-%d %H:%M'"
+    }
+    has_keep_apks() { # 设备测试命令与参数只在 android-instrumented 正文里找
+      recipe_body "$1" 'android-instrumented \*args:' | grep -Fq -- 'connectedDebugAndroidTest' &&
+        recipe_body "$1" 'android-instrumented \*args:' | grep -Fq -- 'android.injected.androidTest.leaveApksInstalledAfterRun=true'
+    }
 
-    # 1) 时间戳来源：本地 recipe 用 date 生成，格式能分辨先后（MM-DD HH:MM）。
-    need justfile "PPF_BUILD_STAMP" "just dev 注入 PPF_BUILD_STAMP"
-    need justfile "date '+%m-%d %H:%M'" "just dev 用 date '+%m-%d %H:%M' 生成时间戳"
+    # 1) 时间戳来源：只看 dev 配方正文，格式能分辨先后（MM-DD HH:MM）。
+    if has_dev_stamp justfile; then ok "just dev 配方用 date 注入 PPF_BUILD_STAMP"; else ko "just dev 配方缺少时间戳注入"; fi
     stamp="$(date '+%m-%d %H:%M')"
     case "$stamp" in
       [0-9][0-9]-[0-9][0-9]" "[0-9][0-9]:[0-9][0-9]) ok "date 产出 MM-DD HH:MM（${stamp}）" ;;
@@ -338,18 +350,28 @@ build-stamp-check:
     need apps/ios/PPass/Diagnostics/AppVersion.swift 'let stamp = buildStamp.trimmingCharacters(in: .whitespaces)' "空/空白 stamp 归一处理"
     need apps/ios/PPass/Diagnostics/AppVersion.swift 'stamp.isEmpty ? base :' "空 stamp 只显示 base、非空追加"
 
-    # 4) 设备测试：保留 App/数据的参数在；just android-test（JVM 单测）语义不变。
-    need justfile 'android.injected.androidTest.leaveApksInstalledAfterRun=true' "设备测试 recipe 带 leaveApksInstalledAfterRun=true"
-    need justfile 'connectedDebugAndroidTest' "设备测试跑 instrumented 用例"
+    # 4) 设备测试：只看 android-instrumented 正文；just android-test（JVM 单测）语义不变。
+    if has_keep_apks justfile; then ok "android-instrumented 跑 connected 并带 keep-apks 参数"; else ko "android-instrumented 缺少 connected 命令或 keep-apks 参数"; fi
     if sed -n '/^android-test:/,/^[a-z][a-z0-9-]*[ :]/p' justfile | grep -Fq -- 'connectedDebugAndroidTest'; then
       ko "just android-test 仍是 JVM 单测，不该跑 connectedDebugAndroidTest"
     else
       ok "just android-test 仍是 JVM 单测（未跑 connectedDebugAndroidTest）"
     fi
-    if sed -n '/^android-instrumented \*args:/,/^[a-z][a-z0-9-]*[ :]/p' justfile | grep -Fq -- 'leaveApksInstalledAfterRun=true'; then
-      ok "keep-apks 参数挂在 android-instrumented 上"
+
+    # 5) 反证：删掉时间戳注入 / 删掉 connected 命令后，上面的 recipe 级断言必须判红。
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/ppass-stamp.XXXXXX")" || { ko "建临时目录失败，反证跑不了"; exit 1; }
+    trap 'rm -rf "$tmp"' EXIT
+    grep -v 'export PPF_BUILD_STAMP=' justfile >"$tmp/justfile-no-stamp"
+    if has_dev_stamp "$tmp/justfile-no-stamp"; then
+      ko "反证：删掉时间戳注入后检查仍通过"
     else
-      ko "android-instrumented recipe 里没有 keep-apks 参数"
+      ok "反证：删掉时间戳注入 → 判红"
+    fi
+    grep -v 'connectedDebugAndroidTest' justfile >"$tmp/justfile-no-connected"
+    if has_keep_apks "$tmp/justfile-no-connected"; then
+      ko "反证：删掉 connected 命令后检查仍通过"
+    else
+      ok "反证：删掉 connected 命令 → 判红"
     fi
 
     exit "$fail"
