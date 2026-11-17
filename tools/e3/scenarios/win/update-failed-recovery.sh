@@ -1,31 +1,30 @@
 # #1735（#1063 收尾）：Windows 安装失败后服务恢复复验。
 #
-# 验证安装器（installer-hooks.nsh）在「替换 ppf-daemon.exe 失败」时的恢复语义。
+# 验证安装器（installer-hooks.nsh）在「替换 ppf-daemon.exe 失败」时的恢复语义，按卡口径：
+# 用不共享句柄（FILE_SHARE_NONE）占住 ppf-daemon.exe 制造替换失败，释放句柄后验证 daemon 是否真的恢复运行。
 #
 # 恢复机制（真机实测结论，2026-11-17）：
 #   - 安装器 UpdateFailureRecover 的恢复 = 一次性 `sc start`（wanted-state 不是 stopped 时），
 #     并把「尝试过恢复」记成 update-failed 的 service=1（installer-hooks.nsh:281-330 不检查 sc start 结果）。
-#   - 那句 `sc failure … restart/5000` 只是补回崩溃自动重启（PREINSTALL 清掉的持久配置），
-#     **不会**重试「start 失败」：实测 Event 7000（sharing violation）后 60s 无 Event 7032，服务不回来。
-#   - 所以 sc start 成不成只看二进制此刻可不可读：share=read（只占写）→ 替换失败但 sc start 能拉起旧版；
-#     share=none（读写执行全占）→ 替换失败且 sc start 也失败，服务一直停着，没人再拉起。
+#   - `sc failure … restart/5000` 只补回崩溃自动重启（PREINSTALL 清掉的持久配置），**不重试 start 失败**：
+#     实测 Event 7000（sharing violation）后 60s 无 Event 7032，服务不回来。
+#   - 因此 FILE_SHARE_NONE 占住时 sc start 也失败、释放锁后 daemon 不会自动恢复——这正是用例1 要判的产品行为。
 #
 # 场景三个用例：
-#   - 服务原本在运行 + 只占写（FILE_SHARE_READ）→ 替换失败被识别（update-failed service=1），
-#     恢复归因于安装器 sc start（旧版 daemon 被拉起、IPC 可应答、版本仍是 base）。
+#   - 服务原本在运行 + 全占（FILE_SHARE_NONE）→ 替换失败被识别（update-failed service=1）；
+#     释放锁后按卡口径验证 daemon 是否真的恢复运行（看真实进程/服务状态，不手动 Start-Service、不认 service=1）。
 #   - 用户已主动停过（wanted-state=stopped）+ 全占（FILE_SHARE_NONE）→ update-failed service=0，
 #     不得拉起 daemon，不得新增/启用自启登记。
 #   - 对照组：不注入文件占用 → 正常覆盖安装成功，daemon 与版本都换成候选。
 #
-# 反证（E2）：用全占（FILE_SHARE_NONE）重跑「服务运行」用例 ⇒ sc start 也失败、释放锁后
-# daemon 仍不恢复 ⇒ 「应恢复」判据（daemon 在跑 / IPC / 服务在运行）变红，证明恢复确实归因于
-# 安装器 sc start，而不是测试手动 Start-Service 掩盖。
+# 反证（E2）：去掉文件占用（不锁文件）重跑「服务运行」用例 ⇒ 安装成功、不再写 update-failed ⇒
+# 「应失败」判据（update-failed 存在 / service=1 / 版本仍是 base）变红，证明故障注入有效。
 #
 # 前置：本机是 perMachine 服务模式安装（Program Files + Windows 服务 P-Pass），会话已提权
 # （High integrity，运行安装器 /S 不需要弹 UAC）。三个用例共用一个候选安装包；base 用更旧版本，
 # 让「安装失败版本不变 / 正常安装版本升级」可判。
 # 只动 tools/e3/scenarios/win/** 与 docs/evidence/**，不碰产品代码，不接 Android/iOS。
-DESC="#1735 安装失败后服务恢复：只占写→替换失败 service=1→sc start 拉起旧版 / 用户停过 service=0 不拉起 / 对照组正常安装"
+DESC="#1735 安装失败后服务恢复：全占→替换失败 service=1→释放后验证 daemon 是否真恢复 / 用户停过 service=0 不拉起 / 对照组正常安装"
 COUNTER=on
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
@@ -73,27 +72,22 @@ install_pkg() { # install_pkg <setup.exe> <outfile>
   [ -s "$out.err" ] || rm -f "$out.err"
 }
 
-# —— 独占句柄占住 ppf-daemon.exe ——
-# share 决定占住方式，对应两种故障注入：
-#   share=none/0（FILE_SHARE_NONE，默认）：写/读/执行全被拒。NSIS File 覆盖、--version 复查、
-#     UpdateFailureRecover 的 sc start 全失败 ⇒ 「文件替换失败 + 服务起不来」，恢复也起不来。
-#   share=read/1（FILE_SHARE_READ）：只许别人读/执行，不许写/删。NSIS File 覆盖失败（写被拒），
-#     但 --version 与 sc start 能读 ⇒ 「文件替换失败 + 服务可被 sc start 拉起旧版」，
-#     这是让「恢复」真正归因到安装器 sc start 的可成功路径（见 act 用例1 与 counter）。
+# —— 独占句柄（FILE_SHARE_NONE）占住 ppf-daemon.exe ——
+# 写/读/执行全被拒：NSIS File 覆盖、POSTINSTALL 的 --version 复查、UpdateFailureRecover 的
+# sc start 全失败，等价「文件替换失败 + 服务起不来」。
 # Git Bash 的 kill 杀不掉 Windows 进程，释放必须用 PowerShell Stop-Process。
 # pid 写到 $E3_STATE/win/uf-lock-<tag>.pid（绝对路径，跨 bash/Python 用 cygpath 对齐）。
 
 uf_lock_pidfile() { echo "$E3_STATE/win/uf-lock-$1.pid"; }
 
-win_lock_daemon() { # win_lock_daemon <tag> [share=none|read]
-  local tag="$1" share="${2:-none}" pidfile i
-  case "$share" in read|1) share=1 ;; *) share=0 ;; esac
+win_lock_daemon() { # win_lock_daemon <tag>
+  local tag="$1" pidfile i
   pidfile="$(uf_lock_pidfile "$tag")"
   rm -f "$pidfile"
-  python3 - "$(cygpath -m "$INST_DAEMON")" "$(cygpath -m "$pidfile")" "$share" <<'PY' >/dev/null 2>&1 &
+  python3 - "$(cygpath -m "$INST_DAEMON")" "$(cygpath -m "$pidfile")" <<'PY' >/dev/null 2>&1 &
 import ctypes, sys, time, os
 k32 = ctypes.WinDLL('kernel32', use_last_error=True)
-h = k32.CreateFileW(sys.argv[1], 0x80000000, int(sys.argv[3]), None, 3, 0x80, None)
+h = k32.CreateFileW(sys.argv[1], 0x80000000, 0, None, 3, 0x80, None)
 if h in (-1, 0xFFFFFFFFFFFFFFFF):
     sys.exit(1)
 with open(sys.argv[2], 'w') as f:
@@ -233,20 +227,19 @@ act() {
 
   # ---- 1) 失败 / 服务原本在运行 ----
   local ca="$d/case-running"; mkdir -p "$ca"
-  echo "== 用例1：服务运行中，只占写锁（替换失败 + sc start 可拉起），装候选（应失败 service=1，旧版恢复）=="
+  echo "== 用例1：服务运行中，全占锁（FILE_SHARE_NONE），装候选（应失败 service=1），释放后验证 daemon 是否真恢复 =="
   ensure_running || { echo "用例1 起点服务没起来"; return 1; }
   record_state "$ca" pre
-  win_lock_daemon running read || { echo "用例1 锁文件失败"; return 1; }
+  win_lock_daemon running || { echo "用例1 锁文件失败"; return 1; }
   install_pkg "$cand" "$ca/install.txt" || true
-  # 恢复是安装器 UpdateFailureRecover 里的 sc start（share=read 时二进制可读，能拉起旧版）；
-  # sc start 是异步的，等它真的把旧版 daemon 拉到 Running 再采样。这里不手动 Start-Service——手动拉起会掩盖「安装器恢复失效」的回归。
-  local i ok=0
-  for i in $(seq 1 30); do [ "$(svc_state)" = Running ] && [ -n "$(win_daemon_pid)" ] && { ok=1; break; }; sleep 1; done
-  [ "$ok" = 1 ] || echo "用例1 sc start 后服务没恢复"
   record_update_failed "$ca" after-fail
   record_state "$ca" after-fail
   capture_daemon_log "$ca" after-fail
-  win_unlock_daemon running || echo "用例1 释放锁失败"
+  # 释放锁，按卡口径验证「daemon 恢复运行」：不手动 Start-Service，只看真实进程/服务状态。
+  win_unlock_daemon running || { echo "用例1 释放锁失败"; return 1; }
+  local i ok=0
+  for i in $(seq 1 30); do [ "$(svc_state)" = Running ] && [ -n "$(win_daemon_pid)" ] && { ok=1; break; }; sleep 1; done
+  [ "$ok" = 1 ] || echo "用例1 释放后 daemon 没恢复（真实进程/服务仍停）"
   diag_inst "$ca" || true
   record_state "$ca" after-recover
   capture_daemon_log "$ca" after-recover
@@ -293,14 +286,13 @@ judge() {
   local d="$1"
   local ca="$d/case-running" cb="$d/case-stopped" cc="$d/case-normal"
 
-  # 用例1：失败被识别（应失败）+ 恢复归因到安装器 sc start（应恢复）。
-  # 反证里用 share=none 锁 ⇒ sc start 失败 ⇒ 下面三条「应恢复」判据变红，证明恢复确实归因于安装器 sc start。
+  # 用例1：失败被识别（应失败）+ 释放后 daemon 恢复运行（应恢复，看真实进程/服务状态，不认 service=1）。
   check "用例1 安装失败被识别：update-failed 存在且首行 install-failed" grep -qx 'install-failed' "$ca/after-fail-update-failed.txt"
   check "用例1 service=1（用户没停过，安装器尝试恢复）" grep -qx 'service=1' "$ca/after-fail-update-failed.txt"
-  check "用例1 恢复后 daemon 在运行（安装器 sc start 拉起）" grep -Eq '^daemon_pid=[0-9]+' "$ca/after-recover-state.txt"
-  check "用例1 恢复后 IPC 可应答（diag daemon_reachable）" diag_daemon_reachable "$ca"
+  check "用例1 释放后 daemon 恢复运行（真实进程在跑）" grep -Eq '^daemon_pid=[0-9]+' "$ca/after-recover-state.txt"
+  check "用例1 释放后 IPC 可应答（diag daemon_reachable）" diag_daemon_reachable "$ca"
   check "用例1 版本与安装结果一致（失败=仍是 base ${UF_BASE_VER}）" grep -Fqx "daemon_file_version=$UF_BASE_VER" "$ca/after-recover-state.txt"
-  check "用例1 恢复后服务在运行" grep -qx 'svc_state=Running' "$ca/after-recover-state.txt"
+  check "用例1 释放后服务在运行" grep -qx 'svc_state=Running' "$ca/after-recover-state.txt"
 
   # 用例2：用户停过 → service=0、不拉起、不新增自启
   check "用例2 update-failed 存在且首行 install-failed" grep -qx 'install-failed' "$cb/after-fail-update-failed.txt"
@@ -322,39 +314,30 @@ judge() {
 
 counter() {
   local d="$OUT" base cand
-  # 反证（不恢复服务）：share=none（FILE_SHARE_NONE）锁住 daemon ⇒ 替换失败，UpdateFailureRecover 的
-  # sc start 也因二进制不可读而失败 ⇒ 释放锁后 daemon 仍不会被拉起 ⇒ 「应恢复」判据（daemon 在跑 / IPC / 服务在运行）变红，
-  # 证明主路径的「恢复」确实归因于安装器 sc start，而不是测试手动 Start-Service。
+  # 反证（去掉文件占用）：不锁文件重跑用例1 ⇒ 安装成功、不再写 update-failed ⇒ 「应失败」判据
+  # （update-failed 存在 / service=1 / 版本仍是 base）变红，证明 FILE_SHARE_NONE 故障注入有效。
   # 用例2/用例3 不受反证影响，沿用主路径证据，避免它们被误判红。
   mkdir -p "$d"
   cp -r "$EV/main/case-stopped" "$d/" 2>/dev/null || true
   cp -r "$EV/main/case-normal" "$d/" 2>/dev/null || true
-  echo "counter: 不恢复服务（share=none 锁，sc start 失败，不手动 Start-Service），应恢复判据应红" >"$d/note.txt"
+  echo "counter: 不锁文件，重跑用例1（应成功，无 update-failed），应失败判据应红" >"$d/note.txt"
   local ca="$d/case-running"; mkdir -p "$ca"
   base="$(win_release_file "$UF_BASE_TAG" '*_x64-setup.exe')"
   cand="$(win_release_file "$UF_CAND_TAG" '*_x64-setup.exe')"
-  # 先降回 base，让这次安装有版本变化（失败可判）。
+  # 先降回 base，让这次安装有版本变化（成功可判）。
   install_pkg "$base" "$d/base-install.txt" || true
-  # 反证起点必须是真的 base：版本没到 base 或服务没起来，就无法构造「替换失败」的前置，立即停下。
+  # 反证起点必须是真的 base：版本没到 base 或服务没起来，就无法构造「去掉占用后安装成功」的前置，立即停下。
   wait_daemon_file_version "$UF_BASE_VER" 90 || { echo "反证起点没建立：base 版本没就绪"; return 1; }
   ensure_running || { echo "反证起点没建立：base 服务没运行"; return 1; }
   record_state "$ca" pre
-  win_lock_daemon running || { echo "反证锁文件失败"; return 1; }
   install_pkg "$cand" "$ca/install.txt" || true
-  # 反证前提：安装器必须真的跑过并识别出失败、写了 update-failed。否则 judge 的红可能来自
-  # 「update-failed 缺失」（应失败判据）而不是「daemon 没恢复」（应恢复判据），反证就白跑。
-  update_failed_present || { echo "反证前提没建立：候选安装器没跑或没写 update-failed"; return 1; }
+  # 反证前提：候选安装真成功、版本换成候选。否则 judge 的红可能不是「去掉占用导致的成功」，反证白跑。
+  wait_daemon_file_version "$UF_CAND_VER" 90 || { echo "反证前提没建立：候选版本没就绪"; return 1; }
+  diag_inst "$ca" || true
   record_update_failed "$ca" after-fail
   record_state "$ca" after-fail
-  capture_daemon_log "$ca" after-fail
-  # 解锁失败就停下：不释放锁就没法验证「释放后 daemon 仍不被拉起」，锁本身会挡住 daemon。
-  win_unlock_daemon running || { echo "反证释放锁失败"; return 1; }
-  # 关键：不手动 Start-Service。给 SCM failure recovery 一个「万一有重试」的窗口（实测不会来），
-  # 再采样 after-recover，确认 daemon 仍是停的。
-  sleep 5
-  diag_inst "$ca" || true
   record_state "$ca" after-recover
-  capture_daemon_log "$ca" after-recover
+  capture_daemon_log "$ca" after-fail
 }
 
 teardown() {
