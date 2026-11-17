@@ -71,7 +71,70 @@ class BackupScopeTimeTest {
         val folder = 0x4000000000000003L
         assertFalse("只有已登记目录：有来源", noAlbumsOf(setOf(folder), emptySet(), setOf(folder)))
         assertTrue("目录已移除登记：没有来源", noAlbumsOf(setOf(folder), emptySet(), emptySet()))
-        assertTrue("范围空集：没有来源", noAlbumsOf(emptySet(), emptySet(), setOf(folder)))
+        assertFalse(
+            "范围空集但目录还登记着：引擎会把它并进有效范围，不能判成没有来源",
+            noAlbumsOf(emptySet(), emptySet(), setOf(folder)),
+        )
+    }
+
+    /**
+     * #1794 阻断：设置页「添加文件夹」只写 registry、不调 saveScope，引擎的 [effectiveBackupScope] 照样把它并进
+     * 有效范围并真的备份——首页的来源判据必须与引擎同一口径，不能只看已保存范围里有没有目录 id。
+     */
+    @Test
+    fun registered_folder_without_a_saved_scope_counts_as_a_source() {
+        val folder = 0x4000000000000003L
+        assertFalse(
+            "从未保存范围、只从设置页加了一个目录：首页要说有来源，不是「未选定自动备份范围」",
+            noAlbumsOf(null, emptySet(), setOf(folder), knownBucketIds = null),
+        )
+        assertFalse(
+            "旧相册范围里的相册被删、只加目录：目录仍在引擎的有效范围里",
+            noAlbumsOf(setOf(9L), emptySet(), setOf(folder), knownBucketIds = setOf(9L)),
+        )
+        assertTrue(
+            "移除目录后恢复为没有来源",
+            noAlbumsOf(setOf(9L), emptySet(), emptySet(), knownBucketIds = setOf(9L)),
+        )
+        assertTrue(
+            "从未保存范围、目录也移除了：没有来源",
+            noAlbumsOf(null, emptySet(), emptySet(), knownBucketIds = null),
+        )
+        assertFalse(
+            "相册还在时照常算来源",
+            noAlbumsOf(setOf(7L), setOf(7L), emptySet(), knownBucketIds = setOf(7L)),
+        )
+    }
+
+    /** 统一范围保存时目录被明确取消勾选（known 里有目录 id）：引擎不会备份它，首页也不能说有来源。 */
+    @Test
+    fun unified_scope_without_folders_has_no_folder_source() {
+        val folder = 0x4000000000000003L
+        assertTrue(
+            "保存过统一范围且明确不选目录，之后目录仍在 registry 里也不算来源",
+            noAlbumsOf(emptySet(), emptySet(), setOf(folder), knownBucketIds = setOf(folder)),
+        )
+    }
+
+    /**
+     * #1794：首页来源判据的接线——`known_bucket_ids` 与目录登记表每次刷新都要重读，
+     * 设置页加/删目录后（onResume、引擎 revision 都是 recount=false）首页不会停在旧来源。
+     */
+    @Test
+    fun home_refreshes_known_ids_and_folder_registry_on_every_refresh() {
+        val holder = File("src/main/java/com/hawkeyexb/ppass/backup/BackupUiStateHolder.kt").readText()
+        assertTrue("known_bucket_ids 每次刷新都重读", holder.contains("scopeStore.knownBucketIds()"))
+        assertTrue(
+            "来源判据把已知来源传给 noAlbumsOf，与引擎同口径",
+            holder.contains("noAlbumsOf(bucketIds, existingBuckets, folderBuckets, knownSources)"),
+        )
+        val everyRefresh = holder
+            .substringAfter("private fun currentFacts(")
+            .substringBefore("if (recount || inScopeTotal == null)")
+        assertTrue(
+            "目录登记表在 recount 分支之外重读：onResume / revision 的 recount=false 也要更新",
+            everyRefresh.contains("FolderAccess.registry(context).allRecords()"),
+        )
     }
 
     // ── 「今天」从当天零点算 ──────────────────────────────────
