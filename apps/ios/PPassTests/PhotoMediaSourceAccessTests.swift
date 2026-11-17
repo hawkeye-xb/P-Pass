@@ -93,18 +93,22 @@ final class PhotoMediaSourceAccessTests: XCTestCase {
         XCTAssertEqual(auth.requests, 1)
     }
 
-    /// #1811 不变量：checked 里不能有用户看不见、无法取消的相册。看不见的已保存相册不进编辑态；
-    /// 它是否留在持久范围由保存端按 known 判断（见 testSavingFolderScopeKeepsInvisibleSavedAlbums）。
-    func testInitialSelectionOnlyIncludesVisibleSavedAlbums() {
+    /// #1811 评审：状态保留——已保存的相册在编辑态里全部保留（含当前列表里看不见的），权限恢复后重新可见；
+    /// 从未保存则一律空。
+    /// 反证：恢复「看不见的已保存相册不进编辑态」，第一条红。
+    func testInitialSelectionKeepsInvisibleSavedAlbums() {
         let hidden = BucketScreen.initialSelectionWithUnavailable(saved: ["saved-album"], availableAlbums: [], cameraAlbum: nil)
-        XCTAssertEqual(hidden, [], "看不见的已保存相册不进编辑态（不能留下无法取消的勾选）")
+        XCTAssertEqual(hidden, ["saved-album"], "看不见的已保存相册也要保留在编辑态（不能静默丢已存范围）")
         let visible = BucketScreen.initialSelectionWithUnavailable(saved: ["saved-album"], availableAlbums: ["saved-album"],
                                                                    cameraAlbum: nil)
         XCTAssertEqual(visible, ["saved-album"], "可见相册仍按同一选中语义处理")
+        XCTAssertEqual(BucketScreen.initialSelectionWithUnavailable(saved: nil, availableAlbums: ["recents"],
+                                                                    cameraAlbum: "recents"),
+                       [], "从未保存：仍然为空")
     }
 
     /// #1811（评审）：没有存过的范围一律空——相机相册即使显式可用 / 显式传入也不预选；
-    /// 有保存记录时也不预选新相册，只保留已保存且可见的相册。
+    /// 有保存记录时也不预选新相册，只保留已保存的相册。
     /// 反证：恢复 `ScopePolicy.initialSelection` 的「saved==nil 预选相机相册」，第一条红。
     func testInitialSelectionNeverPreselectsCameraAlbum() {
         XCTAssertEqual(BucketScreen.initialSelectionWithUnavailable(saved: nil, availableAlbums: ["recents", "favorites"],
@@ -115,32 +119,60 @@ final class PhotoMediaSourceAccessTests: XCTestCase {
                        ["mine"], "有保存记录：不预选相机相册，只保留已保存的")
     }
 
-    /// #1811 不变量：刷新时编辑态只留看得见的来源。
-    /// partial：当前 checked（已保存 + 本次未保存勾选）保持可见、可取消，不清空；
-    /// none 且 albums() 为空（一张都展示不了）：清空编辑态的相册部分（目录照旧），显示空范围提示；不写持久 scope。
-    /// 反证：partial 改成与 none 一样清空，第一条红；none 改成保留相册，第二条红。
-    func testReloadKeepsOnlyVisibleSelection() {
+    /// #1811 评审：刷新按「已保存 / 本次未保存」区分——
+    /// 已保存相册即使在 none / albums 为空时也留在 checked（full 恢复后重新可见）；本次未保存勾选只在能展示时保留；
+    /// 用户主动取消的已保存相册不会被刷新加回。只改编辑态，不写持久 scope。
+    /// 反证：把已保存相册按可见性过滤，第一条（none）红；把「不在 current 就加回」，取消一条红。
+    func testReloadKeepsSavedAlbumsAndDropsInvisibleUnsavedOnes() {
+        let saved: Set<String> = ["a"]
         let current: Set<String> = ["folder:draft", "a", "b"]
 
-        let partial = BucketScreen.selectionForReload(current: current, availableAlbums: ["a", "b"],
+        let partial = BucketScreen.selectionForReload(current: current, saved: saved, availableAlbums: ["a", "b"],
                                                       availableFolders: ["folder:draft"], photoAccess: .partial)
-        XCTAssertEqual(partial, ["folder:draft", "a", "b"], "partial：当前 checked 的相册保持可见可取消，不清空")
+        XCTAssertEqual(partial, ["folder:draft", "a", "b"], "partial：已保存 + 能展示的本次勾选都保留")
 
-        let partialHidden = BucketScreen.selectionForReload(current: current, availableAlbums: ["a"],
+        let partialHidden = BucketScreen.selectionForReload(current: current, saved: saved, availableAlbums: ["a"],
                                                             availableFolders: ["folder:draft"], photoAccess: .partial)
-        XCTAssertEqual(partialHidden, ["folder:draft", "a"], "partial：列表里没有的相册不能留成隐藏勾选")
+        XCTAssertEqual(partialHidden, ["folder:draft", "a"], "partial：看不见的本次勾选从编辑态移除")
 
-        let none = BucketScreen.selectionForReload(current: current, availableAlbums: [],
+        let none = BucketScreen.selectionForReload(current: current, saved: saved, availableAlbums: [],
                                                    availableFolders: ["folder:draft"], photoAccess: .none)
-        XCTAssertEqual(none, ["folder:draft"], "none 且 albums() 为空：清空编辑态相册部分，目录保留")
+        XCTAssertEqual(none, ["folder:draft", "a"], "none 且 albums() 为空：已保存的 a 仍在，本次未保存勾选移除")
 
-        let full = BucketScreen.selectionForReload(current: current, availableAlbums: ["a", "b"],
-                                                   availableFolders: [], photoAccess: .full)
-        XCTAssertEqual(full, ["a", "b"], "full：全部可显示，勾选原样保留")
+        let backToFull = BucketScreen.selectionForReload(current: none, saved: saved, availableAlbums: ["a", "b"],
+                                                         availableFolders: ["folder:draft"], photoAccess: .full)
+        XCTAssertEqual(backToFull, ["folder:draft", "a"], "full 恢复后已保存的 a 重新可见")
 
-        let removed = BucketScreen.selectionForReload(current: current, availableAlbums: ["a"],
-                                                      availableFolders: [], photoAccess: .partial)
-        XCTAssertEqual(removed, ["a"], "已移除目录不能靠刷新复活")
+        let cancelled: Set<String> = ["folder:draft"]
+        let afterCancel = BucketScreen.selectionForReload(current: cancelled, saved: saved, availableAlbums: ["a"],
+                                                          availableFolders: ["folder:draft"], photoAccess: .full)
+        XCTAssertEqual(afterCancel, ["folder:draft"], "用户已主动取消的已保存相册不会被刷新加回")
+
+        let removedFolder = BucketScreen.selectionForReload(current: current, saved: saved, availableAlbums: ["a"],
+                                                            availableFolders: [], photoAccess: .partial)
+        XCTAssertEqual(removedFolder, ["a"], "已移除目录不能靠刷新复活")
+    }
+
+    /// #1811 评审：权限切换后保存不会误删原范围——编辑态保留着不可见的已保存相册，原样保存时落盘不变。
+    /// 反证：把初始选择改成「只保留可见相册」，保存端收到空集即删掉 a，本断言红。
+    func testSavingAfterPermissionRoundTripKeepsSavedScope() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = BackupScopeStore(directory: dir, daemonNodeId: "scope-round-trip")
+        try store.saveScope(selected: ["a"], allCurrent: ["a"], since: .all)
+        let library = LiveMediaLibrary(scopeStore: { store }, auth: FakeAuthorization(.limited))
+
+        let initial = BucketScreen.initialSelectionWithUnavailable(saved: ["a"], availableAlbums: [], cameraAlbum: nil)
+        XCTAssertEqual(initial, ["a"])
+        let afterNone = BucketScreen.selectionForReload(current: initial, saved: ["a"], availableAlbums: [],
+                                                        availableFolders: [], photoAccess: .none)
+        let afterFull = BucketScreen.selectionForReload(current: afterNone, saved: ["a"], availableAlbums: ["a"],
+                                                        availableFolders: [], photoAccess: .full)
+        XCTAssertEqual(afterFull, ["a"], "full→none→full 后 a 仍在编辑态")
+
+        try await library.saveScope(afterFull, known: ["a"], since: .all)
+        XCTAssertEqual(try store.selectedBucketIds(), ["a"], "原样保存不会误删已保存范围")
     }
 
     /// #1811：首次进范围页没有照片权限、授权回来也不自动补默认；一个来源都没选也能保存（空范围 = 不自动备份），
