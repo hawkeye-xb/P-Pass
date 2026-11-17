@@ -115,6 +115,9 @@
 "backup_scope" = "Backup range";
 "backup_scope_none" = "None selected";
 "backup_scope_unreadable" = "Can’t read the saved selection";
+"scope_sources" = "Backup sources";
+"scope_sources_albums" = "Albums";
+"scope_sources_folders" = "Folders";
 "storage_computer" = "Storage computer";
 "setting_wifi_only" = "Back up only on Wi-Fi";
 "wifi_off_confirm_title" = "Back up on mobile data?";
