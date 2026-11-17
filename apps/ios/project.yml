@@ -79,9 +79,11 @@ targets:
       - name: Stamp build time
         script: |
           PLIST="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          # 对齐 Android 的 trim：首尾空白与换行都不进版本行；值为空就只删键、不写。
+          stamp="$(printf '%s' "${PPF_BUILD_STAMP:-}" | tr -d '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           /usr/libexec/PlistBuddy -c "Delete :PPassBuildStamp" "$PLIST" 2>/dev/null || true
-          if [ -n "${PPF_BUILD_STAMP:-}" ]; then
-            /usr/libexec/PlistBuddy -c "Add :PPassBuildStamp string ${PPF_BUILD_STAMP}" "$PLIST"
+          if [ -n "$stamp" ]; then
+            /usr/libexec/PlistBuddy -c "Add :PPassBuildStamp string \"${stamp}\"" "$PLIST"
           fi
         inputFiles:
           - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)

@@ -325,6 +325,11 @@ build-stamp-check:
       recipe_body "$1" 'android-instrumented \*args:' | grep -Fq -- 'connectedDebugAndroidTest' &&
         recipe_body "$1" 'android-instrumented \*args:' | grep -Fq -- 'android.injected.androidTest.leaveApksInstalledAfterRun=true'
     }
+    has_ios_add() { # iOS 真正的 Add 行；注释和 Delete 行都不算
+      grep -Fq -- 'Add :PPassBuildStamp string' "$1"
+    }
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/ppass-stamp.XXXXXX")" || { ko "建临时目录失败，反证跑不了"; exit 1; }
+    trap 'rm -rf "$tmp"' EXIT
 
     # 1) 时间戳来源：只看 dev 配方正文，格式能分辨先后（MM-DD HH:MM）。
     if has_dev_stamp justfile; then ok "just dev 配方用 date 注入 PPF_BUILD_STAMP"; else ko "just dev 配方缺少时间戳注入"; fi
@@ -342,13 +347,20 @@ build-stamp-check:
     need apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt '${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})' "空 stamp 分支只显示版本号+构建号"
     need apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt '$buildStamp' "非空 stamp 追加到版本行"
 
-    # 3) iOS：构建期只有 PPF_BUILD_STAMP 非空才写 PPassBuildStamp；版本行空/非空两条分支都在。
+    # 3) iOS：构建期 trim 后非空才真正 Add PPassBuildStamp；版本行空/非空两条分支都在。
     need apps/ios/project.yml 'PPF_BUILD_STAMP' "iOS 构建读 PPF_BUILD_STAMP"
-    need apps/ios/project.yml 'PPassBuildStamp' "iOS 写 Info.plist 的 PPassBuildStamp"
-    need apps/ios/project.yml 'if [ -n "${PPF_BUILD_STAMP:-}" ]' "stamp 为空时不写 PPassBuildStamp"
+    if has_ios_add apps/ios/project.yml; then ok "iOS 真正 Add PPassBuildStamp（不是注释/Delete）"; else ko "iOS 没有真正的 Add :PPassBuildStamp 行"; fi
+    need apps/ios/project.yml 's/^[[:space:]]*//' "iOS 写入前 trim（对齐 Android）"
+    need apps/ios/project.yml 'if [ -n "$stamp" ]' "stamp 为空时不写 PPassBuildStamp"
     need apps/ios/PPass/Diagnostics/AppVersion.swift 'info["PPassBuildStamp"]' "AppVersion 读 PPassBuildStamp"
     need apps/ios/PPass/Diagnostics/AppVersion.swift 'let stamp = buildStamp.trimmingCharacters(in: .whitespaces)' "空/空白 stamp 归一处理"
     need apps/ios/PPass/Diagnostics/AppVersion.swift 'stamp.isEmpty ? base :' "空 stamp 只显示 base、非空追加"
+    # 真实写入含空格的值：拷一份 Info.plist 按构建阶段的做法 Add/Delete，再读回比对。
+    cp apps/ios/PPass/Info.plist "$tmp/Info.plist"
+    /usr/libexec/PlistBuddy -c "Delete :PPassBuildStamp" "$tmp/Info.plist" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c "Add :PPassBuildStamp string \"11-17 11:30\"" "$tmp/Info.plist"
+    got="$(/usr/libexec/PlistBuddy -c "Print :PPassBuildStamp" "$tmp/Info.plist" 2>/dev/null || true)"
+    if [ "$got" = "11-17 11:30" ]; then ok "iOS 含空格值写入/读回一致"; else ko "iOS 含空格值写入/读回不一致（得到「${got}」）"; fi
 
     # 4) 设备测试：只看 android-instrumented 正文；just android-test（JVM 单测）语义不变。
     if has_keep_apks justfile; then ok "android-instrumented 跑 connected 并带 keep-apks 参数"; else ko "android-instrumented 缺少 connected 命令或 keep-apks 参数"; fi
@@ -358,9 +370,7 @@ build-stamp-check:
       ok "just android-test 仍是 JVM 单测（未跑 connectedDebugAndroidTest）"
     fi
 
-    # 5) 反证：删掉时间戳注入 / 删掉 connected 命令后，上面的 recipe 级断言必须判红。
-    tmp="$(mktemp -d "${TMPDIR:-/tmp}/ppass-stamp.XXXXXX")" || { ko "建临时目录失败，反证跑不了"; exit 1; }
-    trap 'rm -rf "$tmp"' EXIT
+    # 5) 反证：删掉时间戳注入 / connected 命令 / iOS 的 Add 行后，上面的断言必须判红。
     grep -v 'export PPF_BUILD_STAMP=' justfile >"$tmp/justfile-no-stamp"
     if has_dev_stamp "$tmp/justfile-no-stamp"; then
       ko "反证：删掉时间戳注入后检查仍通过"
@@ -372,6 +382,12 @@ build-stamp-check:
       ko "反证：删掉 connected 命令后检查仍通过"
     else
       ok "反证：删掉 connected 命令 → 判红"
+    fi
+    grep -v 'Add :PPassBuildStamp' apps/ios/project.yml >"$tmp/project-no-add.yml"
+    if has_ios_add "$tmp/project-no-add.yml"; then
+      ko "反证：删掉 iOS 的 Add 行后检查仍通过"
+    else
+      ok "反证：删掉 iOS 的 Add 行 → 判红"
     fi
 
     exit "$fail"
