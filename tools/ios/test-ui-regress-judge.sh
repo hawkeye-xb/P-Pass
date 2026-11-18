@@ -8,10 +8,10 @@ RULES="$ROOT/tools/ios/ui-regress-rules.tsv"
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
-expect() { # $1 期望 PASS|FAIL $2 用例 $3 日志 $4 开跑 epoch $5 说明
+expect() { # $1 期望 PASS|FAIL $2 用例 $3 日志 $4 开跑 epoch $5 说明 [$6 开跑前的日志快照]
   local got
-  got=$(bash "$J" judge "$RULES" "$2" "$3" "$4" | cut -f1)
-  [ "$got" = "$1" ] || fail "$5：期望 $1，实际 ${got}（$(bash "$J" judge "$RULES" "$2" "$3" "$4" | cut -f2)）"
+  got=$(bash "$J" judge "$RULES" "$2" "$3" "$4" ${6+"$6"} | cut -f1)
+  [ "$got" = "$1" ] || fail "$5：期望 $1，实际 ${got}（$(bash "$J" judge "$RULES" "$2" "$3" "$4" ${6+"$6"} | cut -f2)）"
   echo "ok  $5 → $1"
 }
 iso() { python3 -I -c 'import datetime, sys; print(datetime.datetime.fromtimestamp(int(sys.argv[1])).astimezone().isoformat(timespec="milliseconds"))' "$1"; }
@@ -73,6 +73,22 @@ $(iso "$((NOW + 3))") process start: pid=200 version=0.11.0(1) appState=active
 $(iso "$((NOW + 3))") logs: Logs excluded from backup = true
 EOF
 expect FAIL DecisionScopeFull "$T/tolerance.log" "$NOW" "容差窗口里的上一例启动不许带进来"
+
+# 设备时钟比主机慢：本例的启动行落在开跑时刻之前，之后还有一条后台拉起的启动。
+# 有开跑前的日志快照时以快照为边界，本例自己的启动行不会被后台那条顶掉。
+cat >"$T/skew-base.log" <<EOF
+$(iso "$((NOW - 10))") process start: pid=90 version=0.11.0(1) appState=active
+$(iso "$((NOW - 9))") onboarding: decision shown
+EOF
+cat >"$T/skew.log" <<EOF
+$(iso "$((NOW - 10))") process start: pid=90 version=0.11.0(1) appState=active
+$(iso "$((NOW - 9))") onboarding: decision shown
+$(iso "$((NOW - 3))") process start: pid=100 version=0.11.0(1) appState=active
+$(iso "$((NOW - 1))") onboarding: decision shown
+$(iso "$NOW") onboarding: photo access after prompt=full
+$(iso "$((NOW + 5))") process start: pid=300 version=0.11.0(1) appState=active
+EOF
+expect PASS DecisionScopeFull "$T/skew.log" "$NOW" "有时钟差时按开跑前的日志快照切片" "$T/skew-base.log"
 
 # 未知用例、日志拉不回 ⇒ FAIL。
 expect FAIL NoSuchCase "$T/ok.log" "$NOW" "判定表里没有的用例"

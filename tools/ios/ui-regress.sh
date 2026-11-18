@@ -25,11 +25,12 @@ IOS="$ROOT/apps/ios"
 RULES_DEFAULT="$ROOT/tools/ios/ui-regress-rules.tsv"
 
 # ---- 判定：本例 App 进程的日志切片里，规则的通过行按顺序都出现 ----
-judge() { # $1 规则表 $2 用例 $3 日志 $4 开跑 epoch
+judge() { # $1 规则表 $2 用例 $3 日志 $4 开跑 epoch [$5 开跑前的日志快照]
   python3 -I -X utf8 - "$@" <<'PY'
 import re, sys
 from datetime import datetime
 rules_path, case, log_path, since = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
+baseline_path = sys.argv[5] if len(sys.argv) > 5 else ""
 rule = None
 for line in open(rules_path, encoding="utf-8"):
     if line.startswith("#") or not line.strip():
@@ -48,17 +49,38 @@ def ts(l):
         return datetime.fromisoformat(l.split(" ", 1)[0]).timestamp()
     except ValueError:
         return None
-# 本例的进程：**第一条**开跑时刻之后的 `process start: pid=`。
-# 不能取最后一条：用例跑完 App 被系统后台任务拉起时日志里会多一条启动，按最后一条切片会把通过行切掉（#1850 实测 8 次撞 3 次）。
-# 也不先吃 5 秒时钟容差：容差窗口里的启动行可能是上一例结束时被后台拉起的 App，会把上一例的行带进切片。
-# 只有开跑时刻之后一条启动都没有（设备与主机时钟差）时，才退回容差窗口里最早的那一条。
-cands = []
-for i, l in enumerate(lines):
-    if "process start: pid=" not in l: continue
-    t = ts(l)
-    if t is not None and t >= since - 5: cands.append((i, t))
-exact = [c for c in cands if c[1] >= since]
-start = (exact[0] if exact else cands[0])[0] if cands else None
+# 本例的进程：开跑前先把设备上的日志拉一份快照（$5），快照的最后一行的**下一条**就是本例的日志边界，
+# 边界之后第一条 `process start: pid=` 就是本例的启动——不靠时钟，上一例的行一定在边界之前。
+# 不能取最后一条启动：用例跑完 App 被系统后台任务拉起时日志里会多一条启动，按最后一条切片会把通过行切掉（#1850 实测 8 次撞 3 次）。
+# 没给快照、或快照对不上（日志轮转 / 拉不回来）时才退回按时间找：取开跑时刻之后的启动，再没有才用 5 秒时钟容差。
+def first_start(lo):
+    for k in range(lo, len(lines)):
+        if "process start: pid=" in lines[k]: return k
+    return None
+start = None
+base = []
+if baseline_path:
+    try:
+        base = [l for l in open(baseline_path, encoding="utf-8", errors="replace").read().splitlines() if l.strip()]
+    except OSError:
+        base = []
+boundary = None
+if baseline_path:
+    if not base:
+        boundary = 0  # 开跑前设备上还没有日志：整份都是本例的
+    else:
+        idx = next((k for k in range(len(lines) - 1, -1, -1) if lines[k] == base[-1]), None)
+        if idx is not None: boundary = idx + 1
+if boundary is not None:
+    start = first_start(boundary)
+else:
+    cands = []
+    for i, l in enumerate(lines):
+        if "process start: pid=" not in l: continue
+        t = ts(l)
+        if t is not None and t >= since - 5: cands.append((i, t))
+    exact = [c for c in cands if c[1] >= since]
+    start = (exact[0] if exact else cands[0])[0] if cands else None
 if start is None:
     print("FAIL\t日志里没有本例开跑之后的 App 启动行（process start）"); sys.exit(0)
 pid = re.search(r"pid=(\d+)", lines[start]).group(1)
@@ -279,6 +301,8 @@ FAILS=0
 run_case() { # $1 用例
   local c="$1" xlog="$OUT/$1.xcodebuild.log" since rc verdict reason
   desk_qr "$DESK" >/dev/null
+  # 开跑前的日志快照：判定以它为边界，不靠设备与主机的时钟（设备时钟落后时也不会把上一例的行带进来）。
+  pull_log "$OUT/$c.baseline.log"
   since=$(date +%s)
   : >"$xlog"
   allow_loop "$xlog" &
@@ -305,7 +329,7 @@ run_case() { # $1 用例
   ALLOW_PID=
   grep -E '^UIREG ' "$xlog" | grep -v 'DUMP_' | sed 's/^/    /' || true
   pull_log "$OUT/$c.ppass.log"
-  IFS=$'\t' read -r verdict reason < <(judge "$RULES_DEFAULT" "$c" "$OUT/$c.ppass.log" "$since")
+  IFS=$'\t' read -r verdict reason < <(judge "$RULES_DEFAULT" "$c" "$OUT/$c.ppass.log" "$since" "$OUT/$c.baseline.log")
   if [ "$rc" != 0 ]; then
     local why
     why=$(grep -E "error: -\[|XCTAssert|failed:|: error:" "$xlog" | grep -v '^UIREG' | head -1 | sed 's/^.*error: //' | cut -c1-200)
