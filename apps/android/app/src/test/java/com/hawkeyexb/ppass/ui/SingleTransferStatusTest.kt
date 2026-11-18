@@ -1,12 +1,23 @@
 package com.hawkeyexb.ppass.ui
 
+import com.hawkeyexb.ppass.backup.flow.InMemoryPickedStore
+import com.hawkeyexb.ppass.backup.picked.NewPicked
 import com.hawkeyexb.ppass.backup.picked.PickedBatchSummary
+import com.hawkeyexb.ppass.backup.picked.PickedState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+
+private fun newPicked(n: Int) = NewPicked(
+    uri = "content://test/$n",
+    fileName = "$n.jpg",
+    mimeType = "image/jpeg",
+    sizeBytes = 1L,
+    captureAtMs = 0L,
+)
 
 /**
  * #1789（父卡 #1784）：设置固定分组、两个单次入口只发起选择、单次状态只在英雄区出现。
@@ -69,6 +80,71 @@ class SingleTransferStatusTest {
         val killed = batch(total = 12, delivered = 9, open = 3)
         assertEquals(SingleTransferStatus.Line.Progress(done = 10, total = 12), SingleTransferStatus.heroLine(killed))
         assertEquals(0, killed.failed)
+    }
+
+    /** #1789 验收 3（评审 Ad 判红）：上一批还在传时再挑新一批，`summary()` 必须并成两批的汇总——
+     *  `latestBatch()` 只报新一批（对照），旧批的未结束项不能在英雄区消失。撤销修复（summary 改回按
+     *  MAX(batch_id) 过滤、或消费方改回 latestBatch）任一条都变红。
+     *  评审（#1878 建议 2）：按真实入口的顺序走——MainActivity 两个入口都是 enqueue 成功后先
+     *  clearSettled() 再读 summary()（评审 AP），上一批已送达的行此时被清掉：上一批剩 4 个未结束
+     *  （1 在传 3 排队）+ 新批 3 = 7 行全未结束，英雄区出「正在传 1/7」，不是 2/8；
+     *  「已送达的不丢」由 clearSettled 之前的对照断言锁住。 */
+    @Test
+    fun summary_spans_all_batches_while_the_previous_one_is_still_in_flight() {
+        val store = InMemoryPickedStore()
+        val first = store.addBatch((1..5).map(::newPicked))
+        assertTrue(first > 0)
+        // 上一批：1 送达、1 在传、3 还在排队。
+        store.mark(1, PickedState.DELIVERED)
+        store.mark(2, PickedState.TRANSFERRING)
+        // 用户又挑了 3 张（同 #1784 验收 3：相册选 2 项后文件选 3 项）。
+        val second = store.addBatch((6..8).map(::newPicked))
+        assertTrue(second > first)
+        // 入口同款时序（MainActivity.kt 两个单次入口）：登记成功 → 清已结算 → 读汇总。
+        // 上一批已送达的 1 行随这次选择被清掉；未结束的 4 行原样保留。
+        store.clearSettled()
+
+        val all = store.summary()
+        assertEquals("聚合覆盖两批：上一批 4 个未结束 + 新批 3 = 7 行", 7, all!!.total)
+        assertEquals(7, all.open)
+        assertEquals("已送达行已随入口清理", 0, all.delivered)
+        assertEquals(
+            "英雄区出进度句：正在传 1/7（在传那张算进度，与单批同口径）",
+            SingleTransferStatus.Line.Progress(done = 1, total = 7),
+            SingleTransferStatus.heroLine(all),
+        )
+        // 对照：latestBatch 的单批口径正是缺陷本体——只报新一批 3 行，旧批 4 个未结束在英雄区消失。
+        assertEquals(3, store.latestBatch()!!.total)
+
+        // 全部结算后（没有未结束项）：出结果句（验收「没有未结束项时，再显示结算结果」）。
+        (2L..5L).forEach { store.mark(it, PickedState.DELIVERED) }
+        (6L..8L).forEach { store.mark(it, PickedState.ALREADY_THERE) }
+        assertEquals(
+            SingleTransferStatus.Line.Result(delivered = 7, failed = 0),
+            SingleTransferStatus.heroLine(store.summary()),
+        )
+    }
+
+    /** #1789 验收 3 源文本门禁：MainActivity 的两个入口、轮询与 onboarding 两处都必须读跨批次聚合
+     *  summary()——改回 latestBatch() 就退回「只看单批汇总」的缺陷，本条红。 */
+    @Test
+    fun the_hero_feed_reads_the_cross_batch_summary_not_the_latest_batch() {
+        val main = mainActivity()
+        assertEquals(
+            "英雄区数据源全部换成跨批次聚合（5 处：相册入口 / 文件入口 / 轮询 / onboarding 两处）",
+            0,
+            Regex("\\.latestBatch\\(\\)").findAll(main).count(),
+        )
+        assertEquals(5, Regex("PickedUploads\\.store\\(context\\)\\.summary\\(\\)").findAll(main).count())
+        val store = File("src/main/java/com/hawkeyexb/ppass/backup/picked/PickedStore.kt").readText()
+        // 评审：按语句边界切出 summary() 的实现段整体断言——之前的负向正则 [^"'] 跨不过 SQL 里的
+        // 'pending' 这类引号，永远匹配不上，反证防线失效；这里改回单批口径（SQL 加 WHERE）必红。
+        val summarySql = store.substringAfter("override fun summary()", "").substringBefore("override fun clearSettled()")
+        assertTrue("summary() 实现必须存在（含 FROM picked 的全表查询）", summarySql.contains("FROM picked"))
+        assertTrue(
+            "summary() 必须是全表聚合，不许再按 MAX(batch_id) 过滤（改回去本条红）",
+            !summarySql.contains("WHERE"),
+        )
     }
 
     // ── ② 源文本门禁 ──────────────────────────────────────────────

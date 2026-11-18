@@ -320,7 +320,7 @@ fun PPassApp() {
                     registered
                 }.onFailure { PLog.w("PPassFlow", "picked: enqueue failed", it) }.getOrDefault(0)
                 if (count > 0) {
-                    pickedBatch = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch()
+                    pickedBatch = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).summary()
                     com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
                 }
             }
@@ -346,7 +346,7 @@ fun PPassApp() {
                     registered
                 }.onFailure { PLog.w("PPassFlow", "picked: file enqueue failed", it) }.getOrDefault(0)
                 if (count > 0) {
-                    pickedBatch = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch()
+                    pickedBatch = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).summary()
                     com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
                 }
             }
@@ -354,7 +354,7 @@ fun PPassApp() {
     }
     androidx.compose.runtime.LaunchedEffect(Unit) {
         while (true) {
-            pickedBatch = withContext(Dispatchers.IO) { runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch() }.getOrNull() }
+            pickedBatch = withContext(Dispatchers.IO) { runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).summary() }.getOrNull() }
             kotlinx.coroutines.delay(1000)
         }
     }
@@ -835,7 +835,7 @@ fun PPassApp() {
                 return@launch
             }
             pickedBatch = withContext(Dispatchers.IO) {
-                runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch() }.getOrNull()
+                runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).summary() }.getOrNull()
             }
             com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
             markDecided(pairing, "pick")
@@ -868,7 +868,7 @@ fun PPassApp() {
             PLog.i("PPassFlow", "onboarding: partial access registered $n allowed photos")
             if (n <= 0) return@launch
             pickedBatch = withContext(Dispatchers.IO) {
-                runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch() }.getOrNull()
+                runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).summary() }.getOrNull()
             }
             com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
         }

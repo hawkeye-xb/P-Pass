@@ -152,19 +152,28 @@ final class PickedUploadTests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(relaunched.nextOpen()).id, 12)
     }
 
+    /// #1789（评审 Ad 判红，对位 Android `summary_spans_all_batches…`）：上一批还在传时再挑新一批，
+    /// summary 必须并成两批的汇总——上一批的未结束项不能从英雄区消失（iOS 的 addBatch 并回同一批，
+    /// 这里锁死口径：改成「清了再开新批」本条就红）。
     func testNewSelectionAppendsWithoutReplacingOpenItems() throws {
         let q = PickedQueue(directory: TempDir().url)
         q.addBatch(["a.jpg", "b.jpg"].map { (fileName: $0, mimeType: "image/jpeg", payload: Stub()) })
+        // 上一批：1 送达、1 还在传（对应 Android 判红测试里 delivered=1、transferring=1、pending=3 的同一场景）。
+        q.mark(try XCTUnwrap(q.nextOpen()).id, .delivered)
         q.addBatch(["c.mov", "d.mov", "e.mov"].map { (fileName: $0, mimeType: "video/quicktime", payload: Stub()) })
 
-        XCTAssertEqual(q.summary()?.total, 5)
+        let s = try XCTUnwrap(q.summary())
+        XCTAssertEqual(s.total, 5, "两批并成一份汇总：上一批 2 + 新批 3，旧批未结束项不消失")
+        XCTAssertEqual(s.open, 4, "未结束 = 上一批 1 + 新批 3")
+        XCTAssertEqual(s.delivered, 1, "已送达的 1 张仍是已结算，不丢")
+        XCTAssertEqual(s.settled, 1)
         var names: [String] = []
         while let next = q.nextOpen() {
             names.append(next.fileName)
             q.mark(next.id, .delivered)
         }
-        XCTAssertEqual(names, ["a.jpg", "b.jpg", "c.mov", "d.mov", "e.mov"])
-        XCTAssertEqual(q.summary()?.delivered, 5)
+        XCTAssertEqual(names, ["b.jpg", "c.mov", "d.mov", "e.mov"], "引擎按挑选顺序续传两批的全部未结束项")
+        XCTAssertEqual(try XCTUnwrap(q.summary()).settled, 5)
     }
 
     func testSelectionAfterEverythingSettledStartsANewBatch() throws {

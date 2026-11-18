@@ -83,6 +83,13 @@ interface PickedStore {
     /** 最近一批；从没挑过 = null。 */
     fun latestBatch(): PickedBatchSummary?
 
+    /**
+     * 全部行的聚合（不按批次分组）：英雄区口径——#1789（评审 Ad，卡上产品定案「英雄区读取全部未结束
+     * 手选项，不能继续只看单批汇总」）：上一批还在传时再挑新一批，[latestBatch] 只报新一批，旧批的
+     * 未结束项在英雄区消失。这里把所有批次的行并成一份汇总；没有行 = null。
+     */
+    fun summary(): PickedBatchSummary?
+
     /** 用户看过结果后清掉已结束的行（保留未结束的）。 */
     fun clearSettled()
 
@@ -163,6 +170,17 @@ class SqlitePickedStore private constructor(private val helper: Helper) : Picked
             null,
         ).use { c ->
             if (!c.moveToFirst()) null else PickedBatchSummary(c.getLong(0), c.getInt(1), c.getInt(2), c.getInt(3), c.getInt(4), c.getInt(5))
+        }
+
+    @Synchronized
+    override fun summary(): PickedBatchSummary? =
+        db.rawQuery(
+            "SELECT COUNT(*), SUM(state IN ('pending','transferring')), SUM(state = 'delivered')," +
+                " SUM(state = 'already_there'), SUM(state = 'failed') FROM picked",
+            null,
+        ).use { c ->
+            if (!c.moveToFirst() || c.getInt(0) == 0) null
+            else PickedBatchSummary(0L, c.getInt(0), c.getInt(1), c.getInt(2), c.getInt(3), c.getInt(4))
         }
 
     @Synchronized

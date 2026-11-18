@@ -113,6 +113,8 @@ class PickedUploadsTest {
 
         override fun latestBatch(): PickedBatchSummary? = null
 
+        override fun summary(): PickedBatchSummary? = null
+
         override fun clearSettled() {
             rows.removeAll { !it.state.open }
         }
