@@ -21,7 +21,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import com.hawkeyexb.ppass.proto.ThumbSize
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,8 +29,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -138,24 +139,32 @@ fun VideoScreen(
 
     PPScreen(background = PPColor.SurfaceDark) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(
-                    stringResource(R.string.back), fontSize = 17.sp, color = PPColor.Paper,
-                    modifier = Modifier.clickable(onClick = onClose).padding(10.dp),
-                )
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // #1800：关闭与分享都用 Material3 IconButton——触控区、涟漪、
+                // role=Button 与 contentDescription 由组件给出，禁用态也自带语义。
+                IconButton(onClick = onClose) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = stringResource(R.string.back),
+                        tint = PPColor.Paper,
+                    )
+                }
                 // MOB-06: 右上角分享——ACTION_SEND 系统分享面板（微信/邮件/云盘…）。
                 // 仅 Ready 后可分享（未取到前无文件可发）。
-                Icon(
-                    imageVector = Icons.Filled.Share,
-                    contentDescription = stringResource(R.string.share),
-                    tint = PPColor.Paper,
-                    modifier = Modifier
-                        .clickable(
-                            enabled = !busy && state is VideoPhase.Ready,
-                            onClick = { runAssetAction(VideoOp.Share) },
-                        )
-                        .padding(10.dp),
-                )
+                IconButton(
+                    onClick = { runAssetAction(VideoOp.Share) },
+                    enabled = !busy && state is VideoPhase.Ready,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Share,
+                        contentDescription = stringResource(R.string.share),
+                        tint = PPColor.Paper,
+                    )
+                }
             }
             // 归因信息按需出现——网格不标来源，只有大图才显示。
             Text(
