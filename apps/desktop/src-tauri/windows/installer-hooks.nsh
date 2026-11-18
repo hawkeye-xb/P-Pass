@@ -325,6 +325,11 @@ Function PPassRegisterUpdateRecoveryTask
   ; 登记失败时把 PowerShell 的报错打进安装日志，E3 才有得查。
   ${If} $0 != 0
     DetailPrint "update-recovery task registration failed: $1"
+    ; 静默安装看不到 DetailPrint，落一份到 TEMP，E3 排查时能读到真实报错。
+    FileOpen $3 "$TEMP\ppass-update-recovery-task.log" w
+    FileWrite $3 "exit=$0$\r$\n"
+    FileWrite $3 "$1$\r$\n"
+    FileClose $3
   ${EndIf}
   ; nsExec 在异常情况下不一定压栈，Pop 到的可能是调用方的残留值；
   ; 所以先用 $R0 记「失败」，只有明确拿到 0 才改成成功。
