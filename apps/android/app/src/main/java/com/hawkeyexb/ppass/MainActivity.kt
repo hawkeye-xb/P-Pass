@@ -309,7 +309,42 @@ fun PPassApp() {
     ) { uris ->
         if (uris.isNotEmpty()) {
             scope.launch(Dispatchers.IO) {
-                val count = com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris)
+                // #1789（#1784）：已结束记录随下一次选择清理。评审 AP：清理放在**登记成功之后**——
+                // 先清再登记时，若登记失败，未结束批次里已结算的行已被删掉且无法恢复；登记成功后再清，
+                // 新批已在队列里顶替旧状态，失败时原状态原样保留。
+                // 与文件入口同一种写法，登记失败不把异常抛出协程外。
+                val count = runCatching {
+                    val store = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context)
+                    val registered = com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris)
+                    if (registered > 0) store.clearSettled()
+                    registered
+                }.onFailure { PLog.w("PPassFlow", "picked: enqueue failed", it) }.getOrDefault(0)
+                if (count > 0) {
+                    pickedBatch = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch()
+                    com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
+                }
+            }
+        }
+    }
+    // #1789「从文件选择」：SAF 系统文件选择器（SingleTransferFilePicker.intent：图片/视频、可多选）。
+    // 结果只走既有 Picked 队列（登记、URI 授权、去重沿用 #1786/#1840 链路），不授目录、不进备份范围；
+    // 取消（resultCode 不是 RESULT_OK 或没有 URI）不建任务。已结束记录同样随下一次选择清理。
+    val filePickLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        // 评审：解析复用 [SingleTransferFilePicker.urisFromResult]——SAF 多选装 clipData、单选落 data 的边界只写一处。
+        val uris = if (result.resultCode == android.app.Activity.RESULT_OK) {
+            com.hawkeyexb.ppass.ui.SingleTransferFilePicker.urisFromResult(result.data)
+        } else emptyList()
+        if (uris.isNotEmpty()) {
+            scope.launch(Dispatchers.IO) {
+                // 评审 AP：清理同样放在登记成功之后（相册入口同一理由）。
+                val count = runCatching {
+                    val store = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context)
+                    val registered = com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris)
+                    if (registered > 0) store.clearSettled()
+                    registered
+                }.onFailure { PLog.w("PPassFlow", "picked: file enqueue failed", it) }.getOrDefault(0)
                 if (count > 0) {
                     pickedBatch = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch()
                     com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
@@ -1308,6 +1343,8 @@ fun PPassApp() {
             // 先用存下的个数占位，IO 上查完相册再校正；照片权限变化、每次回到前台都重算。
             var selectedBucketCount by remember { mutableStateOf(BackupScopeStore(context).selectedBucketIds()?.size) }
             var selectedFolderCount by remember { mutableStateOf(0) }
+            // #1789 接线（#1788 判定）：目录来源是否可用——英雄区 folder-only 不被全局权限卡顶替（#1784 验收 5）。
+            var hasUsableFolder by remember { mutableStateOf(false) }
             // #1020：存了范围但读不出来——设置行说「读不到已保存的选择」，不说「未选定自动备份范围」。
             var scopeUnreadable by remember { mutableStateOf(false) }
             // #1263：范围的开始时间（设置行的值「3 个相册 · 10月29日起的照片」）。
@@ -1329,6 +1366,18 @@ fun PPassApp() {
                     val folderIds = com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords()
                         .mapTo(HashSet()) { it.bucketId }
                     com.hawkeyexb.ppass.backup.effectiveBackupScope(store.scope(), store.knownBucketIds(), folderIds, store.sinceSec())?.buckets
+                }
+                // #1789：目录来源可用性走引擎同源的判据（SourceAvailability.hasUsableFolder 复用
+                // effectiveBackupScope——勾选存值里的目录必须还在登记表里才算可用）。
+                hasUsableFolder = withContext(Dispatchers.IO) {
+                    val store = BackupScopeStore(context)
+                    val folderIds = com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords()
+                        .mapTo(HashSet()) { it.bucketId }
+                    com.hawkeyexb.ppass.backup.SourceAvailability.hasUsableFolder(
+                        selected = store.selectedBucketIds(),
+                        known = store.knownBucketIds() ?: emptySet(),
+                        existingFolders = folderIds,
+                    )
                 }
                 val folderIds = withContext(Dispatchers.IO) {
                     com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().mapTo(HashSet()) { it.bucketId }
@@ -1456,6 +1505,14 @@ fun PPassApp() {
                     )
                 },
                 backup = {
+                    // #1789 接线（#1788 判定、#1784 验收 5）：来源可用性——folder-only 与混合范围
+                    // 不被全局权限卡顶替；空范围缺的是来源不是权限，不出「去设置」。
+                    val homeAvailability = com.hawkeyexb.ppass.backup.SourceAvailability(
+                        autoRule = ruleOn,
+                        photoAccess = mediaAccess,
+                        hasUsableFolder = hasUsableFolder,
+                        hasSelectedAlbum = (selectedBucketCount?.minus(selectedFolderCount) ?: 0) > 0,
+                    )
                     HomeScreen(
                         storageName = s.pairing.storageDeviceName,
                         state = holder.state.value,
@@ -1579,6 +1636,12 @@ fun PPassApp() {
                             folderPicker.launch(null)
                         },
                         onFoldersOpenChange = { storageDetailOpen = it },
+                        // #1789：来源可用性输入（folder-only / 混合 / 空范围口径见 homeAvailability）。
+                        hasUsableSource = homeAvailability.hasUsableSource,
+                        mixedAlbumIncomplete = homeAvailability.mixedAlbumIncomplete,
+                        hasSelectedAlbum = homeAvailability.hasSelectedAlbum,
+                        // #1789：「从文件选择」——SAF 系统文件选择器，取消不建任务（见 filePickLauncher）。
+                        onPickFiles = { filePickLauncher.launch(com.hawkeyexb.ppass.ui.SingleTransferFilePicker.intent()) },
                         // T6: 备份范围——「选择相册」与「发起备份」两个动作。
                         // #836：按「已选且当前存在」计数，与选相册页同一口径。
                         selectedBucketCount = selectedBucketCount,

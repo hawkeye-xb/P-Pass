@@ -239,11 +239,13 @@ enum HomeProjection {
 
     /// 规则 H：权限不全 → 引导卡顶替整块数字（MOB-02/MOB-94：不显示任何数，就不可能盖「都存好了」的章）。
     /// #1811：还有可用来源时（folder-only / 混合里的目录）备份没停——纯目录照常显示进度；混合只把相册侧说成「未完整授权」。
+    /// #1788 评审定案（同判据接线，评审 Cf）：空范围缺的是**来源**不是权限——「自动备份已停止」只给真的选了
+    /// 相册的范围；空范围落到下面的正常分支（`noAlbums` 口径与 Android `heroScopeSavedOf` 一致）。
     static func heroRender(_ access: MediaAccess, _ t: BackupTriplet?, countsReadable: Bool = true, scopeSaved: Bool = true,
-                           hasUsableSource: Bool = false, mixedAlbumIncomplete: Bool = false) -> HeroRender {
+                           hasUsableSource: Bool = false, hasSelectedAlbum: Bool = true, mixedAlbumIncomplete: Bool = false) -> HeroRender {
         if access != .full {
             if mixedAlbumIncomplete { return .mixedAlbumIncomplete }
-            if !hasUsableSource { return .accessBlocked }
+            if !hasUsableSource && hasSelectedAlbum { return .accessBlocked }
         }
         if !countsReadable { return .countsUnreadable } // #973：账本读失败 ≠ 相册读不到，单独说
         // 范围从未保存时 triplet 必为 nil，但那不是「读不到」——别把没选相册说成读取失败。

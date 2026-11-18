@@ -146,8 +146,14 @@ fun heroRenderOf(
     triplet: BackupTriplet?,
     countsReadable: Boolean = true,
     scopeSaved: Boolean = true,
+    // #1789 接线（#1788 判定）：有可用来源（folder-only / 混合里的目录）时权限不全不再顶替进度——
+    // 目录仍在传，真实数字照常显示（#1784 验收 5，iOS `HomeProjection.heroRender` 同一条）。
+    hasUsableSource: Boolean = false,
+    // #1788 评审定案（同判据接线）：空范围缺的是**来源**不是权限——「自动备份已停止」只给真的选了
+    // 相册的范围；空范围落到下面的正常分支，与权限完整时空范围显示的是同一种状态。
+    hasSelectedAlbum: Boolean = true,
 ): HeroRender = when {
-    mediaAccess != MediaAccess.FULL -> HeroRender.AccessBlocked
+    mediaAccess != MediaAccess.FULL && !hasUsableSource && hasSelectedAlbum -> HeroRender.AccessBlocked
     !countsReadable -> HeroRender.CountsUnreadable
     triplet == null -> if (scopeSaved) HeroRender.Unreadable else HeroRender.NoAlbums
     // clamp 后的 m 恒 ≤ n，所以这里必须读 confirmedRaw：真机「23 / 23」那一例
@@ -217,8 +223,13 @@ fun visibleWaitReasonRes(
     pairingLost: Boolean,
     reasonRes: Int?,
     wifiOnly: Boolean = true,
+    // #1789 接线（#1788 判定）：folder-only 时英雄卡在显示真实进度（挂载点在场），等待原因照常说。
+    hasUsableSource: Boolean = false,
+    // #1789（评审 A4）：手选的传输不依赖相册权限——还有未结束的单次项时，ACCESS 不压制等待原因，
+    // 用户看得到文件传输为什么没开始（进程中断留在 pending/transferring 的行同样算 open）。
+    pickedOpen: Boolean = false,
 ): Int? {
-    if (mediaAccess != MediaAccess.FULL) return null
+    if (mediaAccess != MediaAccess.FULL && !hasUsableSource && !pickedOpen) return null
     if (pairingLost) return null
     if (state !is BackupUiState.Waiting) return null
     if (state.reason == WaitReason.WIFI && !wifiOnly) return R.string.backup_waiting_constraints
@@ -345,6 +356,14 @@ fun HomeScreen(
     onFolderReauthorize: (FolderUi) -> Unit = {},
     // 素材文件夹二级页打开/关闭时告知调用方（底部 Photos/设置 tab 栏同存储电脑详情页一样整体隐藏）。
     onFoldersOpenChange: (Boolean) -> Unit = {},
+    // #1789 接线（#1788 交付判定、本卡消费）：来源可用性输入——folder-only 不被全局权限卡顶替（验收 5），
+    // 混合范围只说相册侧。默认值 = 旧的纯相册口径，调用方不传时行为与 #1788 前一致。
+    hasUsableSource: Boolean = false,
+    mixedAlbumIncomplete: Boolean = false,
+    // #1788：已选相册（空范围缺的是来源，不是权限）——「去设置」出口只给真的选了相册的范围。
+    hasSelectedAlbum: Boolean = true,
+    // #1789：单次传输的「从文件选择」入口。
+    onPickFiles: () -> Unit = {},
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -426,8 +445,12 @@ fun HomeScreen(
         // ── 英雄卡：恒真三元组（M / N 张已回家 · 最近成功 · 待备份 K）──
         // MOB-02 §二: 部分授权下不显示假 0/0——引导卡顶替三元组，
         // 诚实说明「只授权了部分照片——备份需要完整相册权限」+ 去设置。
+        // #1789 接线（#1788 判定）：照片权限不全时，只有「没有可用来源」才是真的停了——
+        // folder-only 继续出真实进度（#1784 验收 5），混合范围单独说相册侧（iOS HeroCard 同一闸门）。
+        // 空范围缺的是来源不是权限，不算 blocked（[heroRenderOf] 同一判据）。
+        val heroBlocked = autoBackupRuleOn && mediaAccess != MediaAccess.FULL && !hasUsableSource && hasSelectedAlbum
         Surface(
-            color = if (autoBackupRuleOn && mediaAccess != MediaAccess.FULL) PPColor.ActBg else PPColor.SafeBg,
+            color = if (heroBlocked) PPColor.ActBg else PPColor.SafeBg,
             shape = RoundedCornerShape(PPSize.RadiusCard),
             modifier = Modifier.fillMaxWidth(),
         ) {
@@ -435,10 +458,23 @@ fun HomeScreen(
                 if (!autoBackupRuleOn) {
                     // #1272：没开自动备份是正常状态，不显示「无照片访问权限 / 还没有选择相册」。
                     Text(stringResource(R.string.auto_backup_off_hero), color = PPColor.Ink, fontSize = 15.sp)
-                } else if (mediaAccess != MediaAccess.FULL) {
+                } else if (mixedAlbumIncomplete) {
+                    // #1811 判据、#1789 接线：文件夹备份还在继续，只说相册侧的状态；
+                    // 出口只有一个「调整范围」（直接进范围页，iOS `adjustScopeFromIncompleteAlbum` 同一动作）。
+                    Text(stringResource(R.string.hero_mixed_album_incomplete), color = PPColor.Act, fontSize = 15.sp)
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = onOpenBucketPicker,
+                        modifier = Modifier.height(40.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.4f)),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = PPColor.Act),
+                    ) { Text(stringResource(R.string.hero_adjust_scope_action), fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+                } else if (mediaAccess != MediaAccess.FULL && !hasUsableSource && hasSelectedAlbum) {
                     Text(stringResource(R.string.auto_backup_blocked_hero), color = PPColor.Ink, fontSize = 15.sp)
                     // #1353：权限被收回（部分 / 全拒）后的唯一出口：去本 App 的系统设置页改回。开关保持开，回来按真实权限现算。
-                    if (blockedHeroOffersSettings(autoBackupRuleOn, mediaAccess)) {
+                    // #1788：空范围缺的是**来源**不是权限，去设置授权也不会添加来源，不出（hasSelectedAlbum）。
+                    if (blockedHeroOffersSettings(autoBackupRuleOn, mediaAccess, hasSelectedAlbum)) {
                         Spacer(Modifier.height(12.dp))
                         OutlinedButton(
                             onClick = onOpenAppSettings,
@@ -450,7 +486,8 @@ fun HomeScreen(
                     }
                 } else {
                 val t = triplet
-                val heroRender = heroRenderOf(mediaAccess, t, countsReadable = countsReadable, scopeSaved = scopeSaved)
+                val heroRender = heroRenderOf(mediaAccess, t, countsReadable = countsReadable, scopeSaved = scopeSaved,
+                    hasUsableSource = hasUsableSource, hasSelectedAlbum = hasSelectedAlbum)
                 if (heroRender == HeroRender.Triplet && t != null && t.n == 0L && t.m == 0L && scopeHasStart) {
                     // #1272 §5：「从某天起」且范围里还没有照片——空状态一句话（拍完回到 P-Pass，前台补捞会把它传上去）。
                     Text(stringResource(R.string.auto_backup_from_today_empty), color = PPColor.Ink, fontSize = 15.sp)
@@ -515,7 +552,11 @@ fun HomeScreen(
                         fontSize = 15.sp, color = PPColor.Ink60,
                     )
                 }
+                }
 
+                // ── #1784：进度区对自动与单次是同一块——自动备份关着也在这里承接单次传输的真实进度
+                //（iOS `render != .accessBlocked || !autoRule` 同一闸门）；blocked 卡顶替时不重复出。
+                if (!autoBackupRuleOn || !heroBlocked) {
                 Spacer(Modifier.height(14.dp))
                 // 设计稿：hero 内 border-top = rgba(46,107,79,.18)（绿系）。
                 HorizontalDivider(color = PPColor.Safe.copy(alpha = 0.18f))
@@ -594,22 +635,45 @@ fun HomeScreen(
                                     pairingLost = pairingLost,
                                     reasonRes = waitReasonRes,
                                     wifiOnly = wifiOnly,
+                                    hasUsableSource = hasUsableSource,
+                                    pickedOpen = (pickedBatch?.open ?: 0) > 0,
                                 )
-                            Text(
-                                if (waitReason != null) stringResource(waitReason) else idleStatusText(
+                            // #1789：自动备份关着是正常状态——Ready 不说「插电 + Wi-Fi 时自动进行」
+                            //（iOS Ready / 闸门不过时同样不出字），等待与进行中照常说话；
+                            // 单次传输的计数由下方 picked 行说，不在这里重复。
+                            val idleLine: String? = when {
+                                waitReason != null -> stringResource(waitReason)
+                                !autoBackupRuleOn -> when (line) {
+                                    is StatusLine.Pending -> pluralStringResource(R.plurals.state_pending, line.k.toInt(), line.k)
+                                    is StatusLine.AllSafe ->
+                                        if (allSafeTextAllowed(
+                                                mediaAccess = mediaAccess,
+                                                triplet = triplet,
+                                                pairingLost = pairingLost,
+                                                missingSourceCount = missingSourceNotice?.count ?: 0,
+                                            )
+                                        ) stringResource(R.string.state_safe) else null
+                                    else -> null
+                                }
+                                else -> idleStatusText(
                                     line,
                                     // UI-16 规则 S：文字版的绿色谎言走同一组闸门。
                                     allSafeTextAllowed(
                                         mediaAccess = mediaAccess,
-                                        triplet = t,
+                                        triplet = triplet,
                                         pairingLost = pairingLost,
                                         missingSourceCount = missingSourceNotice?.count ?: 0,
                                     ),
                                     backgroundBackupState,
                                     wifiOnly,
-                                ),
-                                fontSize = 13.5.sp, color = PPColor.Ink60,
-                            )
+                                )
+                            }
+                            if (idleLine != null) {
+                                Text(
+                                    idleLine,
+                                    fontSize = 13.5.sp, color = PPColor.Ink60,
+                                )
+                            }
                         }
                     }
                     // UX-13: 按钮**留在原地**，只换文案——进行中「暂停」，
@@ -639,6 +703,28 @@ fun HomeScreen(
                     // #418：英雄区原来这里有 MOB-89 的「取消当前轮」降级动作——取消轮已经没有了，
                     // 取消的唯一入口是下方设置卡的「取消剩余 N 张」（带写明 N 的确认框）。
                 }
+                }
+                // ── #1784：单次传输状态只在英雄区出现——进行中的「正在传 x/y」与结算结果句。
+                // 进程被杀没传完的不算失败（验收 4）：Android 的手选行留在 pending/transferring，
+                // 下次打开由引擎按挑选顺序续传——它们仍是 open，出的是进度句不是失败句。
+                // #1789（评审）：手选传输不依赖相册权限——权限卡顶替自动备份时这行照样在场
+                //（iOS HeroCard 同一闸门），否则用户从文件选择发起的传输在 blocked 时完全看不见。
+                SingleTransferStatus.heroLine(pickedBatch)?.let { picked ->
+                    Spacer(Modifier.height(8.dp))
+                    when (picked) {
+                        is SingleTransferStatus.Line.Progress -> Text(
+                            stringResource(R.string.picked_progress, picked.done, picked.total),
+                            fontSize = 13.sp, color = PPColor.Ink60,
+                        )
+                        is SingleTransferStatus.Line.Result -> {
+                            val head = picked.delivered?.let { stringResource(R.string.picked_result_delivered, it) }
+                            val tail = picked.failed.takeIf { it > 0 }?.let { stringResource(R.string.picked_result_failed, it) }
+                            Text(
+                                listOfNotNull(head, tail).joinToString(" · "),
+                                fontSize = 13.sp, color = PPColor.Ink60,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -778,14 +864,13 @@ fun HomeScreen(
                 )
             )
         }
-        // ── "备份"（M10，全页面状态稿）：4 行——第 1 行导航到选相册，
-        // 后 3 行是直接开关（不折进子页——用户实机反馈上一轮把充电/
-        // WiFi 折进"什么时候备份"子页是自己想当然加的一层，设计稿就是
-        // 摆开的开关行；"备份失败时通知我"落地成真实偏好，见
-        // NotifyOnFailurePrefs）。2026-09-14（用户拍板）：去掉"备份"
-        // 这个 section 标签——整页就是备份设置页，标签是信息增量为 0
-        // 的重复；卡片边框本身已把这些行圈成一组。
+        // ── #1784：设置按「自动备份 / 单次传输 / 传输条件与通知 / 更多」固定分组，组序由
+        // SingleTransferStatusTest 锁死；条件行只在原组内显隐，分组不移动。真有问题时上方
+        // 的红卡与告示自然出现（「需要注意」），不在这里重复。
+        // 2026-09-14（用户拍板）仍成立：组内不贴 section 标签——组的第一行（自动备份开关 /
+        // 从相册选择 / 仅 Wi-Fi / 更多）就是这组的名字，标签是信息增量为 0 的重复。
         Spacer(Modifier.height(18.dp))
+        // ── #1789 固定分组 1/4「自动备份」：开关、范围与它的条件行（取消剩余 / 已跳过 / 源已删除账目）。
         Surface(
             color = PPColor.Paper,
             shape = RoundedCornerShape(PPSize.RadiusCard),
@@ -800,15 +885,6 @@ fun HomeScreen(
                     hint = autoBackupRuleHintRes?.let { stringResource(it) },
                     hintColor = PPColor.Waiting,
                 )
-                // #1272：没开自动备份时「挑几张传」排在紧挨开关的位置；开着时降级到「通知」下面，普通行。
-                if (!autoBackupRuleOn) {
-                    HorizontalDivider(color = PPColor.Divider)
-                    CellRow(
-                        label = stringResource(R.string.pick_photos_label),
-                        value = pickedBatch?.let { pickedBatchLine(it) },
-                        onClick = onPickPhotos,
-                    )
-                }
                 // #1794：「备份范围」入口常驻（对齐 iOS）——自动备份关着、没有照片权限也进得去管理文件夹。
                 HorizontalDivider(color = PPColor.Divider)
                 CellRow(
@@ -855,26 +931,6 @@ fun HomeScreen(
                         onHintClick = onResolveBackgroundBackup,
                     )
                 }
-                HorizontalDivider(color = PPColor.Divider)
-                RuleSwitchRow(
-                    label = stringResource(R.string.setting_wifi_only),
-                    checked = wifiOnly,
-                    onCheckedChange = onWifiOnlyChange,
-                )
-                HorizontalDivider(color = PPColor.Divider)
-                RuleSwitchRow(
-                    label = stringResource(R.string.rule_notify),
-                    checked = notifyOnFailure,
-                    onCheckedChange = onNotifyOnFailureChange,
-                )
-                if (autoBackupRuleOn) {
-                    HorizontalDivider(color = PPColor.Divider)
-                    CellRow(
-                        label = stringResource(R.string.pick_photos_label),
-                        value = pickedBatch?.let { pickedBatchLine(it) },
-                        onClick = onPickPhotos,
-                    )
-                }
                 // #418：「取消剩余 N 张」——跟「备份哪些相册」同属「这次备份包含什么」的
                 // 语义线。N 与引擎取消时写下的张数是同一个函数算的；点了先现算一次 N，
                 // 再弹确认框写明 N。取消掉的照片进下面「已跳过的照片」那一行，可以恢复。
@@ -911,15 +967,70 @@ fun HomeScreen(
                         ),
                     )
                 }
-                // 2026-11-03（产品负责人）：「更多」不再单独一张卡，并进上面的设置卡；
-                // 点进去仍是原来的二级页（存储电脑详情、版本、检查更新）。
+            }
+        }
+
+        Spacer(Modifier.height(18.dp))
+        // ── #1789 固定分组 2/4「单次传输」：固定两行「从相册选择」「从文件选择」，
+        // 两行只发起选择，不显示进度、结果或最近一批——状态只在英雄区出现（#1784）。
+        Surface(
+            color = PPColor.Paper,
+            shape = RoundedCornerShape(PPSize.RadiusCard),
+            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column {
+                CellRow(
+                    label = stringResource(R.string.pick_from_photos_label),
+                    onClick = onPickPhotos,
+                )
                 HorizontalDivider(color = PPColor.Divider)
+                CellRow(
+                    label = stringResource(R.string.pick_from_files_label),
+                    onClick = onPickFiles,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(18.dp))
+        // ── #1789 固定分组 3/4「传输条件与通知」：仅 Wi-Fi 与失败通知两个开关。
+        Surface(
+            color = PPColor.Paper,
+            shape = RoundedCornerShape(PPSize.RadiusCard),
+            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column {
+                RuleSwitchRow(
+                    label = stringResource(R.string.setting_wifi_only),
+                    checked = wifiOnly,
+                    onCheckedChange = onWifiOnlyChange,
+                )
+                HorizontalDivider(color = PPColor.Divider)
+                RuleSwitchRow(
+                    label = stringResource(R.string.rule_notify),
+                    checked = notifyOnFailure,
+                    onCheckedChange = onNotifyOnFailureChange,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(18.dp))
+        // ── #1789 固定分组 4/4「更多」：点进去仍是原来的二级页（存储电脑详情、版本、检查更新）。
+        Surface(
+            color = PPColor.Paper,
+            shape = RoundedCornerShape(PPSize.RadiusCard),
+            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column {
                 CellRow(
                     label = stringResource(R.string.more_label),
                     onClick = { showMore = true; onStorageDetailOpenChange(true) },
                 )
             }
         }
+        // ── #1789 固定分组结束
 
         Spacer(Modifier.height(8.dp))
     }
@@ -1312,16 +1423,10 @@ private fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)?
     }
 }
 
-/** #1272：手选这一批的进度 / 结果句（大卡片下的一行）。没挑过 = null。 */
-@Composable
-private fun pickedBatchLine(batch: com.hawkeyexb.ppass.backup.picked.PickedBatchSummary): String? {
-    if (batch.open > 0) return stringResource(R.string.picked_progress, batch.settled + 1, batch.total)
-    val reached = batch.delivered + batch.alreadyThere
-    // 只说送达几张；「其中几张电脑上已有」是实现细节，用户不需要（产品负责人 2026-11-04）。
-    val head = if (reached == 0) null else stringResource(R.string.picked_result_delivered, reached)
-    val tail = if (batch.failed > 0) stringResource(R.string.picked_result_failed, batch.failed) else null
-    return listOfNotNull(head, tail).joinToString(" · ").ifEmpty { null }
-}
-
-/** #1353：「自动备份已停止」状态卡带「去设置」——开关开着、照片权限不全（部分 / 全拒）。开关关着是正常状态，不给。 */
-internal fun blockedHeroOffersSettings(ruleOn: Boolean, access: MediaAccess): Boolean = ruleOn && access != MediaAccess.FULL
+/**
+ * #1353：「自动备份已停止」状态卡带「去设置」——开关开着、照片权限不全（部分 / 全拒）。
+ * #1788 两态口径：空范围缺的是**来源**不是权限，去设置授权也不会添加来源，不出（`hasSelectedAlbum`）；
+ * 有可用目录来源（folder-only / 混合）时备份没停，英雄区分支另行处理，这张卡整个不出。开关关着是正常状态，不给。
+ */
+internal fun blockedHeroOffersSettings(ruleOn: Boolean, access: MediaAccess, hasSelectedAlbum: Boolean = true): Boolean =
+    ruleOn && access != MediaAccess.FULL && hasSelectedAlbum

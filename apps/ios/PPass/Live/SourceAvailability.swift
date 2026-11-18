@@ -22,7 +22,9 @@ struct SourceAvailability: Equatable, Sendable {
     var hasUsableSource: Bool { hasUsableFolder || (photoAccess == .full && hasSelectedAlbum) }
 
     /// 纯相册范围、照片权限未完整：自动备份真的停了，出停止状态并带「去设置」。
-    var showsGlobalPhotoBlock: Bool { autoRule && photoAccess != .full && !hasUsableFolder }
+    /// #1788 同判据同步债（归 #1789 接线时处理，对齐 Android `SourceAvailability`）：空范围缺的是
+    /// **来源**不是权限，去设置授权也不会添加来源——只有真的选了相册才报这条。
+    var showsGlobalPhotoBlock: Bool { autoRule && photoAccess != .full && !hasUsableFolder && hasSelectedAlbum }
     /// 目录 + 相册混合、照片权限未完整：文件夹还在传，只把相册侧说成「未完整授权」并给「调整范围」出口。
     var mixedAlbumIncomplete: Bool { autoRule && photoAccess != .full && hasUsableFolder && hasSelectedAlbum }
     /// 没有照片权限时，仍有目录来源（folder-only / 混合）不显示相册-only 的停止提示。

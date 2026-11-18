@@ -9,8 +9,11 @@ struct HeroCard: View {
 
     var body: some View {
         let triplet = app.triplet
-        let render = HomeProjection.heroRender(app.access, triplet, countsReadable: app.facts.countsReadable, scopeSaved: app.scope != nil,
+        // scopeSaved 口径对齐 Android `heroScopeSavedOf`：有效范围非空（含已登记目录）就不说「未选定自动备份范围」；
+        // 保存过空集也算「未选定」（旧口径 `app.scope != nil` 会把空范围说成「相册数量读取失败」）。
+        let render = HomeProjection.heroRender(app.access, triplet, countsReadable: app.facts.countsReadable, scopeSaved: !app.noAlbums,
                                                hasUsableSource: app.backupAvailability.hasUsableSource,
+                                               hasSelectedAlbum: app.sourceAvailability.hasSelectedAlbum,
                                                mixedAlbumIncomplete: app.showsMixedAlbumIncomplete)
         Section {
             VStack(alignment: .leading, spacing: 0) {
@@ -52,12 +55,22 @@ struct HeroCard: View {
                     Rectangle().fill(PPColor.safe.opacity(0.18)).frame(height: 1)
                         .padding(.top, PPUI.Layout.heroDividerAbove).padding(.bottom, PPUI.Layout.heroDividerBelow)
                     progressRow
-                    // #1272：上次挑的几张没传完时进程被杀了——只在这里说一句，数字按实际。
-                    if let line = HomeProjection.pickedInterruptedLine(app.pickedBatch) {
-                        Text(line).font(PPFont.sans(PPUI.TextSize.statusLine, .medium, relativeTo: .footnote))
-                            .foregroundStyle(PPColor.waiting).padding(.top, 8)
-                            .accessibilityIdentifier("pickedInterrupted")
-                    }
+                }
+                // #1784：单次传输状态只在英雄区出现——进行中的「正在传 x/y」与结算结果句。
+                // 进程被杀没传完的不算失败（验收 4）：iOS 的手选句柄随进程没了，批次标记 interrupted，
+                // pickedLine 对 interrupted 一律 nil，下面那行「上次挑的 N 张有 M 张没传完」单独说话。
+                // #1789（评审 CG）：手选传输不依赖相册权限——权限卡顶替自动备份时这两行照样在场，
+                // 否则用户从文件选择发起的传输在 blocked 时完全看不见（Android HomeScreen 同一闸门）。
+                if let line = HomeProjection.pickedLine(app.pickedBatch) {
+                    Text(line).font(PPFont.sans(PPUI.TextSize.statusLine, .medium, relativeTo: .footnote))
+                        .foregroundStyle(PPColor.ink60).padding(.top, 8)
+                        .accessibilityIdentifier("pickedStatus")
+                }
+                // #1272：上次挑的几张没传完时进程被杀了——只在这里说一句，数字按实际。
+                if let line = HomeProjection.pickedInterruptedLine(app.pickedBatch) {
+                    Text(line).font(PPFont.sans(PPUI.TextSize.statusLine, .medium, relativeTo: .footnote))
+                        .foregroundStyle(PPColor.waiting).padding(.top, 8)
+                        .accessibilityIdentifier("pickedInterrupted")
                 }
             }
             .padding(.vertical, 6)

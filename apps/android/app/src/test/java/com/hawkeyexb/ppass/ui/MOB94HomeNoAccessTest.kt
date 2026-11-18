@@ -42,13 +42,96 @@ class MOB94HomeNoAccessTest {
     fun the_hero_card_is_gated_on_full_access_not_on_partial_alone() {
         val source = homeScreen()
 
+        // #1789 接线（#1788 交付判定、本卡消费）：blocked 分支必须同时要求「不是 FULL」与「没有可用来源」——
+        // 漏掉后者会把 folder-only 也压成「自动备份已停止」，正是验收 5 要挡的「全局权限卡顶替真实进度」。
+        // 评审 Bg：断言限定到渲染 blocked 卡的分支行（heroBlocked 赋值与 else-if 分支），
+        // 不再全文件匹配——同名判据在 heroRenderOf / visibleWaitReasonRes 里出现是正常的。
+        val blockedLine = source.lineSequence().firstOrNull { it.contains("val heroBlocked =") }
+        assertTrue("英雄卡要有一处 blocked 汇总判据（heroBlocked）", blockedLine != null)
         assertTrue(
-            "hero 卡的判据必须是「不是 FULL」——只看 partial 会把全拒放进正常分支，那正是本卡的 bug",
-            source.contains("} else if (mediaAccess != MediaAccess.FULL) {"),
+            "blocked 汇总判据必须是「开关开 且 不是 FULL 且没有可用来源 且 已选相册」",
+            blockedLine!!.contains("autoBackupRuleOn && mediaAccess != MediaAccess.FULL && !hasUsableSource && hasSelectedAlbum"),
+        )
+        val blockedBranch = source.lineSequence().firstOrNull { it.trimStart().startsWith("} else if (mediaAccess != MediaAccess.FULL") }
+        assertTrue(
+            "渲染分支判据必须带 hasSelectedAlbum——空范围缺的是来源不是权限",
+            blockedBranch?.contains("&& hasSelectedAlbum") == true,
         )
         assertFalse(
             "不许再留布尔 partialAccess 参数——两档互斥，布尔并列表示不了",
             source.contains("partialAccess: Boolean"),
+        )
+    }
+
+    /**
+     * #1789（#1788 评审定案接线，评审 Ak）：空范围（没有已选相册）缺的是**来源**不是权限——
+     * 权限不完整也不出「自动备份已停止」（[HeroRender.AccessBlocked]），落到空范围自己的状态；
+     * 真的选了相册且没有可用目录时照旧报权限阻断。判据本体 [heroRenderOf] 是纯函数，JVM 直接测——
+     * 反证：heroRenderOf 第一分支去掉 `hasSelectedAlbum` 条件，前两条红。
+     */
+    @Test
+    fun empty_scope_does_not_render_the_access_blocked_hero() {
+        val t = com.hawkeyexb.ppass.backup.tripletOf(n = 10, confirmedCount = 3, lastSuccessAt = 1)
+        for (blocked in listOf(MediaAccess.PARTIAL, MediaAccess.NONE)) {
+            org.junit.Assert.assertNotEquals(
+                "空范围 + $blocked：缺的是来源，不出权限引导卡",
+                HeroRender.AccessBlocked,
+                heroRenderOf(blocked, t, hasUsableSource = false, hasSelectedAlbum = false),
+            )
+            org.junit.Assert.assertEquals(
+                "已选相册 + $blocked + 没有可用目录：照旧出权限引导卡",
+                HeroRender.AccessBlocked,
+                heroRenderOf(blocked, t, hasUsableSource = false, hasSelectedAlbum = true),
+            )
+        }
+    }
+
+    /**
+     * #1789（评审 A4）：手选的传输不依赖相册权限——还有未结束的单次项时，等待原因不被 ACCESS 压制，
+     * 用户看得到文件传输为什么没开始。反证：visibleWaitReasonRes 的 ACCESS 判据去掉 `!pickedOpen`，本条红。
+     */
+    @Test
+    fun picked_transfer_wait_reason_is_not_suppressed_by_album_access() {
+        val wifi = BackupUiState.Waiting(com.hawkeyexb.ppass.backup.flow.WaitReason.WIFI)
+        val res = com.hawkeyexb.ppass.R.string.wifi_deferred_hint
+        org.junit.Assert.assertEquals(
+            "自动备份开着 + 权限不全 + 没有可用来源：没有单次在途时照旧压制",
+            null,
+            visibleWaitReasonRes(wifi, MediaAccess.PARTIAL, pairingLost = false, reasonRes = res, hasUsableSource = false, pickedOpen = false),
+        )
+        org.junit.Assert.assertEquals(
+            "有未结束的单次项：等待原因照常说（文件传输不需要相册权限）",
+            res,
+            visibleWaitReasonRes(wifi, MediaAccess.PARTIAL, pairingLost = false, reasonRes = res, hasUsableSource = false, pickedOpen = true),
+        )
+    }
+
+    /**
+     * #1789（#1784 验收 5，真行为测试）：folder-only 且照片权限非完整时，英雄区仍显示真实进度与等待原因，
+     * 不被全局权限卡顶替。判据本体 [heroRenderOf] / [visibleWaitReasonRes] 是纯函数，JVM 直接测——
+     * 反证：任一处把「不是 FULL 且没有可用来源」改回只看 access，对应断言红。
+     */
+    @Test
+    fun folder_only_keeps_the_real_progress_and_wait_reason_when_photo_access_is_not_full() {
+        val t = com.hawkeyexb.ppass.backup.tripletOf(n = 10, confirmedCount = 3, lastSuccessAt = 1)
+        for (blocked in listOf(MediaAccess.PARTIAL, MediaAccess.NONE)) {
+            org.junit.Assert.assertEquals(
+                "folder-only：$blocked 照常渲染三元组，不出权限引导卡",
+                HeroRender.Triplet,
+                heroRenderOf(blocked, t, hasUsableSource = true),
+            )
+            org.junit.Assert.assertEquals(
+                "纯相册：$blocked 仍然出权限引导卡（不显示假 0/0）",
+                HeroRender.AccessBlocked,
+                heroRenderOf(blocked, t, hasUsableSource = false),
+            )
+        }
+        val wifi = BackupUiState.Waiting(com.hawkeyexb.ppass.backup.flow.WaitReason.WIFI)
+        val res = com.hawkeyexb.ppass.R.string.wifi_deferred_hint
+        org.junit.Assert.assertEquals(
+            "folder-only 等 Wi-Fi：等待原因照常说",
+            res,
+            visibleWaitReasonRes(wifi, MediaAccess.PARTIAL, pairingLost = false, reasonRes = res, hasUsableSource = true),
         )
     }
 

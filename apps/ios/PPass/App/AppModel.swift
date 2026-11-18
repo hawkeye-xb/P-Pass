@@ -221,8 +221,10 @@ final class AppModel: ObservableObject {
                            isTransferring: uiState.isRunning)
     }
 
-    /// #1353：「自动备份已停止」状态卡带「去设置」——纯相册范围、照片权限不全。开关关着是正常状态，不给。
+    /// #1353：「自动备份已停止」状态卡带「去设置」——纯相册范围、照片权限不全。
     /// #1811 两态口径：有可用目录来源（folder-only / 混合）时备份没停，同样不给「去设置」。
+    /// #1789 接线（#1788 同判据）：空范围缺的是**来源**不是权限，去设置授权也不会添加来源——
+    /// 「已停止」与「去设置」都只给真的选了相册的范围（`SourceAvailability.showsGlobalPhotoBlock` 带 `hasSelectedAlbum`）。
     /// 开关本身不动；回到前台 `refresh` 重读真实权限，变成全部就不再是这张卡（对位 Android `blockedHeroOffersSettings`）。
     /// `hasUsableFolder` 默认 false = 旧的纯相册口径；生产路径读实例版（`sourceAvailability.showsGlobalPhotoBlock`）。
     nonisolated static func blockedHeroOffersSettings(autoRule: Bool, access: MediaAccess, hasUsableFolder: Bool = false) -> Bool {
@@ -409,6 +411,19 @@ final class AppModel: ObservableObject {
         // #1119：配对被清掉（被拒即清理）→ 回欢迎页。界面不在欢迎页（含选相册 / 首次备份）而配对没了，就是这一种。
         let next = Self.phase(phase, whenPairing: pairing)
         if next != phase { AppLog.log("pairing cleared while in \(phase); back to onboarding"); tab = .photos; phase = next }
+        rereadSavedScope()
+        wifiOnly = backend.engine.wifiOnly()
+        autoBackup = backend.engine.autoBackup()
+        backgroundCardDismissed = backend.engine.backgroundCardDismissed()
+        notifyOnFailure = backend.engine.notifyOnFailure()
+        // 系统「后台 App 刷新」的真实状态：回到前台（sceneBecameActive → refresh）时重读，用户在系统设置里改了回来就生效。
+        backgroundRefresh = backend.engine.backgroundRefresh()
+        backgroundNotice = Self.backgroundNotice(backgroundRefresh, backgroundRequested: autoBackup)
+        folderCount = backend.engine.folderSourceCount()
+    }
+
+    /// 已保存范围三件套（勾选 / 时间档 / known）+ 读不出标记。只读盘，不写任何值——范围页里未保存的勾选不受影响。
+    private func rereadSavedScope() {
         do {
             scope = try backend.media.savedScope()
             since = try backend.media.savedSince()
@@ -420,19 +435,14 @@ final class AppModel: ObservableObject {
             since = nil
             scopeUnreadable = true
         }
-        wifiOnly = backend.engine.wifiOnly()
-        autoBackup = backend.engine.autoBackup()
-        backgroundCardDismissed = backend.engine.backgroundCardDismissed()
-        notifyOnFailure = backend.engine.notifyOnFailure()
-        // 系统「后台 App 刷新」的真实状态：回到前台（sceneBecameActive → refresh）时重读，用户在系统设置里改了回来就生效。
-        backgroundRefresh = backend.engine.backgroundRefresh()
-        backgroundNotice = Self.backgroundNotice(backgroundRefresh, backgroundRequested: autoBackup)
-        folderCount = backend.engine.folderSourceCount()
     }
 
     /// #1763：二级页的添加 / 移除 / 重新授权动作之后重读登记数（设置行值跟着变）。
+    /// #1789（评审 CV）：移除文件夹源会把 folder: 项从**磁盘已保存范围**里一起删掉（LiveBackend.removeFolderSource），
+    /// 这里必须连同已保存范围一起重读——只读登记数会让「素材文件夹 N」继续按旧 scope 勾选显示移除前的个数。
     func refreshFolderCount() {
         folderCount = backend.engine.folderSourceCount()
+        rereadSavedScope()
     }
 
     /// 「取消剩余 N 张」行的 N（Android cancelRemainingRowCount）：只在已暂停 / 等待中、配对没失效、确有剩余时出现。
@@ -529,6 +539,16 @@ final class AppModel: ObservableObject {
     var selectedAlbumCount: Int? {
         let albumScope = scope?.filter { !$0.hasPrefix("folder:") }
         return ScopePolicy.selectedExistingCount(selected: albumScope, existing: existingAlbums)
+    }
+
+    /// #1789：备份范围行值里的「素材文件夹 N」（对位 Android `selectedFolderCount`）：新版按勾选存值里的目录数；
+    /// known 里有目录、勾选里没有 = 明确取消过，不算；旧版没有勾选存值按当前登记数读现状
+    /// （与 `SourceAvailability.hasUsableFolder` 同一份判据，非零 ⇔ 有可用目录来源）。
+    var selectedFolderCount: Int {
+        let folderIds = scope?.filter { $0.hasPrefix("folder:") } ?? []
+        if !folderIds.isEmpty { return folderIds.count }
+        let unified = knownScopeIds.union(scope ?? []).contains { $0.hasPrefix("folder:") }
+        return unified ? 0 : folderCount
     }
 
     /// 范围从未保存、保存了空集、或所有已选来源都不在范围内。旧版目录按当前登记状态保持有效。
