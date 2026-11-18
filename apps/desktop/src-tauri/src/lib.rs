@@ -4465,9 +4465,7 @@ mod tests {
             .find("Get-Content -LiteralPath")
             .expect("动作没有先读 wanted-state");
         let stopped = action.find("-match \"stopped\"").expect("缺 stopped 判定");
-        let stop_return = action
-            .find("return")
-            .expect("stopped 分支没有 return");
+        let stop_return = action.find("return").expect("stopped 分支没有 return");
         let catch = action.find("catch {").expect("读失败没有 catch 分支");
         let sc_start = action.find("& sc.exe start").expect("缺 sc.exe start");
         assert!(
