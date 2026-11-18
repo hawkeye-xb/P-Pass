@@ -621,6 +621,34 @@ fi
   touch "$out/P-Pass_0.10.2_android-debug.apk"
   [ "$(dev_android_apk)" = "$out/P-Pass_0.10.2_android-debug.apk" ] || { echo "没取到最新的改名包：$(dev_android_apk)"; exit 1; }
 ) || bad "just dev android 找改名后的 debug 包"
+
+# #1842 devicectl 不接受空的环境对象（`{}` 报 Unable to decode environment variables）：没有页面就不传这个参数，
+# 有页面才传 PPASS_ROUTE。假 xcrun 只记参数，不碰设备。
+(
+  d="$(mktemp -d)" || exit 1
+  trap 'rm -rf "$d"' EXIT
+  mkdir -p "$d/bin"
+  cat >"$d/bin/xcrun" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_XCRUN_LOG"
+STUB
+  chmod +x "$d/bin/xcrun"
+  export PATH="$d/bin:$PATH" FAKE_XCRUN_LOG="$d/log"
+  log() { :; }
+  # shellcheck source=e3/lib/dev-phone.sh
+  source "$E3/lib/dev-phone.sh"
+  dev_ios_install TEST-UDID "$d/PPass.app" 0 || { echo "无页面时安装/启动返回失败"; exit 1; }
+  grep -q 'process launch' "$d/log" || { echo "无页面时没调用启动：$(cat "$d/log")"; exit 1; }
+  if grep 'process launch' "$d/log" | grep -q -- '--environment-variables'; then
+    echo "无页面时仍传了 --environment-variables：$(grep 'process launch' "$d/log")"
+    exit 1
+  fi
+  : >"$d/log"
+  dev_ios_install TEST-UDID "$d/PPass.app" 0 settings || { echo "带页面时安装/启动返回失败"; exit 1; }
+  grep -qF -- '--environment-variables {"PPASS_ROUTE":"settings"}' "$d/log" ||
+    { echo "带页面时没传 PPASS_ROUTE：$(grep 'process launch' "$d/log")"; exit 1; }
+  exit 0
+) || bad "just dev ios 无页面时不传空的环境对象（#1842）"
 # #1378 设备归属：有主人的设备，别人取不到锁（不排队、退出 75、说出主人）；主人自己、release 之后都能取
 if [ "$(uname)" = Darwin ]; then
   (
