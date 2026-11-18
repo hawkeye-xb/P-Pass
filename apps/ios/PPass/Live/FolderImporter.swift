@@ -65,11 +65,13 @@ final class FolderImporter: MediaImporter, FolderImportIdentifying, @unchecked S
                     defer { try? handle.close() }
                     let r = try await self.provider.run { try $0.importMedia(path: usedURL.path, fd: handle.fileDescriptor) }
                     // ADR：不静默复制回退。provider 的 fallback 语义：
-                    //   small（≤16KiB inline）/ already_in_store = store 的预期形态，接受；
+                    //   small（≤16KiB inline）/ shared_reference（同内容另一条路径已引用，
+                    //   复制是为了删掉第一条后仍可供数）= store 的预期形态，接受；
+                    //   already_in_store（崩溃失忆）在 provider 侧直接失败，不会走到这里；
                     //   identity_mismatch / head_mismatch / reference_failed / changed_during_import /
                     //   no_path = 引用没成立且不是预期的 inline，按单张失败（不静默复制）。
                     // 错误只带 fallback 枚举词，不带 r.detail（Rust 的 detail 里有绝对路径，不能进日志）。
-                    let acceptedFallbacks: Set<String> = ["small", "already_in_store"]
+                    let acceptedFallbacks: Set<String> = ["small", "shared_reference"]
                     if !r.byReference, let fallback = r.fallback, !acceptedFallbacks.contains(fallback) {
                         throw FolderImportError(reason: "reference import failed: \(fallback)")
                     }
@@ -93,7 +95,10 @@ final class FolderImporter: MediaImporter, FolderImportIdentifying, @unchecked S
             heldScopes[imported.hash] = FolderScopeLease(root.url)
         }
         heldLock.unlock()
-        let refState = imported.byReference ? (imported.fallback.map { " ref=fallback:\($0)" } ?? " ref=yes") : ""
+        // 复制路径也要写出原因：不能出现「复制了却看不到为什么」。
+        let refState = imported.byReference
+            ? (imported.fallback.map { " ref=fallback:\($0)" } ?? " ref=yes")
+            : (imported.fallback.map { " copy:\($0)" } ?? " copy")
         AppLog.log("folder \(sourceId): imported bytes=\(imported.size) hash=\(imported.hash.prefix(16))\(refState)")
         return .imported(contentHash: imported.hash, sizeBytes: Int64(imported.size))
     }
