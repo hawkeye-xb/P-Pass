@@ -194,14 +194,12 @@ fi
 APP_PATH="$DERIVED/Build/Products/Debug-$([ "$TARGET" = sim ] && echo iphonesimulator || echo iphoneos)/PPass.app"
 
 # ---- 设备操作 ----
-# 模拟器图库是空的（别人 erase 过）时造一张：选照片的用例不能依赖残留状态。
+# 模拟器图库是空的（别人 erase 过）时造素材：选照片 / 选视频的用例不能依赖残留状态。
 ensure_sim_photos() {
   local dcim="$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data/Media/DCIM"
-  if [ -n "$(find "$dcim" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.heic' -o -iname '*.png' \) 2>/dev/null | head -1)" ]; then
-    return 0
-  fi
-  echo "  模拟器图库是空的：造一张测试照片"
-  python3 -I - "$OUT/seed.png" <<'PY'
+  if [ -z "$(find "$dcim" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.heic' -o -iname '*.png' \) 2>/dev/null | head -1)" ]; then
+    echo "  模拟器图库是空的：造一张测试照片"
+    python3 -I - "$OUT/seed.png" <<'PY'
 import struct, sys, zlib
 w = h = 64
 raw = b"".join(b"\x00" + bytes([200, 120, 60]) * w for _ in range(h))
@@ -210,8 +208,15 @@ def chunk(tag, data):
 png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
 open(sys.argv[1], "wb").write(png)
 PY
-  xcrun simctl addmedia "$UDID" "$OUT/seed.png"
-  sleep 2
+    xcrun simctl addmedia "$UDID" "$OUT/seed.png"
+    sleep 2
+  fi
+  # #1840：选视频的用例（SettingsPickVideo）要图库里真有视频，用仓库里这份 1 秒的测试视频灌一段。
+  if [ -z "$(find "$dcim" -type f \( -iname '*.mp4' -o -iname '*.mov' \) 2>/dev/null | head -1)" ]; then
+    echo "  模拟器图库没有视频：灌一段测试视频"
+    xcrun simctl addmedia "$UDID" "$ROOT/crates/media-codec/tests/fixtures/tiny.mp4"
+    sleep 2
+  fi
 }
 
 reinstall() {

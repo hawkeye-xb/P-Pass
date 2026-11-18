@@ -326,15 +326,23 @@ struct NoticeRow: View {
 /// #1272：系统照片选择器。`PHPickerConfiguration()` 不传 photoLibrary ⇒ 走进程外选择器，不需要照片权限；
 /// `.current` 给原始表示（不把 HEIC 转成 JPEG），这样内容哈希与自动备份读到的原图一致，两条路径之间才能按哈希去重。
 struct PhotoPickerSheet: UIViewControllerRepresentable {
+    /// #1840：单次入口允许的类型（产品口径 2026-11-17：只允许图片与视频，不允许文件夹）。
+    static let mediaFilter: PHPickerFilter = .any(of: [.images, .videos])
+
     let onPicked: ([PHPickerResult]) -> Void
     @Environment(\.dismiss) private var dismiss
 
-    func makeUIViewController(context: Context) -> PHPickerViewController {
+    /// 选择器的配置只在这里定，测试直接跑它，不必伪造 `UIViewControllerRepresentableContext`。
+    static func configuration() -> PHPickerConfiguration {
         var config = PHPickerConfiguration()
         config.selectionLimit = PickedQueue.maxPick
-        config.filter = .images
+        config.filter = mediaFilter
         config.preferredAssetRepresentationMode = .current
-        let picker = PHPickerViewController(configuration: config)
+        return config
+    }
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        let picker = PHPickerViewController(configuration: Self.configuration())
         picker.delegate = context.coordinator
         return picker
     }

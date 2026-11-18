@@ -316,6 +316,8 @@ final class AppModel: ObservableObject {
         if phase == .decision { decisionBusy = true }
         Task {
             let added = await backend.engine.addPicked(items)
+            // #1840：上面的 chosen 在选择器返回时就打了，登记成没成功这时才知道——判定看这一行。
+            if added > 0 { AppLog.log("picked: \(added) registered") }
             refresh()
             guard phase == .decision else { return }
             guard added > 0 else {
