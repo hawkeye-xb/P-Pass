@@ -3,23 +3,3 @@
 # spun 10 minutes on a runner and the whole job was cancelled nameless).
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 5 }
-
-# The one test that measures wall clock runs with the whole thread pool
-# (#1758). It asserts that one serve waits one 400ms deadline and no more
-# than two (NET-29). On a fully loaded runner the test thread itself can be
-# starved for over a second before it even gets to the assertion: #1730 saw
-# `waited 1582ms` on Windows while a controlled experiment showed the wait
-# inside `wait_online` never left 400–444ms. That is scheduler latency, not
-# the product over-waiting, so this test only measures the timer when nothing
-# else competes for the CPU.
-#
-# `threads-required = "num-test-threads"` is nextest's way of saying "hold
-# every other test until this one finishes". A test group with
-# `max-threads = 1` does not do that: a group only limits its own members and
-# leaves the rest of the suite running beside them (measured on
-# cargo-nextest 0.9.140: three 3s tests still finish in 3.0s when one of them
-# is the lone member of such a group). The string filter below names exactly
-# one test, so the rest of the suite keeps running concurrently.
-[[profile.default.overrides]]
-filter = 'test(a_persistently_offline_provider_replaces_its_endpoint_on_each_failed_serve)'
-threads-required = "num-test-threads"
