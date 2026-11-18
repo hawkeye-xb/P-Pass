@@ -14,6 +14,10 @@
 ${Using:StrFunc} StrStr
 
 !define PPASS_SERVICE "P-Pass"
+; #1817：安装失败后的一次性限时恢复任务（Task Scheduler）。名字必须与 SCM 服务名
+; （${PPASS_SERVICE}）不同：两套登记互不相干，复用一个名字会让 PREINSTALL/PREUNINSTALL
+; 的清理互相误删。
+!define PPASS_RECOVERY_TASK "P-PassUpdateRecovery"
 ; ProgramData 的位置在运行时读环境变量 %ProgramData%（缺省 C:\ProgramData），和 daemon 的
 ; `windows_programdata::service_root` 同一个口径。NSIS **没有** $PROGRAMDATA 常量：以前写成
 ; "$PROGRAMDATA\P-Pass" 时 makensis 只报 warning 6000 并把它当字面文字，安装器的 icacls 全部
@@ -127,6 +131,13 @@ Var PPassDataDir
   ppass_pre_wait_stopped_done:
   ; 旧版本（#957 计划任务）不做迁移，只清残留；失败无害。
   nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "${PPASS_SERVICE}" /F'
+  Pop $0
+  ; #1817：清掉上次失败留下的限时恢复任务（任务本身 10 分钟有界且会自删，这里是兜底）。
+  ; 先 /End 终止可能在跑的实例——/Delete 只删登记，不中断运行中的动作，否则它会在
+  ; 下面 kill 掉服务之后把 daemon 又拉起来。
+  nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /End /TN "${PPASS_RECOVERY_TASK}"'
+  Pop $0
+  nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "${PPASS_RECOVERY_TASK}" /F'
   Pop $0
   nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM p-pass-desktop.exe'
   Pop $0
@@ -249,6 +260,11 @@ Var PPassDataDir
   Pop $0
   nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "${PPASS_SERVICE}" /F'
   Pop $0
+  ; #1817：限时恢复任务一并清掉；先 /End 终止可能在跑的实例（/Delete 不中断运行）。
+  nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /End /TN "${PPASS_RECOVERY_TASK}"'
+  Pop $0
+  nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "${PPASS_RECOVERY_TASK}" /F'
+  Pop $0
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "P-Pass Desktop"
   nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM p-pass-desktop.exe'
   Pop $0
@@ -263,11 +279,93 @@ Var PPassDataDir
 !macro NSIS_HOOK_POSTUNINSTALL
 !macroend
 
+; #1817（owner 技术定案 2026-11-17）：限时恢复任务 P-PassUpdateRecovery。
+;
+; 一次性 `sc start` 在 ppf-daemon.exe 还被占用时（杀软扫描、残留进程）必然失败，而
+; `sc failure … restart` 只覆盖崩溃、不覆盖 start 失败（#1817 实测：Event 7000 之后
+; 60 秒无 Event 7032）。所以失败恢复不在安装器里干等，交给 Windows 标准 Task
+; Scheduler 注册限时任务：
+;   - 触发：1 分钟首触发、每 1 分钟重试；RepetitionDuration=10 分钟有界；
+;   - 每次 ExecutionTimeLimit=2 分钟；MultipleInstances=IgnoreNew 防重叠；
+;   - 重复窗口由 EndBoundary 控制（不用 -RepetitionDuration：真机上该参数会被截断成
+;     参数绑定错误，任务登记直接失败）。DeleteExpiredTaskAfter=1 分钟只在触发器有
+;     EndBoundary 时生效，所以注册时显式把 EndBoundary 设成首触发 + 10 分钟；
+;   - Principal：SYSTEM + RunLevel Highest（不需要任何用户登录着）。
+; 恢复没成（服务一直起不来）任务也在 10 分钟后随触发器过期、再由 DeleteExpiredTaskAfter
+; 删掉——不形成永久自启。
+;
+; 任务动作（PowerShell）的顺序即安全：
+;   1. 先读 wanted-state——命中 stopped，或读取失败（try/catch）⇒ 先删任务、return。
+;      后面的 sc start 落不到 ⇒ 用户停过的机器绝不会在这里被拉起。千万不能写成
+;      「先 sc start、再判断」这种把拉起放进无条件尾巴的形状；
+;   2. 没停过 ⇒ sc start；把 `sc query | Select-String -Quiet "RUNNING"` 的结果赋给
+;      变量，只有它为真才删任务——不能用 `$LASTEXITCODE`：那是 sc.exe 的退出码，
+;      服务存在、状态 STOPPED 时同样是 0。起不来就让下一轮再试，10 分钟后任务过期自删。
+Function PPassRegisterUpdateRecoveryTask
+  StrCpy $R0 1
+  Delete "$TEMP\ppass-update-recovery-task.log"
+  ; 原生做法：动作脚本写成 .ps1 文件、任务定义写成 XML、用 schtasks /Create /XML 注册。
+  ; 之前把整条 PowerShell 命令塞进 `-Command "…"`，要穿过 NSIS→Windows 命令行→PowerShell
+  ; 三层解析，真机上表现为「退出码 0 但什么都没建出来」。写文件没有这一层。
+  StrCpy $R7 'try { $$wanted = Get-Content -LiteralPath ($$env:ProgramData + "\P-Pass\wanted-state") -Raw -ErrorAction Stop; if ($$wanted -match "stopped") { Unregister-ScheduledTask -TaskName "${PPASS_RECOVERY_TASK}" -Confirm:$$false -ErrorAction Stop; return } } catch { Unregister-ScheduledTask -TaskName "${PPASS_RECOVERY_TASK}" -Confirm:$$false; return }; & sc.exe start ${PPASS_SERVICE}; $$q = (& sc.exe query ${PPASS_SERVICE} 2>$$null); $$running = ($$LASTEXITCODE -eq 0) -and ($$q | Select-String -Quiet "RUNNING"); if ($$running) { Unregister-ScheduledTask -TaskName "${PPASS_RECOVERY_TASK}" -Confirm:$$false }'
+  FileOpen $3 "$INSTDIR\update-recovery.ps1" w
+  FileWrite $3 "$R7$\r$\n"
+  FileClose $3
+  ; 触发时间与结束边界：都用 PowerShell 取本机时间，命令短、无嵌套引号。
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "(Get-Date).AddMinutes(1).ToString($\'s$\')"'
+  Pop $0
+  Pop $1
+  StrCpy $R1 $1 -2
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "(Get-Date).AddMinutes(11).ToString($\'s$\')"'
+  Pop $0
+  Pop $1
+  StrCpy $R2 $1 -2
+  ; schtasks /Create /XML 要求任务定义是 Unicode：写 UTF-16LE 并带 BOM，否则报「无法切换编码」。
+  FileOpen $3 "$TEMP\ppass-recovery-task.xml" w
+  FileWriteByte $3 255
+  FileWriteByte $3 254
+  FileWriteUTF16LE $3 '<?xml version="1.0" encoding="UTF-16"?>$\r$\n'
+  FileWriteUTF16LE $3 '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">$\r$\n'
+  FileWriteUTF16LE $3 '  <Triggers><TimeTrigger><StartBoundary>$R1</StartBoundary><EndBoundary>$R2</EndBoundary>$\r$\n'
+  FileWriteUTF16LE $3 '    <Repetition><Interval>PT1M</Interval></Repetition></TimeTrigger></Triggers>$\r$\n'
+  FileWriteUTF16LE $3 '  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>$\r$\n'
+  FileWriteUTF16LE $3 '  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>$\r$\n'
+  FileWriteUTF16LE $3 '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>$\r$\n'
+  FileWriteUTF16LE $3 '    <StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT2M</ExecutionTimeLimit>$\r$\n'
+  FileWriteUTF16LE $3 '    <DeleteExpiredTaskAfter>PT1M</DeleteExpiredTaskAfter></Settings>$\r$\n'
+  FileWriteUTF16LE $3 '  <Actions Context="Author"><Exec><Command>powershell.exe</Command>$\r$\n'
+  FileWriteUTF16LE $3 '    <Arguments>-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\update-recovery.ps1"</Arguments></Exec></Actions>$\r$\n'
+  FileWriteUTF16LE $3 '</Task>$\r$\n'
+  FileClose $3
+  nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /Create /TN "${PPASS_RECOVERY_TASK}" /XML "$TEMP\ppass-recovery-task.xml" /F'
+  Pop $0
+  Pop $1
+  FileOpen $3 "$TEMP\ppass-update-recovery-task.log" w
+  FileWrite $3 "create_exit=$0$\r$\n"
+  FileWrite $3 "$1$\r$\n"
+  FileClose $3
+  ; 成功判据是「任务真的存在」，不是命令退出码。
+  nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /Query /TN "${PPASS_RECOVERY_TASK}"'
+  Pop $0
+  Pop $1
+  ${If} $0 == 0
+    StrCpy $R0 0
+  ${Else}
+    FileOpen $3 "$TEMP\ppass-update-recovery-task.log" a
+    FileWrite $3 "query_exit=$0$\r$\n"
+    FileWrite $3 "$1$\r$\n"
+    FileClose $3
+  ${EndIf}
+FunctionEnd
+
 ; #1063：安装失败 / 文件没换成时共用的恢复路径。
 ;
 ;   1. 用户主动停过服务（wanted-state = stopped）⇒ 不恢复，保持停止；
-;      否则服务存在就起它；
+;      否则服务存在就起它：一次 `sc start` + 约 5 秒 RUNNING 轮询（#1817 起
+;      安装器内不再长重试）；仍未 RUNNING 就登记限时恢复任务（见上）；
 ;   2. 写 `update-failed` 标记，下次 App 启动读它显示「上次更新失败」横幅；
+;      service=1 只在服务真实 RUNNING 或限时恢复任务登记成功时写——后者只表示
+;      「已安排恢复」，壳按实际状态显示 pending，不谎报已恢复；登记失败如实写 0；
 ;   3. 静默安装（应用内更新）不弹窗，提示留给下次启动横幅。
 ;
 ; #1167：两个标记都**不**放 $LOCALAPPDATA——安装器是提权进程，换一个管理员来装，
@@ -300,9 +398,44 @@ Function UpdateFailureRecover
       ; 服务会永久失去崩溃自动重启（SCM 配置是持久的，不是本次进程的状态）。
       nsExec::ExecToLog '"$SYSDIR\sc.exe" failure "${PPASS_SERVICE}" reset= 86400 actions= restart/5000/restart/5000'
       Pop $0
+      ; #1817（owner 技术定案 2026-11-17）：只做一次 sc start + 约 5 秒 RUNNING 轮询，
+      ; 不再在安装器里长退避重试——占用 ppf-daemon.exe 的句柄（杀软扫描、残留进程）
+      ; 什么时候释放未知，安装器内干等只会拖长安装；起不来交给限时恢复任务。
       nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${PPASS_SERVICE}"'
       Pop $0
-      StrCpy $R9 1
+      ; 等它真的到 RUNNING（最多约 5 秒：10 × 500ms）
+      StrCpy $R2 0
+      ppass_recover_wait:
+        nsExec::ExecToStack '"$SYSDIR\sc.exe" query "${PPASS_SERVICE}"'
+        Pop $0
+        Pop $1
+        ${StrStr} $R7 "$1" "RUNNING"
+        ${If} $R7 != ""
+          StrCpy $R9 1
+          Goto ppass_recover_done
+        ${EndIf}
+        IntOp $R2 $R2 + 1
+        ${If} $R2 >= 10
+          Goto ppass_recover_wait_done
+        ${EndIf}
+        Sleep 500
+        Goto ppass_recover_wait
+      ppass_recover_wait_done:
+      ; 还没 RUNNING（wanted-state 已核对不是 stopped）：登记限时恢复任务。
+      ; SYSTEM 身份的任务动作要能读到 wanted-state，而目录 DACL 只给服务 SID 与
+      ; Administrators（windows_programdata::ProgramDataDir::verify 的白名单，不许加
+      ; SYSTEM），所以只给这一个文件补 SYSTEM 只读——这个文件本来就授了交互用户读写，
+      ; 只读的 SYSTEM 是更窄的暴露面。登记失败 service 如实写 0，不谎报已安排。
+      ${If} $R9 != 1
+        nsExec::ExecToLog '"$SYSDIR\icacls.exe" "${PPASS_DATA}\wanted-state" /grant "*S-1-5-18:(R)"'
+        Pop $0
+        StrCpy $R0 1
+        Call PPassRegisterUpdateRecoveryTask
+        ${If} $R0 == 0
+          StrCpy $R9 1
+        ${EndIf}
+      ${EndIf}
+      ppass_recover_done:
     ${EndIf}
   ${EndIf}
 
@@ -325,7 +458,13 @@ Function UpdateFailureRecover
 
   failed_dialog:
   ${IfNot} ${Silent}
-    MessageBox MB_ICONEXCLAMATION|MB_OK "P-Pass update failed. The background service has been restored; reopen P-Pass to retry, or download the latest version from the website.$\r$\n$\r$\n更新失败，后台服务已恢复。请重新打开 P-Pass 重试，或从官网下载最新版本。"
+    ${If} $R9 == 1
+      ; service=1 也可能是「限时恢复任务已安排」而非此刻已在跑，所以说「将自动恢复」，
+      ; 不说「已恢复」；壳下次启动按真实状态显示 pending（owner 技术定案 2026-11-17）。
+      MessageBox MB_ICONEXCLAMATION|MB_OK "P-Pass update failed. The background service will be restored automatically; reopen P-Pass to retry, or download the latest version from the website.$\r$\n$\r$\n更新失败，后台服务将自动恢复。请重新打开 P-Pass 重试，或从官网下载最新版本。"
+    ${Else}
+      MessageBox MB_ICONEXCLAMATION|MB_OK "P-Pass update failed and the background service could not be restored; reopen P-Pass or start the P-Pass service manually to retry.$\r$\n$\r$\n更新失败，后台服务未能自动恢复。请重新打开 P-Pass 或手动启动 P-Pass 服务后重试。"
+    ${EndIf}
   ${EndIf}
 FunctionEnd
 

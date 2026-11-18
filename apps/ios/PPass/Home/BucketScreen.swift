@@ -4,7 +4,8 @@ import PPassMedia
 
 /// 统一备份范围：相册与文件夹卡片共用选中表现、同一时间档和同一个保存动作。
 /// 添加文件夹只登记授权并标成待保存；取消勾选保留授权，移除需单独确认且不删原素材。
-/// 首次默认勾上「最近项目」、时间默认「从今天起」；新相册默认不勾。允许空集 = 一个都不备份。
+/// 首次（从未保存过）不预选任何来源；时间默认「从今天起」；新相册默认不勾。允许空集 = 一个都不备份。
+/// 相册未完整授权时只显示「保存过的相册」供取消，不给新增相册（#1811 评审）。
 /// 底部只有主按钮：首次「开始备份」，编辑「保存」。不显示合计张数与大小（#1263 删掉 bucket_summary；iOS 没有公开的大小接口，#1016）。
 /// 与 Android 的差别只有：标题用系统大标题导航栏；相册是异步读的，所以多了加载中 / 读取失败两种状态。
 struct BucketScreen: View {
@@ -68,11 +69,15 @@ struct BucketScreen: View {
                             .multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.top, 40)
                     }
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 10) {
-                        if Self.offersChoices(Self.notice(for: app.access)) {
-                            ForEach(albums) { album in card(album) }
-                        }
+                        ForEach(Self.visibleAlbums(albums, checked: checked, photoAccess: app.access)) { album in card(album) }
                         ForEach(folders) { folder in folderCard(folder) }
                         addFolderCard
+                    }
+                    // 一个来源都没选：明确说清楚（空范围 = 不自动备份），不弹窗、不替用户补默认。
+                    if Self.showsEmptySelectionHint(hasLoaded: hasLoaded, checked: checked) {
+                        Text(L.s("bucket_no_selection")).font(PPFont.sans(15, relativeTo: .subheadline)).foregroundStyle(PPColor.ink40)
+                            .multilineTextAlignment(.center).frame(maxWidth: .infinity)
+                            .accessibilityIdentifier("bucketNoSelection")
                     }
                 }
                 .padding(.horizontal, 24).padding(.top, 6).padding(.bottom, 14)
@@ -82,33 +87,51 @@ struct BucketScreen: View {
         }
     }
 
-    /// 页面按照片权限档多说的一句（10-29）。
-    enum AccessNotice: Equatable { case none, partial, noAccess }
+    /// 页面按照片权限档多说的一句（10-29；#1811 起权限两态：完整 / 未完整）。
+    enum AccessNotice: Equatable { case none, noAccess }
 
-    /// 只给了部分照片：页顶说明只备份允许的那些；一张都读不到：不说「没有找到照片」（那不是现状），说没有权限并给「去设置」。
+    /// 完整授权才把相册当成自动备份来源；有限授权和拒绝统一成「相册未完整授权」，同一套提示与出口。
     static func notice(for access: MediaAccess) -> AccessNotice {
-        switch access {
-        case .full: return .none
-        case .partial: return .partial
-        case .none: return .noAccess
-        }
+        access == .full ? .none : .noAccess
     }
 
-    /// 没有照片权限时不给选择（10-30）：时间档、提示句和底部「开始备份 / 保存」都不显示——一张都读不到，选了也没用。
-    static func offersChoices(_ notice: AccessNotice) -> Bool { notice != .noAccess }
+    /// 相册卡片显示哪些：完整授权显示全部；相册未完整授权只显示「当前编辑态里选中的相册」
+    /// （已保存的 + 本次未保存勾选的）。已保存但当前列表里没有的相册仍留在 checked（不静默丢范围），
+    /// 但无法逐个展示/取消——既有界面限制，后续卡处理（#1775）。
+    static func visibleAlbums(_ albums: [AlbumBucket], checked: Set<String>, photoAccess: MediaAccess) -> [AlbumBucket] {
+        guard photoAccess != .full else { return albums }
+        return albums.filter { checked.contains($0.id) }
+    }
 
-    /// 首次加载也保留不可见的已保存相册，恢复权限后仍可选择；未勾选的新相册不自动加入。
-    static func initialSelectionWithUnavailable(saved: Set<String>?, availableAlbums: Set<String>, cameraAlbum: String?) -> Set<String> {
+    /// 一个来源都没选：明确写「未选择任何来源」。空范围允许保存（= 不自动备份），不替用户补默认。
+    /// 相册未完整授权（选择被隐藏）时同样要显示：此时页面上只有文件夹可选，不写清楚会像「已选好了」。
+    static func showsEmptySelectionHint(hasLoaded: Bool, checked: Set<String>) -> Bool {
+        hasLoaded && checked.isEmpty
+    }
+
+    /// 首次加载：没有存过的范围一律空——显式传 cameraAlbum 也不预选相机相册（#1811）；
+    /// 已保存的相册全部保留（含当前列表里不可见的），权限恢复后重新可见，不会因权限切换静默丢掉已存范围。
+    static func initialSelectionWithUnavailable(saved: Set<String>?, availableAlbums: Set<String>,
+                                                cameraAlbum: String?) -> Set<String> {
+        guard let saved else { return [] }
         let visible = ScopePolicy.initialSelection(saved: saved, available: availableAlbums, cameraAlbum: cameraAlbum)
-        let invisibleSaved = (saved ?? []).filter { !$0.hasPrefix("folder:") && !availableAlbums.contains($0) }
+        let invisibleSaved = saved.filter { !$0.hasPrefix("folder:") && !availableAlbums.contains($0) }
         return visible.union(invisibleSaved)
     }
 
-    /// 授权后的刷新不得覆盖未保存选择；权限不可见的已保存相册也不视为用户取消。
-    static func selectionForReload(current: Set<String>, saved: Set<String>?, availableAlbums: Set<String>, availableFolders: Set<String>) -> Set<String> {
+    /// 授权后的刷新不得覆盖未保存选择，也绝不静默改变已保存范围（#1811 评审）：
+    /// - 目录：仍可用就保留；
+    /// - 已保存的相册：保留在当前 checked 里（none / albums 为空时也不丢，full 恢复后重新可见）；
+    ///   用户已主动取消的（不在 current 里）不会被刷新加回；
+    /// - 本次未保存勾选的相册：partial 时列表里能展示就保留，none（albums 为空、无法展示）时从编辑态移除。
+    /// 只改编辑态，不写持久 scope：用户点保存后才改变持久范围。
+    static func selectionForReload(current: Set<String>, saved: Set<String>?, availableAlbums: Set<String>,
+                                   availableFolders: Set<String>, photoAccess: MediaAccess) -> Set<String> {
         current.filter { id in
             if id.hasPrefix("folder:") { return availableFolders.contains(id) }
-            return availableAlbums.contains(id) || saved?.contains(id) == true
+            if saved?.contains(id) == true { return true }
+            if photoAccess == .full { return true }
+            return availableAlbums.contains(id)
         }
     }
 
@@ -327,8 +350,9 @@ struct BucketScreen: View {
             let folderList = await app.backend.engine.folderSources()
             let folderIds = Set(folderList.map { FolderMediaSource.bucketId(sourceId: $0.id) })
             if hasLoaded {
-                checked = Self.selectionForReload(current: checked, saved: saved,
-                                                  availableAlbums: Set(list.map(\.id)), availableFolders: folderIds)
+                // 已保存来源保留在编辑态（含当前不可见的）；本次未保存勾选只在能展示时保留；不写持久 scope。
+                checked = Self.selectionForReload(current: checked, saved: saved, availableAlbums: Set(list.map(\.id)),
+                                                  availableFolders: folderIds, photoAccess: app.access)
             } else {
                 let selectedAlbums = Self.initialSelectionWithUnavailable(saved: saved, availableAlbums: Set(list.map(\.id)),
                                                                           cameraAlbum: list.first(where: \.isCameraAlbum)?.id)

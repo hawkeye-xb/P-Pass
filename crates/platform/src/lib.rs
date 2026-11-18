@@ -365,7 +365,7 @@ pub use identity_key::{IdentityKeyHome, IdentityKeyStore, SecretBlobStore};
 pub use local_peer::{
     bind_resident_pipe, connect_resident_pipe, connect_resident_pipe_tokio, local_peer_user,
     peer_check_needs_first_message, verify_local_peer, verify_local_peer_min_version,
-    LocalPeerSource, PeerCheck, PeerRole, PeerUser,
+    LocalPeerSource, PeerCheck, PeerRole, PeerUser, UserDirFacts,
 };
 
 /// #1115：常驻 daemon 的本机 IPC 形态（[`PlatformAdapter::resident_ipc`]）。

@@ -403,8 +403,16 @@ class SqliteOrderStore private constructor(
         return block(ids)
     }
 
-    override fun countSkipped(bucketIds: Set<Long>?, sinceSec: Long?): Long {
+    override fun countSkipped(bucketIds: Set<Long>?, sinceSec: Long?, scopeTimeOf: ScopeTimeOf?): Long {
         if (bucketIds != null && bucketIds.isEmpty()) return 0L
+        if (scopeTimeOf != null && sinceSec != null) {
+            val filter = scopeFilter(bucketIds, null, col = "")
+            return db.rawQuery("SELECT media_id, date_added_sec FROM skip_list WHERE 1 = 1$filter", null).use { c ->
+                var count = 0L
+                while (c.moveToNext()) if (scopeTimeOf(c.getLong(0), c.getLong(1)) >= sinceSec) count++
+                count
+            }
+        }
         val filter = scopeFilter(bucketIds, sinceSec, col = "")
         return db.rawQuery("SELECT COUNT(*) FROM skip_list WHERE 1 = 1$filter", null).use { c -> if (c.moveToFirst()) c.getLong(0) else 0L }
     }
@@ -508,8 +516,18 @@ class SqliteOrderStore private constructor(
         changed
     }
 
-    override fun countCurrentByState(bucketIds: Set<Long>?, sinceSec: Long?): Map<OrderState, Long> {
+    override fun countCurrentByState(bucketIds: Set<Long>?, sinceSec: Long?, scopeTimeOf: ScopeTimeOf?): Map<OrderState, Long> {
         if (bucketIds != null && bucketIds.isEmpty()) return emptyMap()
+        if (scopeTimeOf != null && sinceSec != null) {
+            val out = readCurrentOrders { rows ->
+                rows.filter { (bucketIds == null || it.bucketId in bucketIds) && scopeTimeOf(it.mediaId, it.dateAddedSec) >= sinceSec }
+                    .filter { it.state != OrderState.SKIPPED_BY_USER }
+                    .groupingBy { it.state }.eachCount().mapValues { it.value.toLong() }.toMutableMap()
+            }
+            val skipped = countSkipped(bucketIds, sinceSec, scopeTimeOf)
+            if (skipped > 0) out[OrderState.SKIPPED_BY_USER] = skipped
+            return out
+        }
         val bucketFilter = scopeFilter(bucketIds, sinceSec, col = "o.")
         val out = db.rawQuery(
             "SELECT o.state, COUNT(*) FROM orders o WHERE $IS_CURRENT$bucketFilter AND o.state != '${OrderState.SKIPPED_BY_USER.name}' GROUP BY o.state",
@@ -520,13 +538,21 @@ class SqliteOrderStore private constructor(
             out
         }
         // 「已跳过」是意图：报跳过名单的张数（见接口 KDoc）。
-        val skipped = countSkipped(bucketIds, sinceSec)
+        val skipped = countSkipped(bucketIds, sinceSec, scopeTimeOf)
         if (skipped > 0) out[OrderState.SKIPPED_BY_USER] = skipped
         return out
     }
 
-    override fun countConfirmedPresent(bucketIds: Set<Long>?, sinceSec: Long?): Long {
+    override fun countConfirmedPresent(bucketIds: Set<Long>?, sinceSec: Long?, scopeTimeOf: ScopeTimeOf?): Long {
         if (bucketIds != null && bucketIds.isEmpty()) return 0L
+        if (scopeTimeOf != null && sinceSec != null) {
+            return readCurrentOrders { rows ->
+                rows.count {
+                    it.state == OrderState.CONFIRMED && !it.sourceMissing &&
+                        (bucketIds == null || it.bucketId in bucketIds) && scopeTimeOf(it.mediaId, it.dateAddedSec) >= sinceSec
+                }.toLong()
+            }
+        }
         val bucketFilter = scopeFilter(bucketIds, sinceSec, col = "o.")
         return db.rawQuery(
             "SELECT COUNT(*) FROM orders o WHERE o.state = '${OrderState.CONFIRMED.name}' AND o.source_missing = 0 AND $IS_CURRENT$bucketFilter",

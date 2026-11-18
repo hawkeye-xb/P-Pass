@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import com.hawkeyexb.ppass.backup.flow.sourceVersionOf
+import com.hawkeyexb.ppass.backup.scopeTimeSecOf
 
 /** API < 29 没有卷名这一列，所有外部存储都算这一个卷。 */
 const val LEGACY_VOLUME = MediaStore.VOLUME_EXTERNAL
@@ -23,7 +24,7 @@ data class MediaSnapshot(
     val bucketId: Long,
     val generation: Long,
     val volumeName: String = LEGACY_VOLUME,
-    /** #1263：MediaStore `DATE_ADDED`（秒，进入手机相册的时间），范围的时间条件按它判。 */
+    /** 范围时间（秒）：拍摄／创建时间优先，缺失才回退 mtime；字段名保留给既有订单存储复用。 */
     val dateAddedSec: Long = 0L,
 )
 
@@ -110,6 +111,7 @@ class ContentResolverMediaSnapshotSource(
         MediaStore.MediaColumns.DATE_MODIFIED,
         MediaStore.MediaColumns.SIZE,
         MediaStore.MediaColumns.BUCKET_ID,
+        MediaStore.MediaColumns.DATE_TAKEN,
         MediaStore.MediaColumns.DATE_ADDED,
         generationColumn,
         volumeColumn,
@@ -121,7 +123,7 @@ class ContentResolverMediaSnapshotSource(
         if (s.buckets.isEmpty()) return null
         // bucket id 是 Long、since 是 Long，直接拼进 SQL 与旧 discovery 口径一致，且不占绑定变量名额。
         return "${MediaStore.MediaColumns.BUCKET_ID} IN (${s.buckets.joinToString(",")})" +
-            s.sinceSec?.let { " AND ${MediaStore.MediaColumns.DATE_ADDED} >= $it" }.orEmpty()
+            s.sinceSec?.let { " AND ${mediaStoreScopeTimeSelection(it)}" }.orEmpty()
     }
 
     private val mediaTypeSelection = "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN (?, ?)"
@@ -240,7 +242,10 @@ class ContentResolverMediaSnapshotSource(
             bucketId = rows.getLong(rows.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_ID)),
             generation = rows.getLong(rows.getColumnIndexOrThrow(generationColumn)),
             volumeName = volume ?: fallbackVolume,
-            dateAddedSec = rows.getLong(rows.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)),
+            dateAddedSec = scopeTimeSecOf(
+                rows.getLong(rows.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_TAKEN)),
+                rows.getLong(rows.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)),
+            ),
         )
     }
 
@@ -261,6 +266,14 @@ class ContentResolverMediaSnapshotSource(
 }
 
 private const val EXISTING_IDS_CHUNK = 500
+
+/** MediaStore 的统一范围时间：DATE_TAKEN 优先，只有它缺失／为 0 时才比较 DATE_MODIFIED。 */
+internal fun mediaStoreScopeTimeSelection(sinceSec: Long): String {
+    val taken = MediaStore.MediaColumns.DATE_TAKEN
+    val modified = MediaStore.MediaColumns.DATE_MODIFIED
+    val takenMs = sinceSec * 1000L
+    return "(($taken > 0 AND $taken >= $takenMs) OR (($taken IS NULL OR $taken <= 0) AND $modified >= $sinceSec))"
+}
 
 /** 算 captureAt 要读的三列。[lookupColumns] 必须带上它们，否则 [captureAtMsOf] 取列直接抛错（MOB-99）。 */
 internal val CAPTURE_AT_COLUMNS = listOf(

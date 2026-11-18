@@ -789,6 +789,18 @@ impl BlobsProvider {
                 TransportError::Io(format!("start Android provider runtime: {error}"))
             })?;
         let root = root.as_ref().join("iroh-blobs-provider");
+        // #1821: a fresh process has no live transfer lease, so everything in
+        // the store belongs to a previous process. Retire the whole directory
+        // before opening it: the in-memory `stored` map is empty after a
+        // restart, and a surviving hash would make the next import of the same
+        // content look like `AlreadyInStore` and fall back to a full copy.
+        //
+        // A second live provider on the same root would be broken by this
+        // rename. Each phone runs one provider in one process (a second one on
+        // the same root already blocks on the store's exclusive open, MOB-91),
+        // and the adoption plan relies on that: multi-instance protection stays
+        // with the store, not with a new registry here.
+        retire_provider_store(&root)?;
         let dispatch: Arc<Mutex<Option<StopAwareBlobsProtocol>>> = Arc::default();
         let allowed_peer: AllowedPeer = Arc::default();
         let store = runtime.block_on(async {
@@ -820,7 +832,16 @@ impl BlobsProvider {
             }
             // #434: no endpoint yet — the first serve binds it.
             Ok::<_, TransportError>(store)
-        })?;
+        });
+        // The new store is open; the retired directories (this run's included)
+        // are unreachable now, so delete them all. Best-effort: a leftover
+        // directory is swept on the next start. Also on a failed open — the
+        // rename did not free any space, so a full disk would otherwise keep
+        // the provider from ever starting again.
+        if let Some(parent) = root.parent() {
+            sweep_retired_provider_stores(parent);
+        }
+        let store = store?;
         Ok(Self {
             runtime,
             store,
@@ -1438,11 +1459,16 @@ pub enum ImportFallback {
     NoPath,
     /// At or below [`INLINE_MAX_BYTES`]: the store inlines it anyway.
     Small,
-    /// The store already held this hash under a different or unknown data
-    /// location. iroh-blobs 0.103 merges External paths and reopens only the
-    /// sorted-first one, so a stale earlier path would poison this content;
-    /// an owned copy overrides every External path.
+    /// Crash amnesia (#1821): the persistent store holds this hash but this
+    /// process has no `stored` record for it — a previous process imported it
+    /// and died before releasing. Copying would turn the transfer cache into a
+    /// second copy of the source, so the import fails instead.
     AlreadyInStore,
+    /// #1821: this process already references the hash through a different
+    /// path. iroh-blobs 0.103 merges External paths and reopens only the
+    /// sorted-first one, so dropping the earlier path would poison this
+    /// content; the import copies so that content survives that deletion.
+    SharedReference,
     /// The path does not name the descriptor's file (device / inode / size
     /// differ), or cannot be stat'ed.
     IdentityMismatch,
@@ -1461,6 +1487,7 @@ impl ImportFallback {
             ImportFallback::NoPath => "no_path",
             ImportFallback::Small => "small",
             ImportFallback::AlreadyInStore => "already_in_store",
+            ImportFallback::SharedReference => "shared_reference",
             ImportFallback::IdentityMismatch => "identity_mismatch",
             ImportFallback::HeadMismatch => "head_mismatch",
             ImportFallback::ReferenceFailed => "reference_failed",
@@ -1620,6 +1647,90 @@ enum StoredAs {
 
 type Fallback = (ImportFallback, Option<String>);
 
+/// 回收目录前缀：`iroh-blobs-provider-retired-<pid>-<纳秒>`。
+const RETIRED_PROVIDER_PREFIX: &str = "iroh-blobs-provider-retired-";
+
+/// #1821：把上一进程的 provider store 整个 rename 进同级回收目录，O(1)、
+/// 与目录里有多少数据无关。
+///
+/// 必须在 `FsStore::load_with_opts` 之前：store 一旦打开，目录就归 iroh 管，
+/// 而 iroh-blobs 0.103.1 没有公开的一次性 GC（`store::gc` 是 crate 私有）。
+/// 与 daemon 的 `retire_blob_store`（`crates/daemon/src/inbox.rs`）同一模式。
+///
+/// 退役失败显式失败：回落成打开旧 store，会让「进程内 `stored` 为空」变成
+/// `AlreadyInStore` 的整份复制，占盘破 1x。
+fn retire_provider_store(root: &Path) -> Result<()> {
+    let meta = match std::fs::symlink_metadata(root) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(TransportError::Io(format!(
+                "stat provider store {root:?}: {error}"
+            )))
+        }
+    };
+    if !meta.is_dir() {
+        return Err(TransportError::Io(format!(
+            "provider store {root:?} is not a directory"
+        )));
+    }
+    let parent = root
+        .parent()
+        .ok_or_else(|| TransportError::Io(format!("provider store {root:?} has no parent")))?;
+    let nanos = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let retired = parent.join(format!(
+        "{RETIRED_PROVIDER_PREFIX}{}-{nanos}",
+        std::process::id()
+    ));
+    std::fs::rename(root, &retired).map_err(|error| {
+        TransportError::Io(format!(
+            "retire provider store {root:?} -> {retired:?}: {error}"
+        ))
+    })?;
+    tracing::info!("retired provider store left by a previous process");
+    Ok(())
+}
+
+/// 删掉 [parent] 下所有回收目录（含本次刚退役的）。best-effort：删不掉的
+/// 留给下次启动的清扫，不能挡住 provider 起来。
+fn sweep_retired_provider_stores(parent: &Path) {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    let mut removed = 0u64;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some((pid, nanos)) = name
+            .strip_prefix(RETIRED_PROVIDER_PREFIX)
+            .and_then(|rest| rest.split_once('-'))
+        else {
+            continue;
+        };
+        if pid.is_empty()
+            || nanos.is_empty()
+            || !pid.bytes().all(|b| b.is_ascii_digit())
+            || !nanos.bytes().all(|b| b.is_ascii_digit())
+        {
+            continue;
+        }
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        match std::fs::remove_dir_all(entry.path()) {
+            Ok(()) => removed += 1,
+            Err(error) => tracing::warn!(
+                "could not remove retired provider store ({error}); the next start retries"
+            ),
+        }
+    }
+    if removed > 0 {
+        tracing::info!("removed {removed} retired provider store(s)");
+    }
+}
+
 fn read_head(file: &mut File, len: usize) -> std::io::Result<Vec<u8>> {
     let mut head = vec![0u8; len];
     file.seek(SeekFrom::Start(0))?;
@@ -1660,6 +1771,16 @@ impl BlobsProvider {
             },
             Err(fallback) => (fallback, None),
         };
+        if fallback.0 == ImportFallback::AlreadyInStore {
+            // #1821: the store holds this content from a previous process and
+            // this one has no reference to it. Copying would make the transfer
+            // cache a second copy of the source; fail this item instead.
+            drop(keep);
+            return Err(TransportError::Io(
+                "import refused: already_in_store without a live reference (crash-resume state)"
+                    .to_owned(),
+            ));
+        }
         let done = self.import_by_copy(source, fallback).await;
         // A reference entry kept alive until its owned copy replaced it.
         drop(keep);
@@ -1709,8 +1830,17 @@ impl BlobsProvider {
                 || matches!(stored.get(&hash), Some(StoredAs::Owned))
                 || stored.get(&hash) == Some(&only_this_path);
             if !safe {
+                // #1821: two different causes share this branch. No `stored`
+                // record means a previous process left the hash behind (crash
+                // amnesia) — never copy for that. A record for another path is
+                // the shared-reference case, which keeps its copy.
+                let fallback = if stored.contains_key(&hash) {
+                    ImportFallback::SharedReference
+                } else {
+                    ImportFallback::AlreadyInStore
+                };
                 let detail = format!("{} already stored as {:?}", hash, stored.get(&hash));
-                return Err(((ImportFallback::AlreadyInStore, Some(detail)), Some(tag)));
+                return Err(((fallback, Some(detail)), Some(tag)));
             }
             if !before.contains(&hash) {
                 stored.insert(hash, only_this_path);
@@ -1938,6 +2068,62 @@ fn reference_plan(
             ImportFallback::IdentityMismatch,
             Some(format!("read head of fd / {path:?}: {error}")),
         )),
+    }
+}
+
+/// #1821: crash amnesia — the store holds a hash while this process has no
+/// `stored` record for it. The import must fail, never fall back to a copy.
+/// Reverse-proof: removing the refusal lets `import_by_copy` run and a full
+/// `.data` payload appears.
+#[cfg(all(test, feature = "mobile-ffi"))]
+mod crash_amnesia_tests {
+    use super::*;
+
+    fn files_under(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                files_under(&path, extension, out);
+            } else if path.extension().is_some_and(|e| e == extension) {
+                out.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn amnesia_without_a_live_reference_fails_without_a_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let bytes: Vec<u8> = (0..5 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
+        let first = dir.path().join("a-first.jpg");
+        let second = dir.path().join("b-second.jpg");
+        std::fs::write(&first, &bytes).unwrap();
+        std::fs::write(&second, &bytes).unwrap();
+        let provider =
+            BlobsProvider::new_loopback_with_gc(dir.path(), Duration::from_secs(3600)).unwrap();
+        let a = provider
+            .import_media(Some(&first), File::open(&first).unwrap())
+            .unwrap();
+        assert!(a.by_reference, "{a:?}");
+
+        // What a restart leaves behind: the store still has the hash, the
+        // in-memory map is empty.
+        provider
+            .stored
+            .lock()
+            .expect("stored locations lock")
+            .clear();
+
+        let refused = provider.import_media(Some(&second), File::open(&second).unwrap());
+        assert!(
+            refused.is_err(),
+            "crash amnesia must not fall back to a copy: {refused:?}"
+        );
+        let mut data = Vec::new();
+        files_under(&dir.path().join("iroh-blobs-provider"), "data", &mut data);
+        assert!(data.is_empty(), "no payload copy: {data:?}");
     }
 }
 

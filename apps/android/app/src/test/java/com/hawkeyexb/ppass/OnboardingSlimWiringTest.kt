@@ -49,15 +49,31 @@ class OnboardingSlimWiringTest {
     @Test
     fun engine_and_counts_use_the_full_scope() {
         val runtime = File("src/main/java/com/hawkeyexb/ppass/backup/flow/AndroidFlowRuntime.kt").readText()
-        // #1762 起装配是 Composite：MediaStore 段仍是同一份范围（engine 与 counts 同口径）；目录段绕过共享
-        // 范围（ADR docs/decisions/2026-11-13-local-folder-media-source.md §4），只看「目录来源现存」——
-        // 有意的、带依据的偏差，断言按两段分别锁。
-        assertTrue(runtime.contains("ContentResolverMediaSnapshotSource(app, { if (ruleOn()) scopeStore.scope() else null })"))
-        assertTrue(runtime.contains("isFolderId(bucket)) folderRegistry.hasBucket(bucket)"))
-        assertTrue(runtime.contains("scopeStore.scope()?.contains(bucket, added) == true"))
+        // #1778：相册段先剔除目录 bucket，目录段统一经 effectiveBackupScope 取得范围；
+        // 旧版目录按现存授权并入，新版未勾选目录不再绕过统一范围。
+        assertTrue(runtime.contains("effectiveBackupScope("))
+        assertTrue(runtime.contains("folderRegistry.allRecords().mapTo(HashSet()) { it.bucketId }"))
+        assertTrue(runtime.contains("scopeProvider = { effectiveScope() }"))
+        assertTrue(runtime.contains("scope.buckets.filterNot { com.hawkeyexb.ppass.backup.folder.isFolderId(it) }.toSet()"))
+        assertFalse("旧目录不得绕过统一范围", runtime.contains("isFolderId(bucket)) folderRegistry.hasBucket(bucket)"))
         val holder = File("src/main/java/com/hawkeyexb/ppass/backup/BackupUiStateHolder.kt").readText()
         assertTrue("首页分母跟着新范围算", holder.contains("countAll(it, sinceSec)"))
         assertTrue(holder.contains("g.facts(bucketIds, total, sinceSec)"))
+    }
+
+    @Test
+    fun legacy_order_scope_decisions_recalculate_from_the_current_source() {
+        // #1778 旧订单查询侧重算：引擎的范围门槛带 mediaId 走 runtime 的 scopeTimeOf（按当前来源重算、stored 只作回退）；
+        // 首页账目投影同样带上。反证：inScope 退回两参（只用 stored 值）或投影不传 scopeTimeOf → 红。
+        val runtime = File("src/main/java/com/hawkeyexb/ppass/backup/flow/AndroidFlowRuntime.kt").readText()
+        assertTrue("范围门槛带 mediaId（旧订单重算的缝）", runtime.contains("inScope = { bucket, added, mediaId ->"))
+        assertTrue("旧订单按当前来源重算，stored 只作回退", runtime.contains("scopeTimeOf(mediaId, added)"))
+        assertTrue("运行时构造 scopeTimeOf 用组合源 lookup", runtime.contains("compositeMedia.lookup(mediaId)"))
+        val holder = File("src/main/java/com/hawkeyexb/ppass/backup/BackupUiStateHolder.kt").readText()
+        assertTrue("首页账目投影带重算", holder.contains("scopeTimeOf = runtime.scopeTimeOf"))
+        val projection = File("src/main/java/com/hawkeyexb/ppass/backup/flow/FlowUiProjection.kt").readText()
+        assertTrue("计数入口把 scopeTimeOf 传给 countCurrentByState", projection.contains("store.countCurrentByState(bucketIds, sinceSec, scopeTimeOf)"))
+        assertTrue("已备份计数同样带重算", projection.contains("store.countConfirmedPresent(bucketIds, sinceSec, scopeTimeOf)"))
     }
 
     @Test

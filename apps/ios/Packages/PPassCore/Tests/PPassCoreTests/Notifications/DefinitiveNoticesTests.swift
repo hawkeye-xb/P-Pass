@@ -6,8 +6,10 @@ import XCTest
 
 final class DefinitiveNoticesTests: XCTestCase {
     private func facts(pairingId: String? = "e1", lost: Bool = false, media: MediaAccessTier = .full,
-                       requested: Bool = true, refresh: BackgroundRefreshAvailability = .available) -> DefinitiveFacts {
-        DefinitiveFacts(pairingId: pairingId, pairingLost: lost, mediaAccess: media, backgroundRequested: requested, backgroundRefresh: refresh)
+                       requested: Bool = true, refresh: BackgroundRefreshAvailability = .available,
+                       hasUsableSource: Bool = false) -> DefinitiveFacts {
+        DefinitiveFacts(pairingId: pairingId, pairingLost: lost, mediaAccess: media, backgroundRequested: requested,
+                        backgroundRefresh: refresh, hasUsableSource: hasUsableSource)
     }
 
     private func decide(_ prev: DefinitiveNoticeState, _ f: DefinitiveFacts, deliverable: Bool = true) -> DefinitiveDecision {
@@ -89,6 +91,25 @@ final class DefinitiveNoticesTests: XCTestCase {
         let d = decide(DefinitiveNoticeState(lastMediaAccess: "full"), facts(pairingId: nil, media: .none))
         XCTAssertEqual(d.post, [], "没配对：没有要备份的东西")
         XCTAssertEqual(d.next.lastMediaAccess, "none")
+    }
+
+    /// #1811：还有可用来源（folder-only / 混合里的目录）时备份仍在继续，权限变差不发「自动备份已停止」；状态照常推进，之后也不补发。
+    /// 反证：去掉 `hasUsableSource` 守卫，本条红在 post 上。
+    func testUsableSourceScopeDoesNotNotifyOnPhotoAccessDrop() {
+        let full = decide(DefinitiveNoticeState(), facts(media: .full, hasUsableSource: true)).next
+        let partial = decide(full, facts(media: .partial, hasUsableSource: true))
+        XCTAssertEqual(partial.post, [], "目录备份仍在继续")
+        let none = decide(partial.next, facts(media: .none, hasUsableSource: true))
+        XCTAssertEqual(none.post, [])
+        XCTAssertEqual(none.next.lastMediaAccess, "none", "状态照常推进")
+        XCTAssertEqual(decide(none.next, facts(media: .none, hasUsableSource: true)).post, [], "同一档位不补发")
+    }
+
+    /// 纯相册范围、没有可用目录来源：相册侧真的停了，照旧通知。
+    func testMixedScopeStillNotifiesOnPhotoAccessDrop() {
+        let full = decide(DefinitiveNoticeState(), facts(media: .full, hasUsableSource: false)).next
+        let d = decide(full, facts(media: .none, hasUsableSource: false))
+        XCTAssertEqual(d.post, [.mediaAccessRevoked(now: .none)])
     }
 
     // MARK: 后台被停（iOS 对位：「后台 App 刷新」从可用变成不可用）

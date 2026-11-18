@@ -229,6 +229,48 @@ abstract class OrderStoreContract {
         assertEquals(2, store.confirmedWithHashAfter(0L, 10).size)
     }
 
+    // #1778 旧订单查询侧重算（评审 4583725659）：升级前写入的行，date_added_sec 是旧口径（DATE_ADDED，入相册时刻）。
+    // 传 scopeTimeOf 时，范围计数按当前来源的时间重算；不传保持旧行为（stored 值）。
+    // 反证：旧行按 stored 数 → 「从今天起」把老照片计入、把今天拍的漏掉，红。
+    @Test
+    fun `counts follow the recalculated scope time for legacy rows`() {
+        val store = newStore(clock)
+        val captureOld = 100L       // 拍摄时间：在起点前（老照片，今天才入相册）
+        val addedToday = 1_000L     // 旧行存的 DATE_ADDED：起点当天
+        var calls = 0
+        val scopeTimeOf: ScopeTimeOf = { mediaId, stored ->
+            calls++
+            // 1..4 都是「老照片今天入相册」；5 反向：今天拍、旧行记的是很久以前
+            if (mediaId == 5L) addedToday else captureOld
+        }
+        store.insert(newOrder(1, OrderState.PENDING).copy(dateAddedSec = addedToday))
+        store.insert(newOrder(2, OrderState.FAILED).copy(dateAddedSec = addedToday))
+        store.insert(newOrder(3, OrderState.CONFIRMED).copy(dateAddedSec = addedToday))
+        store.insert(newOrder(5, OrderState.PENDING).copy(dateAddedSec = captureOld))
+        store.insert(newOrder(6, OrderState.PENDING).copy(dateAddedSec = addedToday))
+        store.cancelRemaining(listOf(SkipTarget(4, "v1", 7, dateAddedSec = addedToday)))
+
+        assertEquals("重算在范围外：旧 PENDING / FAILED / 已跳过都不计", 1L, store.countCurrentByState(setOf(7), addedToday, scopeTimeOf)[OrderState.PENDING])
+        assertEquals(null, store.countCurrentByState(setOf(7), addedToday, scopeTimeOf)[OrderState.FAILED])
+        assertEquals(null, store.countCurrentByState(setOf(7), addedToday, scopeTimeOf)[OrderState.CONFIRMED])
+        assertEquals(null, store.countCurrentByState(setOf(7), addedToday, scopeTimeOf)[OrderState.SKIPPED_BY_USER])
+        assertEquals(0L, store.countConfirmedPresent(setOf(7), addedToday, scopeTimeOf))
+        assertEquals(0L, store.countSkipped(setOf(7), addedToday, scopeTimeOf))
+
+        assertEquals("旧口径（不重算）按 stored 数：老照片被计入「从今天起」", 2L, store.countCurrentByState(setOf(7), addedToday)[OrderState.PENDING])
+        assertEquals(1L, store.countCurrentByState(setOf(7), addedToday)[OrderState.FAILED])
+        assertEquals(1L, store.countCurrentByState(setOf(7), addedToday)[OrderState.CONFIRMED])
+        assertEquals(1L, store.countCurrentByState(setOf(7), addedToday)[OrderState.SKIPPED_BY_USER])
+        assertEquals(1L, store.countConfirmedPresent(setOf(7), addedToday))
+        assertEquals(1L, store.countSkipped(setOf(7), addedToday))
+        assertEquals(0L, store.countConfirmedPresent(emptySet(), addedToday, scopeTimeOf))
+
+        // 时间不参判（「全部」）时不许调 scopeTimeOf：范围只有相册条件。
+        val before = calls
+        store.countCurrentByState(setOf(7), null, scopeTimeOf)
+        assertEquals("「全部」范围不做重算", before, calls)
+    }
+
     // #459：标记是 MediaStore 的观察结果，不是一次传输的结局——不动 updated_at（「最近成功」与横幅水位按它算），
     // 只对 CONFIRMED 生效，值没变返回 false。
     // 反证：setSourceMissing 照旧写 updated_at_ms → lastConfirmedAtMs 跳到 9_000，红。

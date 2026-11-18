@@ -279,13 +279,17 @@ pub fn bind_resident(name: &str) -> io::Result<Listener> {
     bind_with_sddl(name, &policy.sddl())
 }
 
-/// 服务端：按**这条连接**模拟客户端，取它的用户 SID。
+/// 服务端：按**这条连接**模拟客户端，取它的用户 SID 与这一次连接解析出的目录事实
+/// （#1826：主人的家目录与各用户标准目录，用该用户 token 调 `SHGetKnownFolderPath`）。
 ///
 /// 调用线程在模拟期间换了身份，所以无论成败都先 `RevertToSelf` 再返回；恢复失败
-/// 就直接终止进程——带着别人的身份继续跑是绝不能接受的状态。
-pub(crate) fn client_sid(handle: RawHandle) -> io::Result<String> {
+/// 就直接终止进程——带着别人的身份继续跑是绝不能接受的状态。目录事实用令牌句柄取
+/// （`SHGetKnownFolderPath` 的第三个参数），不需要继续顶着客户端身份。
+pub(crate) fn client_user(handle: RawHandle) -> io::Result<PeerUser> {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows_sys::Win32::Security::{RevertToSelf, TOKEN_QUERY};
+    use windows_sys::Win32::Security::{
+        RevertToSelf, TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_QUERY,
+    };
     use windows_sys::Win32::System::Pipes::ImpersonateNamedPipeClient;
     use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
 
@@ -296,8 +300,17 @@ pub(crate) fn client_sid(handle: RawHandle) -> io::Result<String> {
     }
     let mut token: HANDLE = std::ptr::null_mut();
     // OpenAsSelf = TRUE：按进程自己的身份做访问检查（客户端令牌通常只到标识级）。
+    // Microsoft Learn：SHGetKnownFolderPath 按指定用户取目录要求 TOKEN_QUERY |
+    // TOKEN_IMPERSONATE；部分情况还需 TOKEN_DUPLICATE，这里一次开全，不只开查询权限。
     // SAFETY: GetCurrentThread 是伪句柄；token 是出参。
-    let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) };
+    let opened = unsafe {
+        OpenThreadToken(
+            GetCurrentThread(),
+            TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_IMPERSONATE,
+            1,
+            &mut token,
+        )
+    };
     let open_err = io::Error::last_os_error();
     // SAFETY: 无参数；失败意味着本线程仍顶着客户端身份。
     if unsafe { RevertToSelf() } == 0 {
@@ -307,9 +320,12 @@ pub(crate) fn client_sid(handle: RawHandle) -> io::Result<String> {
         return Err(open_err);
     }
     let sid = windows_programdata::token_user_sid_string(token).map_err(io::Error::other);
+    // 主人的用户目录事实（家目录与各标准目录）：必须在令牌句柄关闭前取。
+    let dirs = crate::windows::peer_dir_facts(token);
     // SAFETY: token 是 OpenThreadToken 成功返回的真句柄。
     unsafe { CloseHandle(token) };
-    sid
+    let sid = sid?;
+    Ok(PeerUser::new(sid, dirs))
 }
 
 /// 客户端：管道对象的属主 SID（需要句柄上有 `READ_CONTROL`；`GENERIC_READ` 含它）。
@@ -419,7 +435,7 @@ pub(crate) async fn connect_identification_tokio(
 }
 
 /// 服务端：这条连接上客户端令牌的模拟级别（`SECURITY_IMPERSONATION_LEVEL`）。只读不改，
-/// 与 [`client_sid`] 同样先模拟、再立刻恢复。用于核对客户端确实以 Identification 级连接。
+/// 与 [`client_user`] 同样先模拟、再立刻恢复。用于核对客户端确实以 Identification 级连接。
 #[cfg(test)]
 pub(crate) fn client_impersonation_level(handle: RawHandle) -> io::Result<i32> {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
@@ -430,7 +446,7 @@ pub(crate) fn client_impersonation_level(handle: RawHandle) -> io::Result<i32> {
     use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
 
     let h = handle as HANDLE;
-    // SAFETY: 同 client_sid。
+    // SAFETY: 同 client_user。
     if unsafe { ImpersonateNamedPipeClient(h) } == 0 {
         return Err(io::Error::last_os_error());
     }
@@ -466,12 +482,12 @@ pub(crate) fn client_impersonation_level(handle: RawHandle) -> io::Result<i32> {
 // ── 接到 local_peer 的抽象上 ──────────────────────────────────────────────────
 
 fn check_server_side(handle: RawHandle, allowed: &[PeerRole]) -> PeerCheck {
-    let sid = match client_sid(handle) {
-        Ok(s) => s,
+    let user = match client_user(handle) {
+        Ok(u) => u,
         Err(e) => return PeerCheck::Rejected(format!("取不到客户端身份：{e}")),
     };
     match PipePolicy::current() {
-        Ok(policy) => policy.classify_client(&sid, allowed),
+        Ok(policy) => policy.classify_client(user.id(), allowed),
         Err(e) => PeerCheck::Rejected(format!("读不出管道访问策略：{e}")),
     }
 }
@@ -540,7 +556,7 @@ pub(crate) fn peer_user_tokio(s: &interprocess::local_socket::tokio::Stream) -> 
     #[allow(unreachable_patterns)]
     match s {
         interprocess::local_socket::tokio::Stream::NamedPipe(p) if p.inner().is_server() => {
-            client_sid(p.inner().as_raw_handle()).ok().map(PeerUser)
+            client_user(p.inner().as_raw_handle()).ok()
         }
         _ => None,
     }
@@ -550,7 +566,7 @@ pub(crate) fn peer_user_sync(s: &interprocess::local_socket::Stream) -> Option<P
     #[allow(unreachable_patterns)]
     match s {
         interprocess::local_socket::Stream::NamedPipe(p) if p.inner().is_server() => {
-            client_sid(p.inner().as_raw_handle()).ok().map(PeerUser)
+            client_user(p.inner().as_raw_handle()).ok()
         }
         _ => None,
     }
@@ -717,7 +733,7 @@ mod tests {
         #[allow(irrefutable_let_patterns)]
         let interprocess::local_socket::tokio::Stream::NamedPipe(p) = &server;
         // 读到数据之前模拟必然失败（ERROR_CANNOT_IMPERSONATE）——这正是 daemon 要先读第一行的原因。
-        let early = client_sid(p.inner().as_raw_handle()).expect_err("没读到数据前不能模拟");
+        let early = client_user(p.inner().as_raw_handle()).expect_err("没读到数据前不能模拟");
         assert_eq!(early.raw_os_error(), Some(1368), "{early:?}");
         {
             use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -725,11 +741,12 @@ mod tests {
             let mut buf = [0u8; 2];
             (&server).read_exact(&mut buf).await.expect("read");
         }
-        let sid = client_sid(p.inner().as_raw_handle()).expect("impersonate");
-        assert_eq!(sid, me());
+        let user = client_user(p.inner().as_raw_handle()).expect("impersonate");
+        assert_eq!(user.id(), me());
+        let sid = user.id();
         let both = [PeerRole::Shell, PeerRole::Daemon];
         assert_eq!(
-            PipePolicy::User { user: me() }.classify_client(&sid, &both),
+            PipePolicy::User { user: me() }.classify_client(sid, &both),
             PeerCheck::Verified(PeerRole::Shell)
         );
         assert!(matches!(
@@ -737,7 +754,7 @@ mod tests {
                 service: SERVICE.into(),
                 owner: STRANGER.into()
             }
-            .classify_client(&sid, &both),
+            .classify_client(sid, &both),
             PeerCheck::Rejected(_)
         ));
     }
@@ -809,7 +826,7 @@ mod tests {
             let handle = p.inner().as_raw_handle();
             (
                 client_impersonation_level(handle).expect("level"),
-                client_sid(handle).expect("sid"),
+                client_user(handle).expect("sid").id().to_string(),
             )
         }
 
@@ -831,6 +848,47 @@ mod tests {
     fn pipe_client_sync_connect_reports_missing_pipe_as_not_found() {
         let err = connect_identification_sync(&unique("missing")).expect_err("没有这个管道");
         assert_eq!(err.kind(), io::ErrorKind::NotFound, "{err:?}");
+    }
+
+    /// #1826：`client_user` 要一并解析这条连接（主人）的**全部**用户目录——家目录 +
+    /// 桌面 / 文稿 / 下载 / 图片 / 影片 / 音乐——用的就是这条已验证连接的 token。
+    /// 真实壳以 Identification 级连上来（`connect_identification_tokio`）之后：
+    /// `SHGetKnownFolderPath` 一个都不许失败（`selection_ready` 为真），值要与
+    /// 同一用户的直取结果、以及适配器的回答一致（身份核对链没被破坏就是连得上的
+    /// 证明：SID 与 `the_server_reads_the_clients_sid_by_impersonation` 同判据）。
+    ///
+    /// 若本用例在真实 Windows 上红了：按报错原文（哪个 Known Folder、哪个 OS 错误码）
+    /// 选标准机制（`DuplicateTokenEx`、模拟期间读取等），**不许**只往
+    /// `OpenThreadToken` 上加权限位猜。在把令牌判红修对之前，`config.set_library`
+    /// 会按 `ui.err_library_user_dirs` 拒绝全部保存。
+    #[tokio::test]
+    async fn client_user_resolves_the_interactive_users_known_folders_over_the_real_client_shape() {
+        let name = unique("kf");
+        let listener =
+            bind_with_sddl(&name, &PipePolicy::User { user: me() }.sddl()).expect("bind");
+        let (client, server) = tokio::join!(connect_identification_tokio(&name), listener.accept());
+        let (client, server) = (client.expect("connect"), server.expect("accept"));
+        {
+            use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+            (&client).write_all(b"x\n").await.expect("write");
+            let mut buf = [0u8; 2];
+            (&server).read_exact(&mut buf).await.expect("read");
+        }
+        #[allow(irrefutable_let_patterns)]
+        let interprocess::local_socket::tokio::Stream::NamedPipe(p) = &server;
+        let user = client_user(p.inner().as_raw_handle()).expect("impersonate");
+        assert_eq!(user.id(), me(), "身份核对还是同一条链");
+        let facts = user.dirs().clone();
+        assert!(
+            facts.selection_ready(),
+            "选位置要的关键事实不齐（SHGetKnownFolderPath 有失败）：{facts:?}"
+        );
+        let direct = crate::windows::current_user_dir_facts();
+        assert_eq!(facts, direct, "带 token 与直取（同一用户）必须一致");
+        use crate::PlatformAdapter as _;
+        let a = crate::adapter();
+        assert_eq!(facts.home, a.home_dir(), "home 与适配器不一致");
+        assert_eq!(facts.pictures, a.pictures_dir(), "pictures 与适配器不一致");
     }
 
     /// 主人记录：往返、同一主人重写幂等、换主人被拒、坏内容是 Err 不是「没有主人」。

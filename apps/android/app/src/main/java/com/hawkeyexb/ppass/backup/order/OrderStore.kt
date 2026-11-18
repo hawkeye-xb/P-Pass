@@ -190,6 +190,8 @@ data class AuditRecord(
 /**
  * order 存储 + 跳过名单。所有写操作各自是一个事务：要么全部生效，要么一条都不生效。
  */
+internal typealias ScopeTimeOf = (mediaId: Long, storedSec: Long) -> Long
+
 interface OrderStore {
     /** 插入一行，返回带 id 与时间戳的完整行。[advance] / [scanTo] / [audit] 与插入同一事务。 */
     fun insert(order: NewOrder, advance: GenerationAdvance? = null, scanTo: Long? = null, audit: AuditRecord? = null): Order
@@ -259,7 +261,7 @@ interface OrderStore {
     fun <R> readSkipList(block: (Sequence<Long>) -> R): R
 
     /** 跳过名单的张数；[bucketIds] 非 null 时只数这些相册里的（按跳过时记下的相册）。 */
-    fun countSkipped(bucketIds: Set<Long>? = null, sinceSec: Long? = null): Long
+    fun countSkipped(bucketIds: Set<Long>? = null, sinceSec: Long? = null, scopeTimeOf: ScopeTimeOf? = null): Long
 
     /**
      * 「取消剩余 N 张」：**一个事务**把 [targets]（弹窗那一刻的边界）写进跳过名单，它们当前行里还没结局的
@@ -305,10 +307,10 @@ interface OrderStore {
      * #413：[OrderState.SKIPPED_BY_USER] 这一项报的是**跳过名单**的张数（意图），不是 order 行数——没有传过的照片
      * 被跳过时只进名单、不建 order；恢复之后名单清空，历史的 SKIPPED_BY_USER 行也就不再算「已跳过」。
      */
-    fun countCurrentByState(bucketIds: Set<Long>? = null, sinceSec: Long? = null): Map<OrderState, Long>
+    fun countCurrentByState(bucketIds: Set<Long>? = null, sinceSec: Long? = null, scopeTimeOf: ScopeTimeOf? = null): Map<OrderState, Long>
 
     /** #418 英雄区的 m：当前行为 CONFIRMED、且原图还在手机上（`source_missing` = 0）的张数。 */
-    fun countConfirmedPresent(bucketIds: Set<Long>? = null, sinceSec: Long? = null): Long
+    fun countConfirmedPresent(bucketIds: Set<Long>? = null, sinceSec: Long? = null, scopeTimeOf: ScopeTimeOf? = null): Long
 
     /** 当前行里 CONFIRMED 的最近一次 updated_at（0 = 一张都没有）。 */
     fun lastConfirmedAtMs(): Long

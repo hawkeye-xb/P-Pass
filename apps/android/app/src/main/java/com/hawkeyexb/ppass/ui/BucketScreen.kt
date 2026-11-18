@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.util.Size
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,14 +26,20 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -41,7 +48,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -53,6 +62,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hawkeyexb.ppass.R
+import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.backup.MediaScanner
 import com.hawkeyexb.ppass.backup.ScopeTime
 import com.hawkeyexb.ppass.backup.newAlbumIds
@@ -142,10 +152,80 @@ private fun SelectBadge(selected: Boolean, modifier: Modifier = Modifier) {
 }
 
 @Composable
+private fun SourceTypeGlyph(folder: Boolean) {
+    val color = PPColor.Ink40
+    Canvas(Modifier.size(16.dp)) {
+        val stroke = Stroke(width = 1.4.dp.toPx())
+        fun line(path: Path, x1: Float, y1: Float, x2: Float, y2: Float) {
+            path.moveTo(x1.dp.toPx(), y1.dp.toPx())
+            path.lineTo(x2.dp.toPx(), y2.dp.toPx())
+        }
+        if (folder) {
+            val outline = Path()
+            line(outline, 1f, 4f, 6f, 4f)
+            line(outline, 6f, 4f, 8f, 6f)
+            line(outline, 8f, 6f, 15f, 6f)
+            line(outline, 15f, 6f, 15f, 14f)
+            line(outline, 15f, 14f, 1f, 14f)
+            line(outline, 1f, 14f, 1f, 4f)
+            drawPath(outline, color, style = stroke)
+        } else {
+            val back = Path()
+            line(back, 4f, 1f, 15f, 1f)
+            line(back, 15f, 1f, 15f, 12f)
+            line(back, 15f, 12f, 4f, 12f)
+            line(back, 4f, 12f, 4f, 1f)
+            val front = Path()
+            line(front, 1f, 4f, 12f, 4f)
+            line(front, 12f, 4f, 12f, 15f)
+            line(front, 12f, 15f, 1f, 15f)
+            line(front, 1f, 15f, 1f, 4f)
+            drawPath(back, color, style = stroke)
+            drawPath(front, color, style = stroke)
+        }
+    }
+}
+
+/** #1794：没有相册权限时相册区的现状说明 + 申请入口（样式同首页权限卡）。 */
+@Composable
+private fun AlbumNoAccessNotice(onRequest: () -> Unit) {
+    Surface(
+        color = PPColor.ActBg,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                stringResource(R.string.no_media_access_title),
+                fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = PPColor.Ink,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                stringResource(R.string.scope_album_no_access_body),
+                fontSize = 13.sp, color = PPColor.Ink40,
+            )
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = onRequest,
+                modifier = Modifier.height(40.dp),
+                shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.4f)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = PPColor.Act),
+            ) { Text(stringResource(R.string.scope_album_no_access_action), fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+        }
+    }
+}
+
+@Composable
 private fun BucketCard(
     bucket: MediaScanner.Bucket,
     selected: Boolean,
     isNew: Boolean,
+    isFolder: Boolean,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+    secondaryActionLabel: String? = null,
+    onSecondaryAction: (() -> Unit)? = null,
     onToggle: () -> Unit,
 ) {
     Column(
@@ -166,13 +246,14 @@ private fun BucketCard(
             )
             SelectBadge(selected, Modifier.align(Alignment.TopEnd).padding(8.dp))
         }
-        Column(Modifier.padding(12.dp, 9.dp, 12.dp, 11.dp)) {
+        Column(Modifier.height(72.dp).padding(12.dp, 9.dp, 12.dp, 11.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                SourceTypeGlyph(isFolder)
                 Text(
                     bucket.name ?: stringResource(R.string.bucket_unnamed),
                     fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold,
                     color = PPColor.Ink,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).padding(start = 6.dp),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -185,35 +266,88 @@ private fun BucketCard(
                     )
                 }
             }
-            Text(
-                stringResource(R.string.bucket_count, bucket.count),
-                fontSize = 12.5.sp, color = PPColor.Ink40,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.bucket_count, bucket.count),
+                    fontSize = 12.5.sp, color = PPColor.Ink40,
+                    modifier = Modifier.weight(1f),
+                )
+                if (actionLabel != null && onAction != null) {
+                    Text(
+                        actionLabel,
+                        fontSize = 12.sp, color = PPColor.Act,
+                        modifier = Modifier.clickable(onClick = onAction).padding(start = 8.dp),
+                    )
+                }
+                if (secondaryActionLabel != null && onSecondaryAction != null) {
+                    Text(
+                        secondaryActionLabel,
+                        fontSize = 12.sp, color = PPColor.Act,
+                        modifier = Modifier.clickable(onClick = onSecondaryAction).padding(start = 8.dp),
+                    )
+                }
+            }
         }
     }
 }
+
+/**
+ * #1794：相册区能不能选。没有相册权限时不给选，只在相册区显示现状与申请入口；
+ * 文件夹区和「添加文件夹」不受影响（对齐 iOS，范围页始终能进）。
+ */
+internal fun bucketScreenOffersAlbumChoices(access: MediaAccess): Boolean = access != MediaAccess.NONE
+
+/**
+ * 整机空文案（「手机上没有照片或视频」）只在真读得到照片、且相册与文件夹都为空时成立；
+ * 没有相册权限时读不到照片，不能说成整机没有照片。
+ */
+internal fun bucketScreenEmptyNoticeVisible(
+    bucketsEmpty: Boolean,
+    foldersEmpty: Boolean,
+    access: MediaAccess,
+): Boolean = bucketsEmpty && foldersEmpty && bucketScreenOffersAlbumChoices(access)
+
+data class FolderBucketUi(
+    val key: String,
+    val bucket: MediaScanner.Bucket,
+    val registered: Boolean,
+    val needsPermission: Boolean = false,
+)
 
 @Composable
 fun BucketScreen(
     buckets: List<MediaScanner.Bucket>,
     selected: Set<Long>,
-    /** #1263：时间那一档的初值。 */
     initialTime: ScopeTime = ScopeTime.SINCE_TODAY,
-    /** #1263：「某天起的照片」那一档的说法，一律写日期（没存过 = 今天，存过 = 存的那天）。 */
     sinceLabel: String,
-    /** onboarding 首次选范围：按钮叫「开始备份」；设置里重选叫「保存」。 */
     firstTime: Boolean,
-    // MOB-02 §六: 新相册判定基准（null = 从未选过范围 = 全量模式，无徽标）。
     knownBuckets: Set<Long>? = null,
-    /** 10-29：只给了部分照片——页顶说明一行，只备份允许的那些。 */
-    onDone: (Set<Long>, ScopeTime) -> Unit,
+    folderBuckets: List<FolderBucketUi> = emptyList(),
+    selectedFolderKeys: Set<String> = emptySet(),
+    saving: Boolean = false,
+    albumAccess: MediaAccess = MediaAccess.FULL,
+    onRequestAlbumAccess: () -> Unit = {},
+    onAddFolder: () -> Unit = {},
+    onRemoveFolder: (String) -> Unit = {},
+    onReauthorizeFolder: (String) -> Unit = {},
+    onDone: (Set<Long>, Set<String>, ScopeTime) -> Unit,
     onCancel: () -> Unit,
 ) {
     var checked by remember { mutableStateOf(selected) }
+    var checkedFolders by remember { mutableStateOf(selectedFolderKeys) }
+    var seenFolderKeys by remember { mutableStateOf(selectedFolderKeys) }
+    var removing by remember { mutableStateOf<FolderBucketUi?>(null) }
     var time by remember { mutableStateOf(initialTime) }
-    // MOB-02 §六: 新出现的相册 = 当前 − 已知；标「新」徽标，默认不勾选
-    // （不在 selected 里）——配合用户「专用目录」用法。
     val newIds = newAlbumIds(buckets.map { it.id }.toSet(), knownBuckets)
+    val offersAlbums = bucketScreenOffersAlbumChoices(albumAccess)
+
+    LaunchedEffect(folderBuckets) {
+        val pending = folderBuckets.filter { !it.registered && it.key !in seenFolderKeys }.map { it.key }
+        if (pending.isNotEmpty()) {
+            seenFolderKeys = seenFolderKeys + pending
+            checkedFolders = checkedFolders + pending
+        }
+    }
 
     PPScreen {
         androidx.compose.material3.ProvideTextStyle(
@@ -225,20 +359,9 @@ fun BucketScreen(
                     "‹", fontSize = 24.sp, color = PPColor.Ink,
                     modifier = Modifier.clickable(onClick = onCancel).padding(4.dp, 0.dp, 10.dp, 0.dp),
                 )
-                Column {
-                    Text(
-                        stringResource(R.string.bucket_title),
-                        fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
-                    )
-                }
+                Text(stringResource(R.string.backup_scope), fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink)
             }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                stringResource(R.string.bucket_hint),
-                fontSize = 14.sp, lineHeight = 21.sp, color = PPColor.Ink40,
-            )
             Spacer(Modifier.height(12.dp))
-            // #1263：时间二选一。不做自选日期。
             Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
                 PhotoFilterChip(sinceLabel, time == ScopeTime.SINCE_TODAY) { time = ScopeTime.SINCE_TODAY }
                 PhotoFilterChip(stringResource(R.string.scope_time_all), time == ScopeTime.ALL) { time = ScopeTime.ALL }
@@ -246,28 +369,82 @@ fun BucketScreen(
             Spacer(Modifier.height(14.dp))
 
             Box(Modifier.weight(1f)) {
-                if (buckets.isEmpty()) {
-                    Text(
-                        stringResource(R.string.bucket_empty),
-                        fontSize = 15.sp, color = PPColor.Ink40,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().padding(top = 40.dp),
-                    )
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
-                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
-                        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
-                    ) {
-                        items(buckets, key = { it.id }) { b ->
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
+                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
+                ) {
+                    // #1794：没有相册权限时相册区不给选，只说现状 + 申请入口；文件夹区照常。
+                    if (!offersAlbums) {
+                        item(key = "album-no-access", span = { GridItemSpan(maxLineSpan) }) {
+                            AlbumNoAccessNotice(onRequest = onRequestAlbumAccess)
+                        }
+                    }
+                    if (bucketScreenEmptyNoticeVisible(buckets.isEmpty(), folderBuckets.isEmpty(), albumAccess)) {
+                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
+                            Text(
+                                stringResource(R.string.bucket_empty),
+                                fontSize = 15.sp, color = PPColor.Ink40, textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth().padding(top = 40.dp),
+                            )
+                        }
+                    }
+                    if (offersAlbums) {
+                        items(buckets, key = { "album:${it.id}" }) { b ->
                             BucketCard(
                                 bucket = b,
                                 selected = b.id in checked,
                                 isNew = b.id in newIds,
-                                onToggle = {
-                                    checked = if (b.id in checked) checked - b.id else checked + b.id
-                                },
+                                isFolder = false,
+                                onToggle = { checked = if (b.id in checked) checked - b.id else checked + b.id },
                             )
+                        }
+                    }
+                    items(folderBuckets, key = { "folder:${it.key}" }) { folder ->
+                        BucketCard(
+                            bucket = folder.bucket,
+                            selected = folder.key in checkedFolders,
+                            isNew = false,
+                            isFolder = true,
+                            actionLabel = stringResource(
+                                if (folder.needsPermission) R.string.folder_reauthorize else R.string.folder_remove,
+                            ),
+                            onAction = {
+                                if (folder.needsPermission) onReauthorizeFolder(folder.key) else removing = folder
+                            },
+                            secondaryActionLabel = if (folder.needsPermission) stringResource(R.string.folder_remove) else null,
+                            onSecondaryAction = if (folder.needsPermission) { { removing = folder } } else null,
+                            onToggle = {
+                                checkedFolders = if (folder.key in checkedFolders) {
+                                    checkedFolders - folder.key
+                                } else {
+                                    checkedFolders + folder.key
+                                }
+                            },
+                        )
+                    }
+                    item(key = "add-folder") {
+                        Column(
+                            Modifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(PPColor.ActBg)
+                                .border(2.dp, PPColor.Border, RoundedCornerShape(16.dp))
+                                .clickable(enabled = !saving, onClick = onAddFolder),
+                        ) {
+                            Box(
+                                Modifier.fillMaxWidth().aspectRatio(1.6f),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text("+", fontSize = 32.sp, fontWeight = FontWeight.Light, color = PPColor.Ink40)
+                            }
+                            Column(Modifier.height(72.dp).padding(12.dp, 9.dp, 12.dp, 11.dp)) {
+                                Text(
+                                    stringResource(R.string.folder_add),
+                                    fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = PPColor.Ink,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     }
                 }
@@ -275,12 +452,11 @@ fun BucketScreen(
 
             Spacer(Modifier.height(14.dp))
             Button(
-                onClick = { onDone(checked, time) },
+                onClick = { onDone(checked, checkedFolders, time) },
+                enabled = !saving,
                 modifier = Modifier.fillMaxWidth().height(60.dp),
                 shape = RoundedCornerShape(PPSize.RadiusControl),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = PPColor.Ink, contentColor = PPColor.Paper
-                ),
+                colors = ButtonDefaults.buttonColors(containerColor = PPColor.Ink, contentColor = PPColor.Paper),
             ) {
                 Text(
                     stringResource(if (firstTime) R.string.bucket_start else R.string.bucket_save),
@@ -289,5 +465,26 @@ fun BucketScreen(
             }
         }
         }
+    }
+
+    removing?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { removing = null },
+            title = { Text(stringResource(R.string.folder_remove_confirm_title, folder.bucket.name.orEmpty())) },
+            text = { Text(stringResource(R.string.folder_remove_confirm_body)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    removing = null
+                    onRemoveFolder(folder.key)
+                    checkedFolders = checkedFolders - folder.key
+                    seenFolderKeys = seenFolderKeys - folder.key
+                }) { Text(stringResource(R.string.folder_remove_confirm_action), color = PPColor.Act) }
+            },
+            dismissButton = {
+                TextButton(onClick = { removing = null }) {
+                    Text(stringResource(R.string.folder_cancel), color = PPColor.Ink)
+                }
+            },
+        )
     }
 }

@@ -494,6 +494,47 @@ fn dir_writable(p: &Path) -> bool {
 /// 顺序：库目录 → 平台目录 → 写文件。错误串与壳现行一致：建库失败是
 /// `"<库目录>: <io 错误>"`，其余是 io 错误原文。
 pub fn init_config(platform_dir: &Path, library_dir: &str) -> Result<PathBuf, String> {
+    init_config_with(
+        platform_dir,
+        library_dir,
+        LocationCheck::Selection { peer: None },
+    )
+}
+
+/// #1826：写库位置前要不要按敏感目录判、用谁的目录事实判。
+#[derive(Clone, Copy)]
+pub enum LocationCheck<'a> {
+    /// 用户在选新位置：按敏感目录拒绝。`peer` = 本次连接已核验的主人目录事实
+    /// （Windows 管道服务端取得到；没有就是 `None`，由平台适配器回答）。
+    Selection {
+        peer: Option<&'a platform::PeerUser>,
+    },
+    /// 提交**已经预检过**的搬迁计划（`relocate::plan` 时按 peer 判过）：不是新的位置
+    /// 选择，不再判一遍——搬迁收尾时重判会被服务账户的目录事实误拒，把源和目标拆开。
+    FromPlan,
+}
+
+impl LocationCheck<'_> {
+    /// 按这一档的口径校验目标位置（须在建库目录 / 写 config 之前调用）。
+    fn verdict(self, library_dir: &str, platform_dir: &Path) -> Result<(), String> {
+        match self {
+            LocationCheck::Selection { peer } => {
+                crate::library_location::check_library_location(library_dir, platform_dir, peer)
+            }
+            LocationCheck::FromPlan => Ok(()),
+        }
+    }
+}
+
+/// [`init_config`] 的可选校验版本（#1826）。
+pub(crate) fn init_config_with(
+    platform_dir: &Path,
+    library_dir: &str,
+    check: LocationCheck<'_>,
+) -> Result<PathBuf, String> {
+    // #1826：敏感目录（系统 / 用户标准目录 / 同步盘 / 应用自身 / 卷根）直接拒绝，
+    // 且必须排在 `create_dir_all` 之前——命中时磁盘上什么都不留。
+    check.verdict(library_dir, platform_dir)?;
     std::fs::create_dir_all(library_dir).map_err(|e| format!("{library_dir}: {e}"))?;
     std::fs::create_dir_all(platform_dir).map_err(|e| e.to_string())?;
     let cfg_path = platform_dir.join(CONFIG_FILE_NAME);
@@ -505,6 +546,21 @@ pub fn init_config(platform_dir: &Path, library_dir: &str) -> Result<PathBuf, St
 /// 顺序：先校验（不碰盘），再写入，最后清理旧库里的孤儿 config.toml。
 /// 生效时机不变：daemon 只在启动时读一次 config，重启后台服务后生效。
 pub fn set_library(platform_dir: &Path, library_dir: &str) -> Result<PathBuf, String> {
+    set_library_with(
+        platform_dir,
+        library_dir,
+        LocationCheck::Selection { peer: None },
+    )
+}
+
+/// [`set_library`] 的可选校验版本（#1826）。
+pub(crate) fn set_library_with(
+    platform_dir: &Path,
+    library_dir: &str,
+    check: LocationCheck<'_>,
+) -> Result<PathBuf, String> {
+    // #1826：敏感目录直接拒绝，排在一切读写之前（config.toml 不动、旧库不动）。
+    check.verdict(library_dir, platform_dir)?;
     let cfg_path = platform_dir.join(CONFIG_FILE_NAME);
     let current = configured_library_dir(platform_dir);
     let target = Path::new(library_dir);

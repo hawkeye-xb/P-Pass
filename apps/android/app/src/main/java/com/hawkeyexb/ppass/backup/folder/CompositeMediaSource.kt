@@ -28,15 +28,15 @@ class CompositeMediaSnapshotSource(
 ) : MediaSnapshotSource {
 
     override fun <R> readInScope(afterId: Long, block: (Sequence<MediaSnapshot>) -> R): R {
-        val folderRows = ArrayList<MediaSnapshot>()
         // 目录段没有游标：完整枚举只在「afterId 还没扫进目录命名空间」时做一次。对账扫描每 64 张
         // 调一次 [readInScope]，游标推进过目录段后再枚举是纯浪费（O(n²)），且 [needsNewOrder] 幂等。
         val folderMax = (folder as? FolderMediaSnapshotSource)?.maxMediaId() ?: Long.MAX_VALUE
-        if (afterId < folderMax) {
-            folder.readInScope(afterId) { rows -> folderRows += rows }
-        }
-        return primary.readInScope(afterId) { rows ->
-            block(rows.asSequence() + folderRows.asSequence())
+        if (afterId >= folderMax) return primary.readInScope(afterId, block)
+        // folder 的完整枚举与授权检查仍在进入 block 前完成；只把快照序列惰性拼接，不再物化整个目录。
+        return folder.readInScope(afterId) { folderRows ->
+            primary.readInScope(afterId) { rows ->
+                block(rows + folderRows)
+            }
         }
     }
 

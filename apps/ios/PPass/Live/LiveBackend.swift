@@ -119,6 +119,45 @@ final class LiveBackend: @unchecked Sendable {
         records.filter { $0.status != FolderMediaSource.pendingScopeStatus }.count
     }
 
+    /// 规则初值（#1272 B / #1811）：没存过值才初始化一次。完整权限且读过非空范围 ⇒ 开；读到 nil / 空集 ⇒ 关；
+    /// 范围读失败 ⇒ **不写**（返回 nil），保留「尚未初始化」，下次能读到真实范围再按现状初始化。
+    /// 已有存值直接返回，不覆盖。
+    @discardableResult
+    static func initializeAutoRuleIfAbsent(_ prefs: AutoBackupRulePrefs, access: MediaAccess,
+                                           readScope: () throws -> Set<String>?, logger: CoreLogger = NoopLogger()) -> Bool? {
+        if let stored = prefs.stored() { return stored }
+        guard access == .full else { return prefs.initIfAbsent(current: false) }
+        do {
+            let saved = try readScope()
+            return prefs.initIfAbsent(current: !(saved?.isEmpty ?? true))
+        } catch {
+            logger.log("auto-rule: scope unreadable, rule stays uninitialized: \(error)")
+            return nil
+        }
+    }
+
+    /// 通知侧「还有可用来源」的运行时口径（`evaluateNotices` 直接走这里）：
+    /// - 范围读失败 ⇒ false（不猜来源，也不走 knownAlbums / 旧目录回退），降级通知照发；
+    /// - 目录只数登记有效的（pendingScope 不算），否则待保存目录会吞掉降级通知；
+    /// - 只有选中了相册才去查现有相册（`existingAlbumIds`，读失败/未选中都不查）。
+    static func noticeUsableSource(readScope: () throws -> Set<String>?, knownAlbums: Set<String>,
+                                   folderRecords: [FolderRecord], photoAccess: MediaAccess,
+                                   existingAlbumIds: (Set<String>) async -> Set<String>?,
+                                   logger: CoreLogger = NoopLogger()) async -> Bool {
+        let selected: Set<String>?
+        do {
+            selected = try readScope()
+        } catch {
+            logger.log("notify: scope unreadable, treating as no usable source: \(error)")
+            return false
+        }
+        let albumSelected = selected?.contains { !$0.hasPrefix("folder:") } ?? false
+        let existingAlbums = albumSelected ? await existingAlbumIds(selected ?? []) : nil
+        return SourceAvailability.usableSource(selected: selected, known: knownAlbums,
+                                               folderCount: activeFolderCount(records: folderRecords),
+                                               existingAlbums: existingAlbums, photoAccess: photoAccess)
+    }
+
     /// 目录源与 PhotoKit 读取同一份范围存值。known 用来区分旧版目录（本来就在备份）与新版明确取消。
     static func folderScopeProvider(media: LiveMediaLibrary, logger: CoreLogger) -> FolderScopeProvider {
         {
@@ -199,7 +238,8 @@ final class LiveBackend: @unchecked Sendable {
                                         push: ControlPlanePush(transport: CurrentPeerTransport(plane: plane, store: pairingStore)), logger: logger, pairingLoss: pairingLoss)
         let media = self.media
         // #1272 B：规则开关没存过值 → 读现状初始化一次（有完整访问权限且已选过备份范围 ⇒ 开，否则 ⇒ 关）。
-        autoRule.initIfAbsent(current: media.access() == .full && ((try? media.savedScope()) ?? nil) != nil)
+        // #1811 评审：范围读失败时不得落关，保留「尚未初始化」，等下次能读到真实范围再按现状初始化。
+        Self.initializeAutoRuleIfAbsent(autoRule, access: media.access(), readScope: { try media.savedScope() }, logger: logger)
         let folderRegistry = FolderRegistry(directory: dir, logger: logger)
         // 读盘失败给空范围；旧版目录按当前登记并入，明确取消和 pendingScope 不并入（#971 / #1775）。
         let scope: @Sendable () -> Set<String> = {
@@ -603,13 +643,20 @@ final class LiveBackend: @unchecked Sendable {
     func evaluateNotices(assumeLostPairingId: String? = nil) async {
         let record = pairingStore.load()
         let pairingId = record.map(\.pairingId).flatMap { $0.isEmpty ? nil : $0 }
+        let level = PhotoKitAuthorization().currentLevel()
+        // 读范围失败 ≠ 从未保存过：失败时不猜来源，直接按「没有可用来源」处理（不抑制降级通知），见 noticeUsableSource。
+        let hasUsableSource = await Self.noticeUsableSource(
+            readScope: { try media.savedScope() }, knownAlbums: media.knownAlbums(), folderRecords: folders.allRecords(),
+            photoAccess: LiveMediaLibrary.map(level), existingAlbumIds: { _ in await media.existingAlbumIds() },
+            logger: logger)
         let facts = DefinitiveFacts(
             pairingId: pairingId,
             pairingLost: record?.lost == true || (assumeLostPairingId != nil && assumeLostPairingId == pairingId),
-            mediaAccess: LiveMediaLibrary.tier(PhotoKitAuthorization().currentLevel()),
+            mediaAccess: LiveMediaLibrary.tier(level),
             backgroundRequested: autoPrefs.requested(),
             backgroundRefresh: await Self.currentBackgroundRefresh(),
-            autoRuleOn: autoRule.stored() ?? false)
+            autoRuleOn: autoRule.stored() ?? false,
+            hasUsableSource: hasUsableSource)
         await FailureNotifier.evaluate(facts: facts, notifyEnabled: notifyPrefs.enabled(), store: noticeStore, logger: logger)
     }
 }

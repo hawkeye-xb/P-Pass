@@ -67,9 +67,13 @@ public struct DefinitiveFacts: Equatable, Sendable {
     public var backgroundRefresh: BackgroundRefreshAvailability
     /// #1272 B：「自动备份」规则开着。权限被收回 / 改成部分只在规则开着时通知（规则关着是正常状态，不是故障）。
     public var autoRuleOn: Bool
+    /// #1811：还有能继续备份的来源（可用目录，或完整授权下已选且存在的相册）。有可用来源时，
+    /// 照片权限变差不等于「自动备份已停止」，不发相册权限变差通知。
+    public var hasUsableSource: Bool
 
-    public init(pairingId: String?, pairingLost: Bool, mediaAccess: MediaAccessTier, backgroundRequested: Bool, backgroundRefresh: BackgroundRefreshAvailability, autoRuleOn: Bool = true) {
+    public init(pairingId: String?, pairingLost: Bool, mediaAccess: MediaAccessTier, backgroundRequested: Bool, backgroundRefresh: BackgroundRefreshAvailability, autoRuleOn: Bool = true, hasUsableSource: Bool = false) {
         self.autoRuleOn = autoRuleOn
+        self.hasUsableSource = hasUsableSource
         self.pairingId = pairingId
         self.pairingLost = pairingLost
         self.mediaAccess = mediaAccess
@@ -123,8 +127,9 @@ public func decideDefinitiveNotices(prev: DefinitiveNoticeState, facts: Definiti
     }
 
     // 2. 相册权限：变差才发，回到完整复位；没有基线只记不发；没配对时只记。
+    // #1811：还有可用来源（目录照常备份）时，「自动备份已停止」不是事实，不发。
     let lastAccess = prev.lastMediaAccess.flatMap(MediaAccessTier.init(rawValue:))
-    if let last = lastAccess, facts.mediaAccess.rank < last.rank, paired, facts.autoRuleOn {
+    if let last = lastAccess, facts.mediaAccess.rank < last.rank, paired, facts.autoRuleOn, !facts.hasUsableSource {
         post.append(.mediaAccessRevoked(now: facts.mediaAccess))
     }
     if let last = lastAccess, last != .full, facts.mediaAccess == .full {

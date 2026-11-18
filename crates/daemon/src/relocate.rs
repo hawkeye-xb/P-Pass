@@ -209,8 +209,13 @@ pub struct Check {
 /// - 新旧位置不能互相嵌套；`chosen` 不能是别的库、也不能在别的库里面；
 /// - 库的顶层条目与 `chosen` 里原有的东西重名 ⇒ 拒绝（不合并、不覆盖用户的东西）；
 /// - 跨卷时新位置要放得下整个库（多留 2%），不够直接拒绝并说明缺多少。
-pub fn check(from: &Path, chosen: &Path, local_base: &Path) -> Result<Check, String> {
-    check_with(from, chosen, local_base, &platform_probes())
+pub fn check(
+    from: &Path,
+    chosen: &Path,
+    local_base: &Path,
+    peer: Option<&platform::PeerUser>,
+) -> Result<Check, String> {
+    check_with(from, chosen, local_base, &platform_probes(), peer)
 }
 
 /// [`check`] 的可测版本。
@@ -219,7 +224,12 @@ pub fn check_with(
     chosen: &Path,
     local_base: &Path,
     probes: &Probes,
+    peer: Option<&platform::PeerUser>,
 ) -> Result<Check, String> {
+    // 选的位置是敏感目录（系统 / 用户标准目录 / 同步盘 / 应用自身 / 卷根）就拒绝。
+    // 必须排在建目录之前——不能先把库建进桌面、报了错再回滚。`peer` 是本次连接已核验的
+    // 主人目录事实：Windows 服务形态下不能拿服务账户的目录代答。
+    crate::library_location::check_library_path(chosen, local_base, peer)?;
     let id = layout::read_library_id(from)
         .or_else(|| layout::recorded_library_id(local_base))
         .ok_or_else(|| ui_err("ui.err_relocate_no_library_id", &[]))?;
@@ -301,8 +311,13 @@ pub fn check_with(
 }
 
 /// 预检通过就把计划落盘（服务随后退出重启去搬）。
-pub fn plan(from: &Path, chosen: &Path, local_base: &Path) -> Result<Check, String> {
-    let check = check(from, chosen, local_base)?;
+pub fn plan(
+    from: &Path,
+    chosen: &Path,
+    local_base: &Path,
+    peer: Option<&platform::PeerUser>,
+) -> Result<Check, String> {
+    let check = check(from, chosen, local_base, peer)?;
     // B13：建的是用户选的新位置——写不进、磁盘满各给能照做的话（其余 io_ui_err 读的是旧库，不分流）。
     std::fs::create_dir_all(chosen).map_err(|e| crate::config::set_library_io_err(&e))?;
     save(local_base, &check.plan)?;
@@ -971,14 +986,14 @@ mod tests {
         let local = tempfile::tempdir().unwrap();
         let (from, _) = library(home.path(), "Lib");
         let dest = user_dest(home.path());
-        let c = check(&from, &dest, local.path()).unwrap();
+        let c = check(&from, &dest, local.path(), None).unwrap();
         assert_eq!(c.plan.to, dest);
         assert_eq!(c.contents, TargetContents::HasOtherThings);
         let empty = home.path().join("Empty");
         std::fs::create_dir_all(&empty).unwrap();
         std::fs::write(empty.join(".DS_Store"), b"x").unwrap();
         assert_eq!(
-            check(&from, &empty, local.path()).unwrap().contents,
+            check(&from, &empty, local.path(), None).unwrap().contents,
             TargetContents::Empty,
             ".DS_Store 不算用户的东西"
         );
@@ -1035,7 +1050,7 @@ mod tests {
         let local = tempfile::tempdir().unwrap();
         let (from, id) = library(home.path(), "Lib");
         let dest = user_dest(home.path());
-        let c = plan(&from, &dest, local.path()).unwrap();
+        let c = plan(&from, &dest, local.path(), None).unwrap();
         let same = |_: &Path, _: &Path| Some(true);
         move_library_with(&c.plan, &no_progress(), &indexed_ok, &deps(&same, &|_| {})).unwrap();
         complete(local.path(), &c.plan, |_| Ok(())).unwrap();
@@ -1064,7 +1079,7 @@ mod tests {
         std::fs::write(&outside, b"outside").unwrap();
         let linked = platform::test_support::file_symlink(&outside, &from.join("link.jpg")).is_ok();
         let dest = user_dest(home.path());
-        let c = plan(&from, &dest, local.path()).unwrap();
+        let c = plan(&from, &dest, local.path(), None).unwrap();
         let cross = |_: &Path, _: &Path| Some(false);
         let moved = move_library_with(&c.plan, &no_progress(), &indexed_ok, &deps(&cross, &|_| {}))
             .unwrap();
@@ -1104,7 +1119,7 @@ mod tests {
         let local = tempfile::tempdir().unwrap();
         let (from, _) = library(home.path(), "Lib");
         let dest = user_dest(home.path());
-        let c = plan(&from, &dest, local.path()).unwrap();
+        let c = plan(&from, &dest, local.path(), None).unwrap();
         let same = move |_: &Path, _: &Path| Some(same_volume);
         let src = from.clone();
         let at = move |s: Stage| {
@@ -1165,7 +1180,7 @@ mod tests {
         let local = tempfile::tempdir().unwrap();
         let (from, _) = library(home.path(), "Lib");
         let dest = user_dest(home.path());
-        let c = plan(&from, &dest, local.path()).unwrap();
+        let c = plan(&from, &dest, local.path(), None).unwrap();
         let cross = |_: &Path, _: &Path| Some(false);
         let half = |_: &Path, to: &Path| -> std::io::Result<()> {
             std::fs::create_dir_all(to.join("originals")).unwrap();
@@ -1194,7 +1209,7 @@ mod tests {
         let local = tempfile::tempdir().unwrap();
         let (from, _) = library(home.path(), "Lib");
         let dest = user_dest(home.path());
-        let c = plan(&from, &dest, local.path()).unwrap();
+        let c = plan(&from, &dest, local.path(), None).unwrap();
         let locked = from.join("originals/aa/2026/09/a.jpg");
         let cross = |_: &Path, _: &Path| Some(false);
         let copied = std::cell::Cell::new(false);
@@ -1249,7 +1264,7 @@ mod tests {
         let local = tempfile::tempdir().unwrap();
         let (from, _) = library(home.path(), "Lib");
         let dest = user_dest(home.path());
-        let c = plan(&from, &dest, local.path()).unwrap();
+        let c = plan(&from, &dest, local.path(), None).unwrap();
         mark_flipped(local.path(), &c.plan).unwrap();
         finish_flipped(local.path(), &c.plan);
         assert!(from.is_dir(), "删不掉的原目录留给用户");
@@ -1270,7 +1285,7 @@ mod tests {
         let local = tempfile::tempdir().unwrap();
         let (from, _) = library(home.path(), "Lib");
         let dest = user_dest(home.path());
-        let c = plan(&from, &dest, local.path()).unwrap();
+        let c = plan(&from, &dest, local.path(), None).unwrap();
         let cross = |_: &Path, _: &Path| Some(false);
         let lossy = |src: &Path, to: &Path| -> std::io::Result<()> {
             platform::copy_dir_contents(src, to)?;
@@ -1297,7 +1312,7 @@ mod tests {
         let local = tempfile::tempdir().unwrap();
         let (from, _) = library(home.path(), "Lib");
         let dest = user_dest(home.path());
-        let c = plan(&from, &dest, local.path()).unwrap();
+        let c = plan(&from, &dest, local.path(), None).unwrap();
         let same = |_: &Path, _: &Path| Some(true);
         let indexed = || {
             Ok(vec![
@@ -1316,7 +1331,7 @@ mod tests {
         let local = tempfile::tempdir().unwrap();
         let (from, _) = library(home.path(), "Lib");
         let dest = user_dest(home.path());
-        let c = plan(&from, &dest, local.path()).unwrap();
+        let c = plan(&from, &dest, local.path(), None).unwrap();
         let same = |_: &Path, _: &Path| Some(true);
         let moved =
             move_library_with(&c.plan, &no_progress(), &indexed_ok, &deps(&same, &|_| {})).unwrap();
@@ -1336,7 +1351,7 @@ mod tests {
         let moved_dir = home.path().join("Moved");
         std::fs::rename(&old, &moved_dir).unwrap();
         layout::record_library_id(local.path(), &id).unwrap();
-        let c = plan(&old, &moved_dir, local.path()).unwrap();
+        let c = plan(&old, &moved_dir, local.path(), None).unwrap();
         assert!(c.adopt);
         let same = |_: &Path, _: &Path| Some(true);
         move_library_with(&c.plan, &no_progress(), &indexed_ok, &deps(&same, &|_| {})).unwrap();
@@ -1351,7 +1366,7 @@ mod tests {
         let local = tempfile::tempdir().unwrap();
         let (from, id) = library(home.path(), "Lib");
         let dest = user_dest(home.path());
-        let c = plan(&from, &dest, local.path()).unwrap();
+        let c = plan(&from, &dest, local.path(), None).unwrap();
         std::fs::rename(from.join(LIBRARY_MARKER), dest.join(LIBRARY_MARKER)).unwrap();
         let same = |_: &Path, _: &Path| Some(true);
         move_library_with(&c.plan, &no_progress(), &indexed_ok, &deps(&same, &|_| {})).unwrap();
@@ -1372,10 +1387,10 @@ mod tests {
         let local = tempfile::tempdir().unwrap();
         let (from, _) = library(home.path(), "Lib");
         let dest = home.path().join("New/Photos");
-        let c = check(&from, &dest, local.path()).unwrap();
+        let c = check(&from, &dest, local.path(), None).unwrap();
         assert_eq!(c.contents, TargetContents::Empty);
         assert!(!dest.exists(), "预检不建");
-        plan(&from, &dest, local.path()).unwrap();
+        plan(&from, &dest, local.path(), None).unwrap();
         assert!(dest.is_dir());
     }
 
@@ -1387,7 +1402,7 @@ mod tests {
         let local = tempfile::tempdir().unwrap();
         let (from, id) = library(home.path(), "Lib");
         let dest = user_dest(home.path());
-        let mut p = plan(&from, &dest, local.path()).unwrap().plan;
+        let mut p = plan(&from, &dest, local.path(), None).unwrap().plan;
         let staging = dest.join(STAGING_DIR);
         platform::copy_dir_contents(&from, &staging).unwrap();
         std::fs::rename(staging.join(LIBRARY_MARKER), dest.join(LIBRARY_MARKER)).unwrap();
@@ -1410,7 +1425,7 @@ mod tests {
         let local = tempfile::tempdir().unwrap();
         let (from, _) = library(home.path(), "Lib");
         let dest = user_dest(home.path());
-        let c = plan(&from, &dest, local.path()).unwrap();
+        let c = plan(&from, &dest, local.path(), None).unwrap();
         assert!(!already_repointed(&c.plan, &from));
         assert!(already_repointed(&c.plan, &dest));
     }
@@ -1420,11 +1435,11 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let local = tempfile::tempdir().unwrap();
         let (from, _) = library(home.path(), "Lib");
-        let err = check(&from, &from.join("originals"), local.path()).unwrap_err();
+        let err = check(&from, &from.join("originals"), local.path(), None).unwrap_err();
         assert!(err.contains("ui.err_library_nested"), "{err}");
         let dest = home.path().join("Disk");
         std::fs::create_dir_all(dest.join("originals")).unwrap();
-        let err = check(&from, &dest, local.path()).unwrap_err();
+        let err = check(&from, &dest, local.path(), None).unwrap_err();
         assert!(
             err.contains("ui.err_relocate_conflict"),
             "重名不合并、不覆盖：{err}"
@@ -1448,6 +1463,7 @@ mod tests {
             &dest,
             local.path(),
             &probes(&cross, &tiny, &local_net),
+            None,
         )
         .unwrap_err();
         assert!(err.contains("ui.err_relocate_no_space"), "{err}");
@@ -1457,7 +1473,8 @@ mod tests {
             &from,
             &dest,
             local.path(),
-            &probes(&same, &tiny, &local_net)
+            &probes(&same, &tiny, &local_net),
+            None
         )
         .is_ok());
     }
@@ -1472,8 +1489,14 @@ mod tests {
         let same = |_: &Path, _: &Path| Some(true);
         let plenty = |_: &Path| Some(u64::MAX);
         let net = |_: &Path| true;
-        let err =
-            check_with(&from, &dest, local.path(), &probes(&same, &plenty, &net)).unwrap_err();
+        let err = check_with(
+            &from,
+            &dest,
+            local.path(),
+            &probes(&same, &plenty, &net),
+            None,
+        )
+        .unwrap_err();
         assert!(err.contains("ui.err_relocate_network_volume"), "{err}");
     }
 
@@ -1485,17 +1508,17 @@ mod tests {
         let local = tempfile::tempdir().unwrap();
         let (from, _) = library(home.path(), "Lib");
         let (other, _) = library(home.path(), "Other");
-        let err = check(&from, &other, local.path()).unwrap_err();
+        let err = check(&from, &other, local.path(), None).unwrap_err();
         assert!(
             err.contains("ui.err_relocate_other_library"),
             "目标就是别的库：{err}"
         );
-        let err = check(&from, &other.join("originals/aa"), local.path()).unwrap_err();
+        let err = check(&from, &other.join("originals/aa"), local.path(), None).unwrap_err();
         assert!(
             err.contains("ui.err_relocate_other_library"),
             "目标在别的库里面：{err}"
         );
-        let err = check(&from, &from.join("originals/aa"), local.path()).unwrap_err();
+        let err = check(&from, &from.join("originals/aa"), local.path(), None).unwrap_err();
         assert!(
             err.contains("ui.err_library_nested"),
             "目标在当前库里面：{err}"
@@ -1520,7 +1543,7 @@ mod tests {
         let local = tempfile::tempdir().unwrap();
         let (from, _) = library(home.path(), "Lib");
         let dest = user_dest(home.path());
-        let c = plan(&from, &dest, local.path()).unwrap();
+        let c = plan(&from, &dest, local.path(), None).unwrap();
         let cross = |_: &Path, _: &Path| Some(false);
         move_library_with(&c.plan, &no_progress(), &indexed_ok, &deps(&cross, &|_| {})).unwrap();
         mark_flipped(local.path(), &c.plan).unwrap();
@@ -1546,7 +1569,7 @@ mod tests {
             Some(false),
             "要在另一个卷上"
         );
-        let c = plan(&from, &other, local.path()).unwrap();
+        let c = plan(&from, &other, local.path(), None).unwrap();
         let moved = move_library(local.path(), &c.plan, &no_progress(), &indexed_ok).unwrap();
         assert!(!moved.renamed);
         complete(local.path(), &c.plan, |_| Ok(())).unwrap();
@@ -1572,5 +1595,110 @@ mod tests {
         };
         assert!(remove_source(&plan).is_err());
         assert!(from.exists(), "新位置不是这个库，原目录一个文件都不删");
+    }
+
+    /// #1826：目标是敏感目录（主人的「文稿」，合成 PeerUser 在临时沙盒里造出来）⇒ 预检
+    /// 就拒绝，**一个目录都不建**。反证：去掉 [`check_with`] 开头那行 `check_library_path`
+    /// ⇒ 预检通过、目标被建出来，红。
+    #[test]
+    fn sensitive_destination_is_refused_before_the_folder_is_created() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join("Documents")).unwrap();
+        let peer = platform::PeerUser::new(
+            "S-1-5-21-1".into(),
+            platform::UserDirFacts::from_home(home.path().to_path_buf()),
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let (from, _id) = library(tmp.path(), "Lib");
+        let local_base = tmp.path().join("local");
+        std::fs::create_dir_all(&local_base).unwrap();
+        let chosen = home
+            .path()
+            .join("Documents")
+            .join("ppass-1826-relocate-sentinel");
+
+        let p = probes(&|_, _| Some(true), &|_| Some(u64::MAX), &|_| false);
+        let err = check_with(&from, &chosen, &local_base, &p, Some(&peer)).unwrap_err();
+        assert!(err.contains("ui.err_library_sensitive"), "{err}");
+        assert!(!chosen.exists(), "预检不许建目录");
+
+        // 落计划那条入口同样在 `create_dir_all` 之前拒绝。
+        let err = plan(&from, &chosen, &local_base, Some(&peer)).unwrap_err();
+        assert!(err.contains("ui.err_library_sensitive"), "{err}");
+        assert!(!chosen.exists(), "落计划入口也不许建目录");
+        assert!(pending(&local_base).is_none(), "不许落搬迁计划");
+        assert!(from.exists(), "原库不动");
+    }
+
+    /// #1826：预检用**连接方（主人）**的目录事实——目标落在主人的桌面 / 重定向到家目录
+    /// 外的文稿里都拒绝；连接方取不齐主人的用户目录事实时也拒绝，不退回服务账户、
+    /// 不按路径形状猜。
+    /// 反证：`check_with` 忽略 peer（调 `check_library_path(.., None)`）⇒ 前两条红。
+    #[test]
+    fn the_precheck_uses_the_peer_facts() {
+        let home = tempfile::tempdir().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        let (from, _) = library(home.path(), "Lib");
+        let dest = home.path().join("Disk");
+        std::fs::create_dir_all(&dest).unwrap();
+        let desktop = home.path().join("Desktop");
+        std::fs::create_dir_all(&desktop).unwrap();
+        // 主人把「文稿」重定向到家目录外的独立目录：按名字判不到，只有 peer 的事实知道。
+        // 必须在 local_base 之外：否则忽略 peer 时也会命中 AppDir，反证失效。
+        let redirected = tempfile::tempdir().unwrap();
+        let redirected_documents = redirected.path().join("PersonalDocs");
+        std::fs::create_dir_all(&redirected_documents).unwrap();
+        let p = probes(&|_, _| Some(true), &|_| Some(u64::MAX), &|_| false);
+
+        // 主人的家目录 = 测试临时目录；「图片」是另一个目录（默认库例外不涉及这里）。
+        let mut facts = platform::UserDirFacts::from_home(home.path().to_path_buf());
+        facts.documents = Some(redirected_documents.clone());
+        let peer = platform::PeerUser::new("S-1-5-21-1".into(), facts);
+        assert!(
+            check_with(&from, &dest, local.path(), &p, Some(&peer)).is_ok(),
+            "普通目录照常通过"
+        );
+        let err = check_with(&from, &desktop, local.path(), &p, Some(&peer)).unwrap_err();
+        assert!(err.contains("ui.err_library_sensitive"), "{err}");
+        let err = check_with(
+            &from,
+            &redirected_documents.join("photos"),
+            local.path(),
+            &p,
+            Some(&peer),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("ui.err_library_sensitive"),
+            "重定向到家目录外的文稿要拒：{err}"
+        );
+
+        let blind = platform::PeerUser::new("S-1-5-21-1".into(), platform::UserDirFacts::default());
+        let err = check_with(&from, &dest, local.path(), &p, Some(&blind)).unwrap_err();
+        assert!(err.contains("ui.err_library_user_dirs"), "{err}");
+    }
+
+    /// #1826：搬迁收尾走 commit 入口（`main` 的用法）：重启后没有连接方，也只提交已预检过的
+    /// 计划，不再拿服务账户的目录事实重判一遍。
+    /// 反证：把这里的 `commit_relocated` 换成 `set(.., None)` 并让该目标敏感 ⇒ 收尾失败、
+    /// 源和目标拆开（本用例用普通目录跑通路径本身）。
+    #[test]
+    fn the_restart_commit_goes_through_the_plan_entry() {
+        let home = tempfile::tempdir().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        let (from, id) = library(home.path(), "Lib");
+        let dest = home.path().join("Disk");
+        std::fs::create_dir_all(&dest).unwrap();
+        let c = plan(&from, &dest, local.path(), None).unwrap();
+        let loc =
+            crate::library_location::LibraryLocation::with(None, local.path().join("platform"));
+        let _moved = move_library(local.path(), &c.plan, &no_progress(), &indexed_ok).unwrap();
+        complete(local.path(), &c.plan, |to| {
+            loc.commit_relocated(&to.to_string_lossy()).map(|_| ())
+        })
+        .unwrap();
+        assert_eq!(layout::read_library_id(&dest), Some(id));
+        assert!(!from.exists(), "原目录已删");
+        assert!(pending(local.path()).is_none(), "计划已清");
     }
 }

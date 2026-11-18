@@ -4,7 +4,10 @@
 // NPE → 测试必红，这就是反证）。
 package com.hawkeyexb.ppass.backup
 
+import com.hawkeyexb.ppass.backup.order.mediaStoreScopeTimeSelection
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MediaScannerScopeTest {
@@ -36,4 +39,13 @@ class MediaScannerScopeTest {
         val threwCount = runCatching { scanner.countAll(null) }.isFailure
         assertEquals("null 范围 countAll 走查询路径", true, threwCount)
     }
+    @Test
+    fun time_selection_uses_capture_then_modified_not_date_added() {
+        val sql = mediaStoreScopeTimeSelection(1_000L)
+        assertTrue(sql.contains(android.provider.MediaStore.MediaColumns.DATE_TAKEN))
+        assertTrue(sql.contains(android.provider.MediaStore.MediaColumns.DATE_MODIFIED))
+        assertFalse("收录时间不能再参与范围过滤", sql.contains(android.provider.MediaStore.MediaColumns.DATE_ADDED))
+        assertTrue("拍摄时间为毫秒", sql.contains("1000000"))
+    }
+
 }

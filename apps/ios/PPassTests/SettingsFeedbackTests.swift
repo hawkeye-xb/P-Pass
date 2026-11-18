@@ -426,7 +426,8 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertEqual(media.requested, 0)
     }
 
-    /// 10-29：选范围页读相册时可能刚弹过系统框，`refreshAccess` 让页面按弹框之后的那一档显示（部分 → 页顶说明，拒绝 → 去设置）。
+    /// 10-29：选范围页读相册时可能刚弹过系统框，`refreshAccess` 让页面按弹框之后的那一档显示。
+    /// #1811 起权限两态：部分与拒绝都是「相册未完整授权」同一状态。
     func test_refresh_access_picks_up_the_answer_from_the_prompt() async {
         let (app, _, media) = make()
         media.granted = nil
@@ -436,7 +437,7 @@ final class SettingsFeedbackTests: XCTestCase {
         _ = await media.requestAccess()
         app.refreshAccess()
         XCTAssertEqual(app.access, .partial)
-        XCTAssertEqual(BucketScreen.notice(for: app.access), .partial)
+        XCTAssertEqual(BucketScreen.notice(for: app.access), .noAccess)
     }
 
     // MARK: #1039 换新电脑清旧的后台备份意图写失败（对位 Android）
@@ -731,6 +732,27 @@ final class SettingsFeedbackTests: XCTestCase {
         app.guideAction(.enableScope)
         XCTAssertTrue(app.wantsScopeEditor)
         XCTAssertEqual(app.tab, .settings)
+    }
+
+    /// #1811：folder-only + 部分权限 + 规则关：按钮写「开启自动备份」并且真的直接开启，不能写「去设置」却不开设置。
+    /// 反证：`scopeGuideActionKey` 只看 `access == .partial`（旧行为），第一条断言红、`opened` 变 1。
+    func test_folder_only_partial_access_guide_action_matches_its_label() async {
+        let (app, engine, media) = make()
+        var opened = 0
+        app.settingsOpener = { opened += 1 }
+        try? engine.setAutoRule(false)
+        media.granted = .partial
+        media.disk = ["folder:f1"]
+        engine.folderInfos = [FolderSourceInfo(id: "f1", displayName: "相机", available: true)]
+        app.refresh()
+        XCTAssertTrue(app.sourceAvailability.folderOnly)
+        XCTAssertEqual(app.scopeGuideActionKey, "photos_first_run_enable", "folder-only 按钮写「开启自动备份」，不存在「去设置」")
+        engine.calls.removeAll()
+        app.guideAction(.enableScope)
+        await settle()
+        XCTAssertEqual(opened, 0, "不跳系统设置")
+        XCTAssertTrue(app.autoRule, "直接开启规则")
+        XCTAssertTrue(engine.calls.contains("rule=true") || engine.calls.contains("wake"), "开了规则：\(engine.calls)")
     }
 
     /// 部分照片权限下开自动备份（引导卡「开启」/ 设置开关）：iOS 不会再弹授权框，同一意图的做法是去系统设置改成「所有照片」；

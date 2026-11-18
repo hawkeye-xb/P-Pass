@@ -113,6 +113,10 @@ act() {
   cp "$OUT/resume.status.json" "$OUT/status-resume.json"
   disk_measure "$OUT" after
   jget "$OUT/after.json" 'j["bytes"]["test_dir_foldere3-'"$RUN"'"]' >"$OUT/src-dir-bytes-after.txt"
+  # flow-blobs 的 GC 是 60 秒一轮：续传收场后要等两轮，续传缓存才被回收。
+  # 立刻量会把「可回收的续传缓存」当成第二份副本，误判成占盘 2x（#1836 已核实）。
+  echo "wait for flow-blobs GC (2 cycles) before desktop du at $(date '+%T')" >>"$OUT/crash.log"
+  sleep 120
   desktop_du "$OUT" after
   ios_collect_common "$OUT"
   # 日志只留本轮段（ios-lib 说明）：上一轮崩溃续传的 imported/process start 行不能冒充本轮。
