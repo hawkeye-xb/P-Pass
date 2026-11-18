@@ -308,6 +308,8 @@ class UIRegressCase: XCTestCase {
             // 等照片框时只认照片框：别的弹窗也常有「不允许」，不能拿它替照片答案（`photosOnly` 在点击前就过滤）。
             if let tap = tapAlert(choices, photosOnly: what == "photos", roots: [springboard, app]) {
                 UIReg.say("SYSTEM_ALERT \(what) tapped=\(tap.label)")
+                // 坐标兜底那一下可能没点中：照片框还在就继续等，别急着让调用方去选片。
+                guard what != "photos" || alertGone(tap) else { continue }
                 return true
             }
             usleep(300_000)
