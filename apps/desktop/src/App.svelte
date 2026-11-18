@@ -425,7 +425,9 @@
         showPairModal = false;
         // 弹窗同时只留一个：确认弹窗打开时把还开着的大图查看器关掉。两个遮罩
         // 同 z-50，查看器后渲染仍盖在上面，被 inert 后用户看到的是一层点不动
-        // 的查看器，可操作的确认弹窗反而在底下（CodeRabbit）。
+        // 的查看器，可操作的确认弹窗反而在底下（CodeRabbit）。两个 open 翻转
+        // 落在同一轮更新里：背景 inert 与焦点的交接由 dialog 组件按栈接管
+        //（谁标谁摘、焦点归最上层），这里不用关心顺序（#1132 独立评审阻断）。
         photoViewer = null;
         showConfirmModal = true;
       }

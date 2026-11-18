@@ -76,12 +76,17 @@ describe("选库", () => {
   // CodeRabbit：选目录失败落下的红条，重试成功后要清掉——不然向导一直挂着
   // 失败警告。chooseFolder 与 useDefault 同一处理。
   // 反证：成功分支去掉 error: "" ⇒ 本条红。
+  // CodeRabbit：直接断言错误对象形状——两个向导读 view.error.text / .code
+  // （Wizard.svelte:84 等）；error 退回裸字符串时红条没正文、代码显示
+  // undefined，旧断言（typeof string 就当 key 用）照样绿，判不了。
+  // 反证：wizardFlow.js 失败分支 set({ error: "ui.wizard_save_failed" })（裸串）⇒ 本条红。
   it("选目录失败后重试成功，红条清掉", async () => {
-    const errKey = (e) => (typeof e === "string" ? e : e?.key);
     const { flow, view } = make();
     invokeMock.mockRejectedValueOnce(new Error("no folder"));
     await flow.chooseFolder();
-    expect(errKey(view.error)).toBe("ui.wizard_save_failed");
+    expect(view.error?.key).toBe("ui.wizard_save_failed");
+    expect(view.error?.text).toBeTruthy();
+    expect(view.error?.code).toBe("wizard_save_failed");
     invokeMock.mockResolvedValueOnce("/Volumes/X/Lib");
     await flow.chooseFolder();
     expect(view.error).toBe("");
@@ -89,7 +94,9 @@ describe("选库", () => {
 
     invokeMock.mockRejectedValueOnce(new Error("no default"));
     await flow.useDefault();
-    expect(errKey(view.error)).toBe("ui.wizard_save_failed");
+    expect(view.error?.key).toBe("ui.wizard_save_failed");
+    expect(view.error?.text).toBeTruthy();
+    expect(view.error?.code).toBe("wizard_save_failed");
     invokeMock.mockResolvedValueOnce(undefined);
     await flow.useDefault();
     expect(view.error).toBe("");

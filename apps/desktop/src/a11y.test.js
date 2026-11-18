@@ -451,14 +451,32 @@ describe("#1132 逐项断言", () => {
 
   // CodeRabbit（ARIA22）：live region 要先挂载、后写内容——点「检查更新」时
   // 区域和首条消息同时插入，读屏可能不播报首条；区域常驻（空闲时零高度）才补得上。
-  // 反证：状态行改回 `{#if updatePhase !== "idle"}` 条件挂载 ⇒ 本条红。
-  it("D4 更新状态区域在开始检查之前就已挂载", async () => {
+  // CodeRabbit：App 挂载即自动检查更新（onMount → refresh → checkForUpdate(false)），
+  // 桩立即返回 null 会把 updatePhase 推过 idle——把状态行改回条件挂载，本用例
+  // 照样绿，判不了「先挂载、后写内容」。按住首轮 refresh 的 status（daemon_status）：
+  // 检查还没开始，区域必须已挂载且为空；放行后断言同一节点收到状态文本。
+  // 反证：状态行改回 `{#if updatePhase !== "idle"}` 条件挂载 ⇒ 本条红（按住期间区域缺席）。
+  it("D4 更新状态区域在自动检查开始前就已挂载，同一节点随后收到状态", async () => {
     daemon();
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const base = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation(async (cmd, args) => {
+      if (daemonMethodOf(cmd) === "status") return gate.then(() => base(cmd, args));
+      return base(cmd, args);
+    });
     await open("#/settings");
     await settle();
     // 侧栏服务胶囊也是 role=status，按 testid 定位更新状态区。
     const region = document.querySelector('[data-testid="update-status"]');
     expect(region?.getAttribute("role")).toBe("status");
+    // 检查还没开始（updatePhase 仍是 idle）：区域已挂载但没有内容可播报。
+    expect(region?.textContent.trim()).toBe("");
+    release();
+    await settle();
+    // ARIA22：写内容的是同一个常驻节点，不是先挂载后替换。
+    expect(document.querySelector('[data-testid="update-status"]')).toBe(region);
+    expect(region.textContent).toContain("已是最新");
   });
 
   // D5：切步后焦点掉到 BODY 是卡上原发现。
@@ -552,7 +570,16 @@ describe("#1132 逐项断言", () => {
     handlers.get("daemon-event")?.({ payload: { event: "pairing.pending_changed", data: {} } });
     await settle();
     expect(screen.queryByRole("dialog", { name: /查看大图/ })).toBeNull();
-    expect(screen.getByRole("dialog", { name: "客厅的 iPhone 请求加入" })).toBeTruthy();
+    const confirmPanel = screen.getByRole("dialog", { name: "客厅的 iPhone 请求加入" });
+    // 独立评审阻断：查看器关、确认弹窗开落在同一轮更新里，交接后焦点必须在
+    // 确认弹窗内、背景（main / 侧栏）仍带 inert——查看器的清理不得摘掉确认
+    // 弹窗要用的 inert，也不得把焦点抢回缩略图（dialog.svelte 按栈接管）。
+    // 反证：dialog.svelte 改回「标记时跳过已 inert 的兄弟 + 清理时无条件摘光、
+    // 无条件回触发元素」⇒ 本条红（背景失去 inert、焦点落在弹窗外）。
+    expect(confirmPanel.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.querySelector("main.content")?.hasAttribute("inert")).toBe(true);
+    expect(document.querySelector("aside.sidebar")?.hasAttribute("inert")).toBe(true);
   });
 });
 
@@ -602,12 +629,21 @@ describe("#1132 对比度（D7 / D12）", () => {
   // D7 同类（CodeRabbit）：向导/设备/活动/设置的错误码行也是 12px 半透明小字
   // ——act 压 80% 后纸底 4.03:1、act-bg 上 3.56:1，都低于 4.5。同 D7 口径：
   // 去掉半透明，act 直接落底（纸底 5.70:1、act-bg 4.86:1）。
-  // 反证：往任一错误码行加回 opacity-80 ⇒ 本条红。
+  // CodeRabbit：按独立的类名 token 检查，不依赖类名顺序——旧断言只认
+  // 「text-[12px] opacity-80」这个固定子串，写成 `opacity-80 text-[12px]` 就漏。
+  // 逐个 class 属性看：凡带 text-[12px] 的元素不得再压任何透明度（12px 小字一律全量色）。
+  // 反证：往任一 12px 元素的 class 里加回 opacity-80（顺序不限）⇒ 本条红。
   it("D7 同类：错误码行不再压透明度，act 在纸底 / act-bg ≥ 4.5:1", () => {
     expect(contrast(value("act"), value("paper"))).toBeGreaterThanOrEqual(4.5);
     expect(contrast(value("act"), value("act-bg"))).toBeGreaterThanOrEqual(4.5);
     for (const f of ["App.svelte", "Wizard.svelte", "WizardWindows.svelte"]) {
-      expect(srcFile(f)).not.toContain("text-[12px] opacity-80");
+      for (const m of srcFile(f).matchAll(/class="([^"]*)"/g)) {
+        const cls = m[1].split(/\s+/);
+        expect(
+          cls.includes("text-[12px]") && cls.some((c) => /^opacity-/.test(c)),
+          `${f}: 12px 小字压了透明度「${m[1]}」`,
+        ).toBe(false);
+      }
     }
   });
 });

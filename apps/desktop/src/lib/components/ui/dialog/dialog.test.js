@@ -12,6 +12,7 @@ import { cleanup, render } from "@testing-library/svelte";
 import { createRawSnippet } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Dialog from "./dialog.svelte";
+import StackFixture from "./stack.fixture.svelte";
 
 const body = (html) => createRawSnippet(() => ({ render: () => `<div>${html}</div>` }));
 const tab = (shiftKey = false) =>
@@ -141,6 +142,45 @@ describe("dialog 焦点管理", () => {
     await Promise.resolve();
     o2.remove();
     await r2.rerender({ open: false });
+    expect(document.activeElement).toBe(main);
+  });
+
+  // #1132 独立评审阻断（同 CodeRabbit Major）：查看器开着时确认弹窗在同一轮更新
+  // 里打开——两个 Dialog 的 inert 与焦点交接必须按栈归「最上层」：先关的查看器
+  // 不得把背景 inert 摘掉（确认弹窗还要用），也不得把焦点抢回触发元素。
+  // 夹具模板序照 App.svelte（确认弹窗在前、查看器在后），effect 按创建序跑：
+  // 确认弹窗的 $effect 先于查看器的清理——正是线上触发顺序。
+  // 反证：dialog.svelte 改回「标记时跳过已 inert 的兄弟 + 清理时无条件摘光、
+  // 无条件回触发元素」⇒ 本条红（背景失去 inert、焦点落在弹窗外）。
+  it("两个弹窗同一轮更新交接：焦点留在新弹窗内，背景仍带 inert", async () => {
+    const o = opener();
+    const { rerender } = render(StackFixture, { viewerOpen: true, confirmOpen: false });
+    await Promise.resolve();
+    expect(document.activeElement?.id).toBe("in-viewer");
+    expect(o.getAttribute("inert")).toBe("");
+    // 同一轮更新：查看器关、确认弹窗开（photoViewer = null 与
+    // showConfirmModal = true 落在同一批）。
+    await rerender({ viewerOpen: false, confirmOpen: true });
+    expect(document.activeElement?.id).toBe("in-confirm");
+    // 查看器先关，但背景 inert 归确认弹窗接管：不许被一起摘掉。
+    expect(o.getAttribute("inert")).toBe("");
+    // 焦点没有被查看器的清理抢回触发元素。
+    expect(document.activeElement).not.toBe(o);
+  });
+
+  // CodeRabbit：触发元素在弹窗打开期间被禁用（没被移除）时，它收不到焦点，
+  // 旧实现 opener.focus() 空转后焦点留在 body——必须回 main 兜底。
+  // 反证：清理函数去掉「activeElement 不是 opener 就回 main」⇒ 本条红。
+  it("触发元素被禁用（仍在 DOM）时关闭弹窗，焦点回 main 兜底", async () => {
+    const main = document.createElement("main");
+    main.setAttribute("tabindex", "-1");
+    document.body.appendChild(main);
+    const o = opener();
+    const { rerender } = render(Dialog, { open: true, children: body('<button id="a">甲</button>') });
+    await Promise.resolve();
+    expect(document.activeElement?.id).toBe("a");
+    o.disabled = true;
+    await rerender({ open: false });
     expect(document.activeElement).toBe(main);
   });
 });
