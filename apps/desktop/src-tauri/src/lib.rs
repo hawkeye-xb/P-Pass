@@ -4433,7 +4433,7 @@ mod tests {
             .expect("没有用 Register-ScheduledTask 登记限时恢复任务");
         let ps = ps_line.replace("$\\'", "'").replace("$$", "$");
         for needle in [
-            "-Once -At ([DateTime]::Now.AddMinutes(1))", // 1 分钟首触发
+            "-Once -At $start", // 1 分钟首触发（$start = now + 1min）
             "-RepetitionInterval (New-TimeSpan -Minutes 1)", // 每 1 分钟重试
             "-RepetitionDuration (New-TimeSpan -Minutes 10)", // 10 分钟有界
             "-ExecutionTimeLimit (New-TimeSpan -Minutes 2)",
@@ -4453,6 +4453,17 @@ mod tests {
         ] {
             assert!(ps.contains(needle), "限时恢复任务缺 {needle}");
         }
+
+        // DeleteExpiredTaskAfter 只在触发器有 EndBoundary 时才生效：不设它，任务永不过期、
+        // 也就不会自删，等于留了个永久计划任务。反证：删掉 EndBoundary 赋值，本测试红。
+        let boundary = ps
+            .find("$t.EndBoundary = $start.AddMinutes(10)")
+            .expect("触发器缺 EndBoundary（DeleteExpiredTaskAfter 不会生效）");
+        let register = ps.find("Register-ScheduledTask").expect("缺任务登记");
+        assert!(
+            ps.contains("-At $start") && boundary < register,
+            "首触发与 EndBoundary 必须同一基准，且 EndBoundary 在登记之前设置"
+        );
 
         // 任务动作（PowerShell）：先读 wanted-state；命中 stopped ⇒ 自删 + return；
         // 读失败（catch）也自删 + return。两条都必须排在 sc.exe start 之前——用户停过
