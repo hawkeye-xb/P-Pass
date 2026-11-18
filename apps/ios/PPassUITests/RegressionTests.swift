@@ -49,9 +49,10 @@ final class RegressionTests: UIRegressCase {
         if !inverted {
             // 正向：再真实打开，最终开启。判定要求 false 之后新出现一条 enabled=true，
             // 准备阶段那条 enabled=true 不算数，实际操作失效必红（#1812）。
+            // 不在界面上断言开关：开成功后 App 会 push 进选范围页（`openScopeEditor`），开关已不在界面上，
+            // 读它必报「No matches found for Descendants matching type Switch」；结论以 App 日志为准（见文件开头）。
             flip(rule)
             settle(5)
-            XCTAssertEqual(rule.value as? String, "1", "正向：实际操作后开关必须最终开启")
         } else {
             // 反向：停在真实关闭。判据要 false 之后再有一条 enabled=true，缺通过行 ⇒ FAIL。
             settle(5)
