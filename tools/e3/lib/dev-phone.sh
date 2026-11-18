@@ -100,14 +100,17 @@ dev_ios_build() {
 
 # dev_ios_install <设备> <app> <fresh 0|1> [页面]：已在设备锁里调用。页面 = PPASS_ROUTE（只 DEBUG 包读）。
 dev_ios_install() {
-  local dev="$1" app="$2" fresh="$3" page="${4:-}" envs='{}'
+  local dev="$1" app="$2" fresh="$3" page="${4:-}" envargs
   if [ "$fresh" = 1 ]; then
     log "卸载旧包（--fresh）"
     xcrun devicectl device uninstall app --device "$dev" "$DEV_PKG" >/dev/null 2>&1 || true
   fi
   log "覆盖安装 PPass.app"
   xcrun devicectl device install app --device "$dev" "$app" >/dev/null || return 1
-  [ -n "$page" ] && envs="{\"PPASS_ROUTE\":\"$page\"}"
+  # 没有页面就不给这个参数：devicectl 不接受空的环境对象（`{}` 报 Unable to decode environment variables，#1842）。
+  # bash 3.2 在 set -u 下展开空数组会报未绑定，所以用 + 形式。
+  envargs=()
+  [ -n "$page" ] && envargs=(--environment-variables "{\"PPASS_ROUTE\":\"$page\"}")
   xcrun devicectl device process launch --device "$dev" --terminate-existing \
-    --environment-variables "$envs" "$DEV_PKG" >/dev/null || return 1
+    ${envargs[@]+"${envargs[@]}"} "$DEV_PKG" >/dev/null || return 1
 }
