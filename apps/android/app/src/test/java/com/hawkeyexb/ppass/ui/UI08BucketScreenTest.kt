@@ -18,17 +18,70 @@ class UI08BucketScreenTest {
         ).readText()
     }
 
+    /**
+     * #1797：相册、文件夹和「添加文件夹」都必须走 #1796 的基础组件（SourceCard / AddSourceCard），
+     * 同一网格与尺寸由组件保证；不再有平行的自绘卡片（自画角标、自画类型图形、自画描边点击）。
+     * 反证：恢复自绘平行实现（如旧 BucketCard / SelectBadge / SourceTypeGlyph）后本条变红。
+     */
     @Test
-    fun album_name_is_one_line_and_ellipsized_without_changing_bucket_selection() {
+    fun source_cards_use_the_shared_standard_components_not_a_parallel_self_drawn_implementation() {
         val source = bucketScreenSource()
-        assertTrue("album name must have a single-line limit", source.contains("maxLines = 1"))
+        assertTrue("相册卡必须用标准 SourceCard（按类型入口断言）", source.contains("SourceKind.ALBUM"))
+        assertTrue("文件夹卡必须用标准 SourceCard（按类型入口断言）", source.contains("SourceKind.FOLDER"))
+        assertTrue("必须导入基础组件 SourceCard", source.contains("import com.hawkeyexb.ppass.ui.components.SourceCard"))
+        assertTrue("添加动作必须用标准 AddSourceCard", source.contains("AddSourceCard("))
+        assertFalse("自绘勾选角标不许回来", source.contains("SelectBadge"))
+        assertFalse("自绘类型图形不许回来", source.contains("SourceTypeGlyph"))
+        assertFalse("卡片自绘点击不许回来", source.contains(".clickable(onClick = onToggle)"))
+        assertFalse("卡片自绘封面比例不许回来（同尺寸由组件的固定封面高度保证）", source.contains("aspectRatio(1.6f)"))
+    }
+
+    /**
+     * #1797：返回也交给标准 IconButton——不再用自绘「‹」字符承载点击（与 FolderScreen 同款）。
+     * 反证：恢复「‹」+ clickable 后本条变红。
+     */
+    @Test
+    fun back_action_uses_a_standard_icon_button_not_a_self_drawn_glyph() {
+        val source = bucketScreenSource()
+        assertTrue("返回用标准 IconButton", source.contains("IconButton(onClick = onCancel)"))
+        assertTrue("返回图标用平台箭头", source.contains("Icons.AutoMirrored.Filled.ArrowBack"))
+        assertTrue("返回描述用本地化词条", source.contains("R.string.back"))
+        assertFalse("自绘「‹」返回不许回来", source.contains("\"‹\""))
+    }
+
+    /**
+     * #1797：同名来源要有类型标识——相册与文件夹的卡分别给各自类型词，由组件用标准图标 + 读屏描述呈现。
+     * 反证：两张卡的 kindLabel 互换后，本条红（标签必须各自出现在对应的卡片调用里）。
+     */
+    @Test
+    fun same_name_sources_get_distinct_type_labels() {
+        val source = bucketScreenSource()
+        val albumBlock = source.substringAfter("items(buckets").substringBefore("items(folderBuckets")
+        val folderBlock = source.substringAfter("items(folderBuckets").substringBefore("item(key = \"add-folder\")")
         assertTrue(
-            "album name must show an ellipsis when the row is constrained",
-            source.contains("overflow = TextOverflow.Ellipsis"),
+            "相册卡要带相册类型词",
+            albumBlock.contains("kindLabel = stringResource(R.string.source_kind_album)"),
         )
-        assertTrue("album name must reserve the remaining row width", source.contains("Modifier.weight(1f)"))
-        assertFalse("the old unconstrained row width must not return", source.contains("weight(1f, fill = false)"))
-        assertTrue("selection semantics must still be keyed by bucket id", source.contains("selected = b.id in checked"))
+        assertTrue(
+            "文件夹卡要带文件夹类型词",
+            folderBlock.contains("kindLabel = stringResource(R.string.source_kind_folder)"),
+        )
+    }
+
+    @Test
+    fun album_and_folder_cards_keep_their_selection_semantics() {
+        val source = bucketScreenSource()
+        assertTrue("相册勾选仍按相册 id 记", source.contains("selected = b.id in checked"))
+        assertTrue("文件夹勾选仍按文件夹 key 记", source.contains("folder.key in checkedFolders"))
+        assertTrue(
+            "相册空名仍走本地化词条",
+            source.contains("b.name ?: stringResource(R.string.bucket_unnamed)"),
+        )
+        assertTrue(
+            "选中/未选中状态要给读屏文案",
+            source.contains("selectedDescription = stringResource(R.string.source_selected)") &&
+                source.contains("unselectedDescription = stringResource(R.string.source_unselected)"),
+        )
     }
 
     @Test
@@ -40,6 +93,7 @@ class UI08BucketScreenTest {
         assertTrue("a size change must restart the request", source.contains("key2 = displaySize"))
         assertFalse("the old fixed low-resolution request must not return", source.contains("Size(200, 200)"))
     }
+
     @Test
     fun folders_and_alums_share_one_atomic_save() {
         val source = bucketScreenSource()
@@ -51,17 +105,27 @@ class UI08BucketScreenTest {
         assertTrue("新目录先默认选中但只进编辑暂存", source.contains("!it.registered && it.key !in seenFolderKeys"))
     }
 
+    /**
+     * #1797：失效目录的重新授权与移除收进标准菜单；重新授权仍直连授权动作、只挂在权限失效
+     * 条件里，移除仍先过原确认弹窗。反证：菜单丢掉任一动作、绕过确认弹窗、
+     * 或权限条件反转（needsPermission 为真反而不给重新授权）后，本条红。
+     */
     @Test
     fun needs_permission_folder_keeps_reauthorize_and_remove_actions() {
         val source = bucketScreenSource()
-        assertTrue("卡片必须支持第二个独立动作", source.contains("secondaryActionLabel: String? = null"))
-        assertTrue(source.contains("onSecondaryAction: (() -> Unit)? = null"))
-        assertTrue("第二个动作必须实际渲染", source.contains("if (secondaryActionLabel != null && onSecondaryAction != null)"))
         val folderBlock = source.substringBefore("item(key = \"add-folder\")")
             .substringAfter("items(folderBuckets")
-        assertTrue("失效目录仍显示重新授权", folderBlock.contains("onReauthorizeFolder(folder.key)"))
-        assertTrue("失效目录同时保留移除", folderBlock.contains("if (folder.needsPermission) stringResource(R.string.folder_remove) else null"))
-        assertTrue("失效目录的移除仍进入原确认弹窗", folderBlock.contains("onSecondaryAction = if (folder.needsPermission) { { removing = folder } } else null"))
+        assertTrue("文件夹卡的动作收进标准菜单", folderBlock.contains("menuActions = buildList"))
+        assertTrue("重新授权必须挂在 needsPermission 条件里", folderBlock.contains("if (folder.needsPermission) {"))
+        val guarded = folderBlock.substringAfter("if (folder.needsPermission) {")
+            .substringBefore("add(SourceMenuAction(stringResource(R.string.folder_remove))")
+        assertTrue("失效目录仍显示重新授权", guarded.contains("SourceMenuAction(stringResource(R.string.folder_reauthorize))"))
+        assertTrue("失效目录的重新授权仍直连 onReauthorizeFolder(folder.key)", guarded.contains("onReauthorizeFolder(folder.key)"))
+        assertTrue("失效目录同时保留移除", folderBlock.contains("SourceMenuAction(stringResource(R.string.folder_remove))"))
+        assertTrue("移除仍进入原确认弹窗", folderBlock.contains("removing = folder"))
+        assertFalse("移除不许在确认前（网格块里）直接触发 onRemoveFolder", folderBlock.contains("onRemoveFolder("))
+        val dialog = source.substringAfter("removing?.let")
+        assertTrue("确认后才回调 onRemoveFolder(folder.key)", dialog.contains("onRemoveFolder(folder.key)"))
     }
 
     /**
@@ -112,15 +176,13 @@ class UI08BucketScreenTest {
         )
     }
 
+    /**
+     * #1797：「添加文件夹」用标准 AddSourceCard；保存期间不得再打开添加动作（沿用 saving 守卫）。
+     */
     @Test
-    fun source_cards_and_add_action_share_grid_geometry_and_type_glyphs() {
+    fun add_action_uses_the_standard_card_and_keeps_its_save_guard() {
         val source = bucketScreenSource()
-        assertTrue("相册与文件夹必须有不同类型图标", source.contains("SourceTypeGlyph(isFolder)"))
-        assertTrue("相册卡使用相册图标", source.contains("isFolder = false"))
-        assertTrue("文件夹卡使用文件夹图标", source.contains("isFolder = true"))
-        assertTrue("来源卡和添加动作必须同高", source.split("Modifier.height(72.dp)").size >= 3)
-        assertTrue("添加动作也使用同一封面比例", source.contains("Modifier.fillMaxWidth().aspectRatio(1.6f)"))
-        assertFalse("移除不能作为卡片外的一行撑高", source.contains("Row(Modifier.padding(start = 8.dp, top = 4.dp))"))
+        assertTrue("添加动作必须用标准 AddSourceCard", source.contains("AddSourceCard("))
+        assertTrue("保存期间不得打开添加动作", source.contains("if (!saving) onAddFolder()"))
     }
-
 }

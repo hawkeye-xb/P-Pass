@@ -194,3 +194,8 @@
 "auto_backup_rule_none_hint" = "没有照片访问权限。";
 "auto_backup_from_today_empty" = "今天新拍的照片会自动传到电脑。去拍一张试试。";
 "more_label" = "更多";
+"source_kind_album" = "相册";
+"source_kind_folder" = "文件夹";
+"source_selected" = "已选择";
+"source_unselected" = "未选择";
+"source_more_actions" = "更多操作";
