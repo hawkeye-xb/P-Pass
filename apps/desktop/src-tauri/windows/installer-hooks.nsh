@@ -320,19 +320,22 @@ Function PPassRegisterUpdateRecoveryTask
   Pop $0
   Pop $1
   StrCpy $R2 $1 -2
+  ; schtasks /Create /XML 要求任务定义是 Unicode：写 UTF-16LE 并带 BOM，否则报「无法切换编码」。
   FileOpen $3 "$TEMP\ppass-recovery-task.xml" w
-  FileWrite $3 '<?xml version="1.0" encoding="UTF-8"?>$\r$\n'
-  FileWrite $3 '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">$\r$\n'
-  FileWrite $3 '  <Triggers><TimeTrigger><StartBoundary>$R1</StartBoundary><EndBoundary>$R2</EndBoundary>$\r$\n'
-  FileWrite $3 '    <Repetition><Interval>PT1M</Interval></Repetition></TimeTrigger></Triggers>$\r$\n'
-  FileWrite $3 '  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>$\r$\n'
-  FileWrite $3 '  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>$\r$\n'
-  FileWrite $3 '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>$\r$\n'
-  FileWrite $3 '    <StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT2M</ExecutionTimeLimit>$\r$\n'
-  FileWrite $3 '    <DeleteExpiredTaskAfter>PT1M</DeleteExpiredTaskAfter></Settings>$\r$\n'
-  FileWrite $3 '  <Actions Context="Author"><Exec><Command>powershell.exe</Command>$\r$\n'
-  FileWrite $3 '    <Arguments>-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\update-recovery.ps1"</Arguments></Exec></Actions>$\r$\n'
-  FileWrite $3 '</Task>$\r$\n'
+  FileWriteByte $3 255
+  FileWriteByte $3 254
+  FileWriteUTF16LE $3 '<?xml version="1.0" encoding="UTF-16"?>$\r$\n'
+  FileWriteUTF16LE $3 '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">$\r$\n'
+  FileWriteUTF16LE $3 '  <Triggers><TimeTrigger><StartBoundary>$R1</StartBoundary><EndBoundary>$R2</EndBoundary>$\r$\n'
+  FileWriteUTF16LE $3 '    <Repetition><Interval>PT1M</Interval></Repetition></TimeTrigger></Triggers>$\r$\n'
+  FileWriteUTF16LE $3 '  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>$\r$\n'
+  FileWriteUTF16LE $3 '  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>$\r$\n'
+  FileWriteUTF16LE $3 '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>$\r$\n'
+  FileWriteUTF16LE $3 '    <StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT2M</ExecutionTimeLimit>$\r$\n'
+  FileWriteUTF16LE $3 '    <DeleteExpiredTaskAfter>PT1M</DeleteExpiredTaskAfter></Settings>$\r$\n'
+  FileWriteUTF16LE $3 '  <Actions Context="Author"><Exec><Command>powershell.exe</Command>$\r$\n'
+  FileWriteUTF16LE $3 '    <Arguments>-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\update-recovery.ps1"</Arguments></Exec></Actions>$\r$\n'
+  FileWriteUTF16LE $3 '</Task>$\r$\n'
   FileClose $3
   nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /Create /TN "${PPASS_RECOVERY_TASK}" /XML "$TEMP\ppass-recovery-task.xml" /F'
   Pop $0
