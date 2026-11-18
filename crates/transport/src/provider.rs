@@ -1436,6 +1436,116 @@ mod endpoint_ownership_tests {
     }
 }
 
+#[cfg(test)]
+mod net29_tests {
+    use super::*;
+    use std::fs::File;
+    use std::time::Duration;
+
+    /// NET-29: an endpoint whose only relay is a closed local port — iroh's
+    /// `online()` can never resolve, exactly like the provider endpoint in
+    /// the #467 captures that never got a home relay connected. Minimal
+    /// preset: no n0 address lookup, so this stays fully offline.
+    fn never_online() -> TransportConfig {
+        TransportConfig {
+            relay_urls: vec!["http://127.0.0.1:1".into()],
+            n0_services: false,
+            secret_key: None,
+            alpns: vec![ALPN_BLOBS.into()],
+            bind_addr: None,
+        }
+    }
+
+    const NET29_ONLINE_TIMEOUT: Duration = Duration::from_millis(400);
+
+    fn photo_bytes(len: usize, seed: u64) -> Vec<u8> {
+        let mut x = 0x9E37_79B9_7F4A_7C15u64 ^ seed;
+        (0..len)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x as u8
+            })
+            .collect()
+    }
+
+    /// NET-29: an endpoint that stays offline is replaced on EVERY failed
+    /// serve — every attempt gets a fresh endpoint instead of the same stuck
+    /// one, and one serve waits one deadline (no widened wait inside one
+    /// serve).
+    ///
+    /// QA-20 (#570) 原先在 `tests/media_import.rs` 用墙钟量这条：Windows
+    /// runner 争用时量到过 1.57s（#1730 的 1582ms），而受控实验里
+    /// `wait_online` 内部一直只等 400–444ms——定时器只保证「不早于 deadline
+    /// 唤醒」，CPU 被抢占时回调迟到多久都合法，于是墙钟上界量的是机器忙不忙，
+    /// 不是产品等了几次。这里改成在 tokio 的虚拟时钟上量（#1758）：时钟只在
+    /// 定时器到期时前进，调度延迟影响不到它，于是「虚拟时间正好前进一个
+    /// deadline」真的只证明「等了一个 deadline、没等第二个」。产品逻辑一行未改。
+    ///
+    /// 两个落点决定了用例放在本模块而不是 `tests/media_import.rs`：
+    /// - `time::pause()` 只对 current_thread runtime 生效，provider 自己的
+    ///   runtime 是 multi_thread（`BlobsProvider::build`），停不了；
+    /// - 但 `wait_online` 的 `tokio::time::timeout` 认的是**当前任务所在的**
+    ///   runtime。所以测试自建一个暂停的 current_thread runtime，在它上面 await
+    ///   整个 `serve_async`（`serve` 的同步外壳只是 block_on 它），定时器就落在
+    ///   虚拟时钟上；`serve_async` 里若多等一次 deadline（重试），虚拟时间会走
+    ///   两个 deadline，这里立刻红。
+    #[test]
+    fn a_persistently_offline_provider_replaces_its_endpoint_on_each_failed_serve() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("photo.jpg");
+        std::fs::write(&source, photo_bytes(20 * 1024, 30)).unwrap();
+        let provider = BlobsProvider::with_endpoint_factory(
+            dir.path(),
+            |_| never_online(),
+            NET29_ONLINE_TIMEOUT,
+        )
+        .unwrap();
+        let import = provider
+            .import_media(None, File::open(&source).unwrap())
+            .unwrap();
+        let virtual_clock = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build()
+            .unwrap();
+
+        let mut seen = vec![provider.endpoint_node_id().expect("bind provider endpoint")];
+        for attempt in 1..=3u64 {
+            // These two sync calls enter the provider's own runtime; keep them
+            // outside `block_on` (a runtime cannot be entered from inside one).
+            let (error, waited) = virtual_clock.block_on(async {
+                let started = tokio::time::Instant::now();
+                let error = provider
+                    .serve_async(Hash::from_bytes(import.hash))
+                    .await
+                    .unwrap_err()
+                    .to_string();
+                (error, tokio::time::Instant::now() - started)
+            });
+            assert!(error.contains("did not become online"), "{error}");
+            let deadline_ms = NET29_ONLINE_TIMEOUT.as_millis();
+            assert!(
+                error.contains(&format!("ms of {deadline_ms}ms deadline")),
+                "the configured deadline must be the one used: {error}"
+            );
+            assert_eq!(
+                waited, NET29_ONLINE_TIMEOUT,
+                "one serve waits exactly one deadline"
+            );
+            assert_eq!(provider.endpoint_generation(), attempt);
+            let id = provider.endpoint_node_id().expect("bind provider endpoint");
+            assert!(
+                !seen.contains(&id),
+                "attempt {attempt} reused a stuck endpoint"
+            );
+            seen.push(id);
+        }
+        assert!(provider.is_held(import.hash));
+    }
+}
+
 // ------------------------------------------------------------------ #413 媒体导入
 
 /// Sources at or below this size are inlined by the store whatever the import
