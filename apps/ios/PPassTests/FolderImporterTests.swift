@@ -69,6 +69,37 @@ final class FolderImporterTests: XCTestCase {
         XCTAssertTrue(stillThere, "引用导入的内容在 store 里")
     }
 
+    // #1821：崩溃重启后（provider 重建、进程内引用映射清空）同一文件必须仍走引用导入，
+    // 不能退化成复制整份文件（占盘 1x）。反证：去掉 provider 启动时对旧 store 的退役，
+    // 重启后会按 already_in_store 回退复制，store 里出现 .data 载荷。
+    func testRestartImportsSameFileByReferenceAgain() async throws {
+        let payload = String(repeating: "R", count: 64 * 1024)
+        try put("resume.jpg", content: payload)
+        let details = try details(for: "resume.jpg")
+        let first = try await importer.importMedia(details) { _ in }
+        guard case let .imported(firstHash, _) = first else { return XCTFail("要 imported") }
+
+        // 模拟进程被杀：不 release，直接关掉 provider，再用同一目录重建。
+        native.ffi.shutdown()
+        native = try NativeProvider(root: dir)
+        importer = FolderImporter(registry: registry, sourceId: sourceId, directory: dir, provider: native, logger: logger)
+
+        let second = try await importer.importMedia(details) { _ in }
+        guard case let .imported(secondHash, _) = second else { return XCTFail("重启后要 imported，不能按单张失败") }
+        XCTAssertEqual(secondHash, firstHash, "同一文件同一 hash")
+        let data = try storeFiles(extension: "data")
+        XCTAssertTrue(data.isEmpty, "重启后不许复制整份文件：\(data)")
+    }
+
+    // provider store 里的某类文件（#1821：引用导入只有 outboard，复制才有 .data）。
+    private func storeFiles(extension ext: String) throws -> [URL] {
+        let root = providerDir.appendingPathComponent("iroh-blobs-provider")
+        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else {
+            return []
+        }
+        return enumerator.compactMap { $0 as? URL }.filter { $0.pathExtension == ext }
+    }
+
     // 小文件（≤16KiB）：store 预期 inline（fallback=small、by_reference=false）——是 provider 的正确形态，不是「静默复制回退」。
     func testSmallFileAcceptsExpectedInlineFallback() async throws {
         try put("img.jpg", content: "jpeg-bytes-123")

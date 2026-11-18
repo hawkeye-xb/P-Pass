@@ -486,10 +486,49 @@ mod reference {
         let b = import_ref(&provider, &second);
         assert_eq!(b.hash, a.hash);
         assert!(!b.by_reference);
-        assert_eq!(b.fallback, Some(ImportFallback::AlreadyInStore));
+        assert_eq!(b.fallback, Some(ImportFallback::SharedReference));
 
         fs::remove_file(&first).unwrap();
         let ticket = provider.serve(b.hash).unwrap();
+        assert_eq!(pull(&provider, dir.path(), &ticket).unwrap(), bytes);
+    }
+
+    /// #1821: a crash between import and release leaves the hash in the store
+    /// while the restarted process has an empty in-memory `stored` map. The
+    /// new provider must retire that store and reference the same path again —
+    /// never copy the file into the transfer cache.
+    ///
+    /// Reverse-proof: without the start-up retirement the store still holds
+    /// the hash, the import falls into `AlreadyInStore`, and the fallback adds
+    /// a full `.data` payload (`again.by_reference == false`).
+    ///
+    /// The long GC interval is deliberate: the previous process's untagged
+    /// blob must survive until the second provider starts, or periodic GC
+    /// alone would make this test green without the fix.
+    #[test]
+    fn restart_references_the_same_path_instead_of_copying() {
+        let dir = tempdir().unwrap();
+        let bytes = photo_bytes(5 * 1024 * 1024, 17);
+        let source = write_photo(dir.path(), "photo.jpg", &bytes);
+        let long_gc = Duration::from_secs(3600);
+        {
+            let provider = AndroidBlobsProvider::new_loopback_with_gc(dir.path(), long_gc).unwrap();
+            let first = import_ref(&provider, &source);
+            assert!(first.by_reference, "{first:?}");
+            // Never released: the process dies with the import held.
+        }
+
+        let provider = AndroidBlobsProvider::new_loopback_with_gc(dir.path(), long_gc).unwrap();
+        let again = import_ref(&provider, &source);
+        assert!(again.by_reference, "{again:?}");
+        assert_eq!(again.fallback, None);
+        let files = store_files(dir.path());
+        assert!(
+            !has_extension(&files, "data"),
+            "no copy after restart: {files:?}"
+        );
+        assert!(has_extension(&files, "obao4"), "outboard only: {files:?}");
+        let ticket = provider.serve(again.hash).unwrap();
         assert_eq!(pull(&provider, dir.path(), &ticket).unwrap(), bytes);
     }
 
@@ -509,7 +548,7 @@ mod reference {
         assert!(provider.has_blob(a.hash));
 
         let b = import_ref(&provider, &second);
-        assert_eq!(b.fallback, Some(ImportFallback::AlreadyInStore));
+        assert_eq!(b.fallback, Some(ImportFallback::SharedReference));
     }
 
     #[test]
