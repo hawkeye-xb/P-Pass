@@ -64,12 +64,14 @@ class SourceAvailabilityTest {
     @Test
     fun usableSource_factMatchesWhatCanStillBeBackedUp() {
         val folderId = FOLDER_ID_FLAG or 1L
-        assertTrue(SourceAvailability.usableSource(selected = setOf(folderId), known = emptySet(), folderCount = 1, existingAlbums = null, photoAccess = MediaAccess.NONE))
-        assertTrue("旧版目录没有勾选存值", SourceAvailability.usableSource(selected = null, known = emptySet(), folderCount = 1, existingAlbums = null, photoAccess = MediaAccess.NONE))
-        assertFalse("明确取消勾选不是有效目录范围", SourceAvailability.usableSource(selected = emptySet(), known = setOf(folderId), folderCount = 1, existingAlbums = null, photoAccess = MediaAccess.NONE))
-        assertTrue(SourceAvailability.usableSource(selected = setOf(7L), known = emptySet(), folderCount = 0, existingAlbums = setOf(7L), photoAccess = MediaAccess.FULL))
-        assertFalse("有限授权：相册不进自动范围", SourceAvailability.usableSource(selected = setOf(7L), known = emptySet(), folderCount = 0, existingAlbums = setOf(7L), photoAccess = MediaAccess.PARTIAL))
-        assertFalse(SourceAvailability.usableSource(selected = emptySet(), known = emptySet(), folderCount = 0, existingAlbums = null, photoAccess = MediaAccess.FULL))
+        assertTrue(SourceAvailability.usableSource(selected = setOf(folderId), known = emptySet(), existingFolders = setOf(folderId), existingAlbums = null, photoAccess = MediaAccess.NONE))
+        assertTrue("旧版目录没有勾选存值", SourceAvailability.usableSource(selected = null, known = emptySet(), existingFolders = setOf(folderId), existingAlbums = null, photoAccess = MediaAccess.NONE))
+        assertFalse("明确取消勾选不是有效目录范围", SourceAvailability.usableSource(selected = emptySet(), known = setOf(folderId), existingFolders = setOf(folderId), existingAlbums = null, photoAccess = MediaAccess.NONE))
+        assertTrue(SourceAvailability.usableSource(selected = setOf(7L), known = emptySet(), existingFolders = emptySet(), existingAlbums = setOf(7L), photoAccess = MediaAccess.FULL))
+        assertFalse("有限授权：相册不进自动范围", SourceAvailability.usableSource(selected = setOf(7L), known = emptySet(), existingFolders = emptySet(), existingAlbums = setOf(7L), photoAccess = MediaAccess.PARTIAL))
+        assertFalse(SourceAvailability.usableSource(selected = emptySet(), known = emptySet(), existingFolders = emptySet(), existingAlbums = null, photoAccess = MediaAccess.FULL))
+        assertFalse("已移除的目录不算可用来源（评审）：登记表里只剩未勾选的目录也不行",
+            SourceAvailability.usableSource(selected = setOf(folderId), known = setOf(folderId), existingFolders = emptySet(), existingAlbums = null, photoAccess = MediaAccess.NONE))
     }
 
     /** 有目录来源时不显示相册-only 的提示，也不给「去设置」出口——目录备份仍在继续。 */
@@ -90,13 +92,45 @@ class SourceAvailabilityTest {
         assertTrue(partial.needsFullPhotoAccessSettings)
     }
 
-    /** 目录范围用「新版勾选存值 + 旧版登记数」双口径；明确取消勾选不是有效范围。 */
+    /**
+     * 目录范围与引擎同一份有效范围判据（effectiveBackupScope）：勾选存值里的目录必须在登记表里，
+     * 移除过的目录不算可用（评审）；明确取消勾选（空集）不是有效范围。
+     */
     @Test
-    fun folderScope_usesSelectionAndLegacyRegistration() {
+    fun folderScope_derivesFromTheEngineEffectiveScope() {
         val folderId = FOLDER_ID_FLAG or 1L
-        assertTrue(SourceAvailability.hasUsableFolder(selected = setOf(folderId), known = emptySet(), folderCount = 1))
-        assertTrue("旧版目录没有新版勾选存值", SourceAvailability.hasUsableFolder(selected = null, known = emptySet(), folderCount = 1))
-        assertFalse("新版明确取消勾选不是有效目录范围", SourceAvailability.hasUsableFolder(selected = emptySet(), known = setOf(folderId), folderCount = 1))
-        assertFalse(SourceAvailability.hasUsableFolder(selected = setOf(7L), known = emptySet(), folderCount = 0))
+        assertTrue(SourceAvailability.hasUsableFolder(selected = setOf(folderId), known = emptySet(), existingFolders = setOf(folderId)))
+        assertTrue("旧版目录没有新版勾选存值", SourceAvailability.hasUsableFolder(selected = null, known = emptySet(), existingFolders = setOf(folderId)))
+        assertFalse("新版明确取消勾选不是有效目录范围", SourceAvailability.hasUsableFolder(selected = emptySet(), known = setOf(folderId), existingFolders = setOf(folderId)))
+        assertFalse(SourceAvailability.hasUsableFolder(selected = setOf(7L), known = emptySet(), existingFolders = emptySet()))
+    }
+
+    /** 已移除的目录不算可用来源（评审）：范围里残留的旧目录 ID 不再把来源说成可用。 */
+    @Test
+    fun removedFolder_doesNotCountAsUsableSource() {
+        val folderId = FOLDER_ID_FLAG or 1L
+        assertFalse("勾选过的目录 A 已从登记表移除：不再算有目录来源",
+            SourceAvailability.hasUsableFolder(selected = setOf(folderId), known = setOf(folderId), existingFolders = emptySet()))
+        assertTrue("A 还在登记表里就照旧可用",
+            SourceAvailability.hasUsableFolder(selected = setOf(folderId), known = setOf(folderId), existingFolders = setOf(folderId)))
+    }
+
+    /** 范围读失败与引擎同一份回退（评审）：勾选存值解不出来时，登记目录仍在就还有来源，不误报全停。 */
+    @Test
+    fun unreadableScope_fallsBackToRegisteredFolders_likeTheEngine() {
+        val folderId = FOLDER_ID_FLAG or 1L
+        assertTrue("bucket_ids 读不出来（saved=null）、登记表还有目录 A：引擎按登记目录初始化，判定同源",
+            SourceAvailability.hasUsableFolder(selected = null, known = setOf(folderId), existingFolders = setOf(folderId)))
+        assertFalse("登记表也空了才是真的没有目录来源",
+            SourceAvailability.hasUsableFolder(selected = null, known = setOf(folderId), existingFolders = emptySet()))
+    }
+
+    /** 空范围（什么都没选）缺的是来源不是权限：不出「照片权限被拒」的停止卡（评审）。 */
+    @Test
+    fun emptyScope_doesNotShowGlobalPhotoBlock() {
+        assertFalse("空范围去设置授权也不会添加来源",
+            SourceAvailability(autoRule = true, photoAccess = MediaAccess.NONE, hasUsableFolder = false, hasSelectedAlbum = false).showsGlobalPhotoBlock)
+        assertTrue("已选相册且没有目录来源时照旧报告权限阻断",
+            SourceAvailability(autoRule = true, photoAccess = MediaAccess.NONE, hasUsableFolder = false, hasSelectedAlbum = true).showsGlobalPhotoBlock)
     }
 }

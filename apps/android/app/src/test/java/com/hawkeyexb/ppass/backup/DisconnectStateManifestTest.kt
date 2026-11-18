@@ -87,6 +87,7 @@ class DisconnectStateManifestTest {
                     .addFolder("content://tree/primary%3ADCIM", "DCIM")
             DisconnectState.BACKUP_SCOPE -> fake("shared_prefs/backup_scope-$nodeId.xml")
             DisconnectState.BACKUP_SCOPE_LEGACY -> fake("shared_prefs/backup_scope.xml")
+            DisconnectState.ALBUM_ACCESS_PROMPT -> fake("shared_prefs/album_access_prompt.xml")
             DisconnectState.BACKUP_SETTINGS -> BackupSettings(filesDir).save(wifiOnly = false)
             DisconnectState.ORDER_DB -> {
                 fake("databases/backup-orders.db")

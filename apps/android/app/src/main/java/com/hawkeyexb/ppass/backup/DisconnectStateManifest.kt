@@ -151,6 +151,12 @@ enum class DisconnectState(
         "MOB-92（#266）：老的全局范围，一次性认领的来源（adopted_by 记认领者），断开不碰",
         owners = listOf("com.hawkeyexb.ppass.backup.BackupScopeStore"),
     ),
+    ALBUM_ACCESS_PROMPT(
+        StateLocation.SHARED_PREFS, "album_access_prompt.xml", DisconnectDisposition.KEEP,
+        "#1788：本机是否发起过相册权限申请的发射记录（范围页「还能不能弹框」判据的「申请过」一维）；" +
+            "本机权限史，与配对无关，断开不碰",
+        owners = listOf("com.hawkeyexb.ppass.backup.AlbumAccessPromptPrefs"),
+    ),
     FOLDER_REGISTRY(
         StateLocation.FILES, "folder-registry.json", DisconnectDisposition.KEEP,
         "#1762：素材文件夹的目录授权（SAF 书签 + opaque 映射）是用户对本机的授权，与配对无关——断开、重连、换桌面都沿用；order 行随账本认领语义走（换桌面由 claimOwner 清，内容按哈希重新备份）",
