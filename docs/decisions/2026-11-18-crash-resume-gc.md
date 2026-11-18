@@ -45,7 +45,7 @@
 
 ## 后果
 
-- 上一进程的 Owned 副本和已入库缓存全部丢弃，续传必须重新按引用供数；引用读的是源文件，不产生新字节，网络只传桌面缺失部分，因此不违反 1x。
+- 上一进程的 Owned 副本和已入库缓存全部丢弃，续传必须重新按引用供数；引用读的是源文件，不产生新字节，网络只传桌面缺失部分，因此不违反 1x。（≤16 KiB 的小文件按既有规则内联复制，属「理由」里声明的非引用回退，不在本条要求内。）
 - 回退路径（daemon 主动向手机拉取）被打断的部分数据不能跨重启续传，最多重拉一个文件——与 `crates/daemon/src/inbox.rs` 现有代价相同。
 - 启动多一次目录 rename，与缓存大小无关。
 - 桌面沙盒库收场后 `du` ≈ 2x 的残片属于 daemon 侧 flow-staging 清理，不在本方案范围，另开卡处理；E3 的该项判据仍由 `tools/e3/run judge ios/folder-disk-gc` 判定，本卡不拿手机侧证据替代。
@@ -59,9 +59,9 @@
 
 ## 验收
 
-- E2（红 → 修复 → 绿 → 撤销回红）：`crates/transport/tests/media_import.rs` 用**长 GC 间隔**夹具（不复用 `GC = 20ms` 的 `new_loopback_with_gc`，否则上一进程遗留的无标签 blob 会被周期 GC 自行收掉，未修复也可能绿），或直接断言 store 字节数：引用导入 → 丢弃/重建 provider（模拟重启、内存 `stored` 清空）→ 同一 path 再 import → `by_reference=true` 且**不新增 `.data` 载荷**（引用导入本身会写 outboard，判据是「无 `.data`、有 `.obao4`」，见 `media_import.rs:418-420`；`#1821` 的 `before.json` 里约 1MB 引用元数据属正常，不能写成按字节零增长）；撤销修复必须回到 `by_reference=false` / 新增整份 `.data`。
+- E2（红 → 修复 → 绿 → 撤销回红）：`crates/transport/tests/media_import.rs` 用**长 GC 间隔**夹具（不复用 `GC = 20ms` 的 `new_loopback_with_gc`，否则上一进程遗留的无标签 blob 会被周期 GC 自行收掉，未修复也可能绿），或直接断言 store 字节数：引用导入 → 丢弃/重建 provider（模拟重启、内存 `stored` 清空）→ 同一 path 再 import（**用大于 16 KiB 的源文件**，否则会按 `small` 内联）→ `by_reference=true` 且**不新增 `.data` 载荷**（引用导入本身会写 outboard，判据是「无 `.data`、有 `.obao4`」，见 `media_import.rs:418-420`；`#1821` 的 `before.json` 里约 1MB 引用元数据属正常，不能写成按字节零增长）；撤销修复必须回到 `by_reference=false` / 新增整份 `.data`。
 - E3：`tools/e3/run judge ios/folder-disk-gc <证据目录>`——手机 provider blobs 增长远小于源大小、崩溃后 GC 收敛。注意该 judge（`tools/e3/scenarios/ios/folder-disk-gc.sh:158-159`）还有一条「桌面库总占盘增量 ≈ 源大小」，按卡的 E3 也列着；这一项归 daemon 侧残片回收那张卡，在它修好之前本卡的 E3 **不可能 PASS**，不得改判据归属或记为通过。
-- 传输中强杀→重启→同一 order 重新供数：`by_reference=true`，不新增 `.data` 载荷，桌面只传缺失部分。
+- 传输中强杀→重启→同一 order 重新供数（同样用大于 16 KiB 的源文件）：`by_reference=true`，不新增 `.data` 载荷，桌面只传缺失部分。
 - 上一进程已有 Owned 副本时，启动退役先回收，不虚报 by_reference。
 - 文件删除/移走、sourceVersion 改变、版本未变但 hash 改变、权限暂失分别走现有结单/新订单/等待分支，不误传、不复制。
 - 同设备多文件并发、多设备同 hash、同 hash 异路径、后台启动与在途互斥、退役失败均有明确结果；Android 共用 provider 至少跑对应 contract 测试。
