@@ -4492,12 +4492,24 @@ mod tests {
         let runn = action
             .find("Select-String -Quiet \"RUNNING\"")
             .expect("缺 RUNNING 判定");
+        // #1817 评审：`$LASTEXITCODE` 是 sc.exe 的退出码，服务存在但 STOPPED 时也是 0，
+        // 用它判断会让任务在第一轮就自删、重试形同不存在。必须用 Select-String 的结果。
+        assert!(
+            !action.contains("$LASTEXITCODE"),
+            "不许用 $LASTEXITCODE 判断 RUNNING（STOPPED 时也是 0）"
+        );
+        let running_flag = action
+            .find("$running = (& sc.exe query")
+            .expect("RUNNING 判定没有赋给变量");
+        let uses_flag = action
+            .find("if ($running)")
+            .expect("删任务没有用 RUNNING 判定结果");
         let last_delete = action
             .rfind("Unregister-ScheduledTask")
             .expect("缺 RUNNING 后的自删");
         assert!(
-            sc_start < runn && runn < last_delete,
-            "只有真实 RUNNING 才删任务"
+            sc_start < running_flag && running_flag < uses_flag && uses_flag < last_delete,
+            "只有真实 RUNNING 才删任务：sc start → 记录 RUNNING 判定 → if ($running) → 自删"
         );
     }
 

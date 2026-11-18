@@ -286,21 +286,21 @@ Var PPassDataDir
 ; 恢复没成（服务一直起不来）任务也在 10 分钟后随触发器过期、再由 DeleteExpiredTaskAfter
 ; 删掉——不形成永久自启。
 ;
-; 任务动作（cmd 单行）的顺序即安全：
-;   1. 先查 wanted-state——findstr 命中 stopped ⇒ 进括号组：先删任务、exit /b 0。
-;      `exit /b` 在非批处理上下文里退出整个 CMD.EXE（NSIS 手册之外的 Windows 文档
-;      口径），后面的 sc start 落不到 ⇒ 用户停过的机器绝不会在这里被拉起。千万不能
-;      写成 `findstr … || (…) & sc start …` 这种把拉起放进无条件尾巴的形状；
-;   2. 没停过 ⇒ sc start；sc query 里出现真实 RUNNING 才删任务（起不来就让下一轮
-;      再试，10 分钟后任务过期自删）。
+; 任务动作（PowerShell）的顺序即安全：
+;   1. 先读 wanted-state——命中 stopped，或读取失败（try/catch）⇒ 先删任务、return。
+;      后面的 sc start 落不到 ⇒ 用户停过的机器绝不会在这里被拉起。千万不能写成
+;      「先 sc start、再判断」这种把拉起放进无条件尾巴的形状；
+;   2. 没停过 ⇒ sc start；把 `sc query | Select-String -Quiet "RUNNING"` 的结果赋给
+;      变量，只有它为真才删任务——不能用 `$LASTEXITCODE`：那是 sc.exe 的退出码，
+;      服务存在、状态 STOPPED 时同样是 0。起不来就让下一轮再试，10 分钟后任务过期自删。
 Function PPassRegisterUpdateRecoveryTask
   ; 动作里的 ProgramData 路径在注册时展开（不写死 C:\，与 PPassResolveDataDir 同口径）。
   ; PS 层的字符串一律用单引号（NSIS 里用 $\ 加引号字符转义）：动作值里有 cmd 层的
   ; 双引号，放进 PS 双引号串还得再转义一层；单引号串里双引号是字面量，只此一层。
   ; PS 的 $ 变量在 NSIS 里写成 $$，不让 NSIS 当成自己的变量展开。
   ; 动作用 PowerShell try/catch：读不到 wanted-state（含文件不存在/权限错误）也立即
-  ; 自删并 return，绝不进入 sc start；不用 findstr 的错误码区分“没停过”和“读失败”。
-  StrCpy $R7 'try { $$wanted = Get-Content -LiteralPath "${PPASS_DATA}\wanted-state" -Raw -ErrorAction Stop; if ($$wanted -match "stopped") { Unregister-ScheduledTask -TaskName "${PPASS_RECOVERY_TASK}" -Confirm:$$false -ErrorAction Stop; return } } catch { Unregister-ScheduledTask -TaskName "${PPASS_RECOVERY_TASK}" -Confirm:$$false; return }; & sc.exe start ${PPASS_SERVICE}; & sc.exe query ${PPASS_SERVICE} | Select-String -Quiet "RUNNING"; if ($$LASTEXITCODE -eq 0) { Unregister-ScheduledTask -TaskName "${PPASS_RECOVERY_TASK}" -Confirm:$$false }'
+  ; 自删并 return，绝不进入 sc start；不用命令行工具的错误码区分“没停过”和“读失败”。
+  StrCpy $R7 'try { $$wanted = Get-Content -LiteralPath "${PPASS_DATA}\wanted-state" -Raw -ErrorAction Stop; if ($$wanted -match "stopped") { Unregister-ScheduledTask -TaskName "${PPASS_RECOVERY_TASK}" -Confirm:$$false -ErrorAction Stop; return } } catch { Unregister-ScheduledTask -TaskName "${PPASS_RECOVERY_TASK}" -Confirm:$$false; return }; & sc.exe start ${PPASS_SERVICE}; $$running = (& sc.exe query ${PPASS_SERVICE} | Select-String -Quiet "RUNNING"); if ($$running) { Unregister-ScheduledTask -TaskName "${PPASS_RECOVERY_TASK}" -Confirm:$$false }'
   ; 任务动作统一 UTF-16LE Base64 编码，避免 NSIS→PowerShell→cmd 三层引号改变语义。
   ; -ErrorAction Stop：登记失败必须让 powershell 以非零退出，调用方才写得出 service=0。
   nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$code = $\'$R7$\'; $$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($$code)); $$arg = $\'-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $\' + $$encoded; $$t = New-ScheduledTaskTrigger -Once -At ([DateTime]::Now.AddMinutes(1)) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Minutes 10); $$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances $\'IgnoreNew$\' -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 1); $$p = New-ScheduledTaskPrincipal -UserId $\'SYSTEM$\' -LogonType $\'ServiceAccount$\' -RunLevel $\'Highest$\'; $$a = New-ScheduledTaskAction -Execute $\'powershell.exe$\' -Argument $$arg; Register-ScheduledTask -TaskName $\'${PPASS_RECOVERY_TASK}$\' -Trigger $$t -Settings $$s -Principal $$p -Action $$a -Force -ErrorAction Stop"'
