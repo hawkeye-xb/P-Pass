@@ -5,7 +5,7 @@
 - 候选包：本分支构建的 `P-Pass_0.11.4_x64-setup.exe`；base 包：`v2026.11.3`（ProductVersion 0.11.1）
 - 判据出处：`tools/e3/scenarios/win/update-failed-recovery.sh` + `tools/e3/run judge win/update-failed-recovery`
 
-## 主轮：22/22 ok，verdict=PASS
+## 主轮：21/21 ok，verdict=PASS
 
 完整判据原文见 `judge-main.txt`（随证据目录归档）。关键几条：
 
