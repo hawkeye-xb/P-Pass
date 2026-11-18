@@ -8,16 +8,17 @@ final class RegressionTests: UIRegressCase {
 
     /// 决定页「选择备份范围」→ 系统照片权限选「允许全部」。只判到权限结果，不保存范围（不把真照片传出去）。
     func testDecisionScopeFull() {
-        launchFreshAndPair(resetPhotos: true)
-        app.buttons["decisionChooseScope"].tap()
-        answerSystemAlert(inverted ? SystemButton.dontAllow : SystemButton.photosFull, what: "photos")
+        let answer = inverted ? SystemButton.dontAllow : SystemButton.photosFull
+        launchFreshAndPair(resetPhotos: true, photoAnswer: answer)
+        tapApp("decisionChooseScope", app.buttons["decisionChooseScope"])
+        answerSystemAlert(answer, what: "photos")
         settle()
     }
 
     /// 决定页「先挑几张试试」→ 系统照片选择器选 1 张 → 进照片页。
     func testDecisionPick() {
         launchFreshAndPair(resetPhotos: false)
-        app.buttons["decisionPickPhotos"].tap()
+        tapApp("decisionPickPhotos", app.buttons["decisionPickPhotos"])
         pickOnePhoto(cancel: inverted)
         settle(5)
     }
@@ -48,9 +49,10 @@ final class RegressionTests: UIRegressCase {
         if !inverted {
             // 正向：再真实打开，最终开启。判定要求 false 之后新出现一条 enabled=true，
             // 准备阶段那条 enabled=true 不算数，实际操作失效必红（#1812）。
+            // 不在界面上断言开关：开成功后 App 会 push 进选范围页（`openScopeEditor`），开关已不在界面上，
+            // 读它必报「No matches found for Descendants matching type Switch」；结论以 App 日志为准（见文件开头）。
             flip(rule)
             settle(5)
-            XCTAssertEqual(rule.value as? String, "1", "正向：实际操作后开关必须最终开启")
         } else {
             // 反向：停在真实关闭。判据要 false 之后再有一条 enabled=true，缺通过行 ⇒ FAIL。
             settle(5)
@@ -58,13 +60,18 @@ final class RegressionTests: UIRegressCase {
     }
 
     private func limitedRuleCase() {
-        launchFreshAndPair(resetPhotos: true)
-        app.buttons["decisionChooseScope"].tap()
         // 反证：答「允许全部」→ 没走有限授权路径，判据缺通过行 ⇒ FAIL。
-        answerSystemAlert(inverted ? SystemButton.photosFull : SystemButton.photosLimited, what: "photos")
+        let answer = inverted ? SystemButton.photosFull : SystemButton.photosLimited
+        launchFreshAndPair(resetPhotos: true, photoAnswer: answer)
+        tapApp("decisionChooseScope", app.buttons["decisionChooseScope"])
+        // 照片框可能在配对阶段就弹、已经在清场里按同一答案点过（那时选照片那一页也当场选好了），
+        // 这种情况下这里不再等框、也不再选第二次（重复导入会让 n=0）。
+        let tappedNow = answerSystemAlert(answer, what: "photos")
         guard !inverted else { settle(2); return }
-        // 「限制访问」之后系统给一页选照片：选一张、点完成。
-        pickOnePhotoInLimitedSheet()
+        if tappedNow {
+            // 「限制访问」之后系统给一页选照片：选一张、点完成。
+            pickOnePhotoInLimitedSheet()
+        }
         settle(2)
         openSettingsTab()
         let rule = toggle(id: "autoBackupRuleToggle")
@@ -94,7 +101,7 @@ final class RegressionTests: UIRegressCase {
     /// 先保存一个有效范围，避免开关被送进范围编辑页，两个方向的开关操作都能真实落到规则上。
     private func prepareScopeAndOpenSettings() {
         launchFreshAndPair(resetPhotos: true)
-        app.buttons["decisionChooseScope"].tap()
+        tapApp("decisionChooseScope", app.buttons["decisionChooseScope"])
         answerSystemAlert(SystemButton.photosFull, what: "photos")
         settle(2)
         let save = app.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "Start backup", "开始备份")).firstMatch
