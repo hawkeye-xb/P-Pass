@@ -100,8 +100,16 @@ cp "$T/pre.log" "$T/pre-base.log"
 printf '%s process start: pid=200 version=0.11.0(1) appState=active\n' "$(iso "$NOW")" >>"$T/pre.log"
 expect FAIL DecisionScopeFull "$T/pre.log" "$NOW" "快照之前的通过行不算本例的" "$T/pre-base.log"
 
-# 快照文件拉不回来（不存在）⇒ 退回按时间找，本例自己的通过行照样算。
-expect PASS DecisionScopeFull "$T/ok.log" "$NOW" "快照拉不回来时退回按时间找" "$T/no-such-baseline.log"
+# 快照文件拉不回来（不存在）⇒ 退回按时间找：本例自己的通过行照样算（ok.log），
+# 但上一例的通过行不许带进来——日志前半段是上一例的、后半段只有本例的启动行 ⇒ 必须 FAIL。
+expect PASS DecisionScopeFull "$T/ok.log" "$NOW" "快照拉不回来时退回按时间找（本例通过）" "$T/no-such-baseline.log"
+cat >"$T/nobase.log" <<EOF
+$(iso "$((NOW - 9))") process start: pid=90 version=0.11.0(1) appState=active
+$(iso "$((NOW - 8))") onboarding: decision shown
+$(iso "$((NOW - 8))") onboarding: photo access after prompt=full
+$(iso "$NOW") process start: pid=200 version=0.11.0(1) appState=active
+EOF
+expect FAIL DecisionScopeFull "$T/nobase.log" "$NOW" "快照拉不回来时上一例的通过行不算本例的" "$T/no-such-baseline.log"
 
 # 未知用例、日志拉不回 ⇒ FAIL。
 expect FAIL NoSuchCase "$T/ok.log" "$NOW" "判定表里没有的用例"
