@@ -623,30 +623,34 @@ fi
 ) || bad "just dev android 找改名后的 debug 包"
 
 # #1842 devicectl 不接受空的环境对象（`{}` 报 Unable to decode environment variables）：没有页面就不传这个参数，
-# 有页面才传 PPASS_ROUTE。假 xcrun 只记参数，不碰设备。
+# 有页面才传 PPASS_ROUTE。假 xcrun 按调用逐个记录参数（\t 分隔），断言只认启动 DEV_PKG 的那一次调用——
+# 安装命令也带 --environment-variables，搜整个日志会放过「选项挪到了安装命令」这种回归。
 (
   d="$(mktemp -d)" || exit 1
   trap 'rm -rf "$d"' EXIT
   mkdir -p "$d/bin"
   cat >"$d/bin/xcrun" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"$FAKE_XCRUN_LOG"
+{ printf 'CALL'; printf '\t%s' "$@"; printf '\n'; } >>"$FAKE_XCRUN_LOG"
 STUB
   chmod +x "$d/bin/xcrun"
   export PATH="$d/bin:$PATH" FAKE_XCRUN_LOG="$d/log"
   log() { :; }
+  # 启动本 App 的那次调用（一行一次调用，字段 \t 分隔）
+  launch_calls() { awk -F'\t' -v pkg="$DEV_PKG" '$2=="devicectl" && $3=="device" && $4=="process" && $5=="launch" && $NF==pkg' "$1"; }
   # shellcheck source=e3/lib/dev-phone.sh
   source "$E3/lib/dev-phone.sh"
   dev_ios_install TEST-UDID "$d/PPass.app" 0 || { echo "无页面时安装/启动返回失败"; exit 1; }
-  grep -q 'process launch' "$d/log" || { echo "无页面时没调用启动：$(cat "$d/log")"; exit 1; }
-  if grep 'process launch' "$d/log" | grep -q -- '--environment-variables'; then
-    echo "无页面时仍传了 --environment-variables：$(grep 'process launch' "$d/log")"
+  [ "$(launch_calls "$d/log" | grep -c .)" = 1 ] || { echo "无页面时启动调用不是恰好一次：$(cat "$d/log")"; exit 1; }
+  if launch_calls "$d/log" | grep -qF -- "$(printf '\t--environment-variables')"; then
+    echo "无页面时启动仍传了 --environment-variables：$(launch_calls "$d/log")"
     exit 1
   fi
   : >"$d/log"
   dev_ios_install TEST-UDID "$d/PPass.app" 0 settings || { echo "带页面时安装/启动返回失败"; exit 1; }
-  grep -qF -- '--environment-variables {"PPASS_ROUTE":"settings"}' "$d/log" ||
-    { echo "带页面时没传 PPASS_ROUTE：$(grep 'process launch' "$d/log")"; exit 1; }
+  # 选项与值必须是相邻的两个参数，且就在启动这一行里
+  launch_calls "$d/log" | grep -qF -- "$(printf '\t--environment-variables\t'){\"PPASS_ROUTE\":\"settings\"}" ||
+    { echo "带页面时启动没带 PPASS_ROUTE：$(launch_calls "$d/log")"; exit 1; }
   exit 0
 ) || bad "just dev ios 无页面时不传空的环境对象（#1842）"
 # #1378 设备归属：有主人的设备，别人取不到锁（不排队、退出 75、说出主人）；主人自己、release 之后都能取
