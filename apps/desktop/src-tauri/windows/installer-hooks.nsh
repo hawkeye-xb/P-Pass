@@ -302,7 +302,8 @@ Var PPassDataDir
 ;      服务存在、状态 STOPPED 时同样是 0。起不来就让下一轮再试，10 分钟后任务过期自删。
 Function PPassRegisterUpdateRecoveryTask
   StrCpy $R0 1
-  ; 动作里的 ProgramData 路径在注册时展开（不写死 C:\，与 PPassResolveDataDir 同口径）。
+  ; 动作里不出现任何路径：wanted-state 由动作自己从 $env:ProgramData 取（见下），
+  ; 与 PPassResolveDataDir 和 daemon 的 service_root 读同一个变量。
   ; PS 层的字符串一律用单引号（NSIS 里用 $\ 加引号字符转义）：动作值里有 cmd 层的
   ; 双引号，放进 PS 双引号串还得再转义一层；单引号串里双引号是字面量，只此一层。
   ; PS 的 $ 变量在 NSIS 里写成 $$，不让 NSIS 当成自己的变量展开。
@@ -321,6 +322,10 @@ Function PPassRegisterUpdateRecoveryTask
   nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$code = $\'$R7$\'; $$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($$code)); $$arg = $\'-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $\' + $$encoded; $$start = (Get-Date).AddMinutes(1); $$t = New-ScheduledTaskTrigger -Once -At $$start -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Minutes 10); $$t.EndBoundary = $$start.AddMinutes(10).ToString($\'s$\'); $$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances $\'IgnoreNew$\' -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 1); $$p = New-ScheduledTaskPrincipal -UserId $\'SYSTEM$\' -LogonType $\'ServiceAccount$\' -RunLevel $\'Highest$\'; $$a = New-ScheduledTaskAction -Execute $\'powershell.exe$\' -Argument $$arg; Register-ScheduledTask -TaskName $\'${PPASS_RECOVERY_TASK}$\' -Trigger $$t -Settings $$s -Principal $$p -Action $$a -Force -ErrorAction Stop"'
   Pop $0
   Pop $1
+  ; 登记失败时把 PowerShell 的报错打进安装日志，E3 才有得查。
+  ${If} $0 != 0
+    DetailPrint "update-recovery task registration failed: $1"
+  ${EndIf}
   ; nsExec 在异常情况下不一定压栈，Pop 到的可能是调用方的残留值；
   ; 所以先用 $R0 记「失败」，只有明确拿到 0 才改成成功。
   ${If} $0 == 0
