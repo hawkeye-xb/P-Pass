@@ -84,7 +84,11 @@ class SingleTransferStatusTest {
 
     /** #1789 验收 3（评审 Ad 判红）：上一批还在传时再挑新一批，`summary()` 必须并成两批的汇总——
      *  `latestBatch()` 只报新一批（对照），旧批的未结束项不能在英雄区消失。撤销修复（summary 改回按
-     *  MAX(batch_id) 过滤、或消费方改回 latestBatch）任一条都变红。 */
+     *  MAX(batch_id) 过滤、或消费方改回 latestBatch）任一条都变红。
+     *  评审（#1878 建议 2）：按真实入口的顺序走——MainActivity 两个入口都是 enqueue 成功后先
+     *  clearSettled() 再读 summary()（评审 AP），上一批已送达的行此时被清掉：上一批剩 4 个未结束
+     *  （1 在传 3 排队）+ 新批 3 = 7 行全未结束，英雄区出「正在传 1/7」，不是 2/8；
+     *  「已送达的不丢」由 clearSettled 之前的对照断言锁住。 */
     @Test
     fun summary_spans_all_batches_while_the_previous_one_is_still_in_flight() {
         val store = InMemoryPickedStore()
@@ -96,24 +100,27 @@ class SingleTransferStatusTest {
         // 用户又挑了 3 张（同 #1784 验收 3：相册选 2 项后文件选 3 项）。
         val second = store.addBatch((6..8).map(::newPicked))
         assertTrue(second > first)
+        // 入口同款时序（MainActivity.kt 两个单次入口）：登记成功 → 清已结算 → 读汇总。
+        // 上一批已送达的 1 行随这次选择被清掉；未结束的 4 行原样保留。
+        store.clearSettled()
 
         val all = store.summary()
-        assertEquals("聚合必须覆盖两批的全部 8 行", 8, all!!.total)
-        assertEquals("未结束 = 上一批 4 + 新批 3", 7, all.open)
-        assertEquals("已送达的 1 张仍是已结算，不丢", 1, all.delivered)
+        assertEquals("聚合覆盖两批：上一批 4 个未结束 + 新批 3 = 7 行", 7, all!!.total)
+        assertEquals(7, all.open)
+        assertEquals("已送达行已随入口清理", 0, all.delivered)
         assertEquals(
-            "英雄区出进度句：正在传 2/8（进度算上在传的那张，与单批同口径）",
-            SingleTransferStatus.Line.Progress(done = 2, total = 8),
+            "英雄区出进度句：正在传 1/7（在传那张算进度，与单批同口径）",
+            SingleTransferStatus.Line.Progress(done = 1, total = 7),
             SingleTransferStatus.heroLine(all),
         )
-        // 对照：latestBatch 的单批口径正是缺陷本体——只报新一批。
+        // 对照：latestBatch 的单批口径正是缺陷本体——只报新一批 3 行，旧批 4 个未结束在英雄区消失。
         assertEquals(3, store.latestBatch()!!.total)
 
         // 全部结算后（没有未结束项）：出结果句（验收「没有未结束项时，再显示结算结果」）。
-        (1L..5L).forEach { store.mark(it, PickedState.DELIVERED) }
+        (2L..5L).forEach { store.mark(it, PickedState.DELIVERED) }
         (6L..8L).forEach { store.mark(it, PickedState.ALREADY_THERE) }
         assertEquals(
-            SingleTransferStatus.Line.Result(delivered = 8, failed = 0),
+            SingleTransferStatus.Line.Result(delivered = 7, failed = 0),
             SingleTransferStatus.heroLine(store.summary()),
         )
     }
