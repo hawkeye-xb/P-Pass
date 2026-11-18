@@ -4404,8 +4404,8 @@ mod tests {
         );
         let after_call = &recover[call..];
         let if_ok = after_call
-            .find("${If} $0 == 0")
-            .expect("登记结果没有按退出码判断");
+            .find("${If} $R0 == 0")
+            .expect("登记结果没有按显式结果寄存器 $R0 判断");
         // 函数自己已经把 nsExec 的退出码 Pop 到 $0；调用方再 Pop 会弹出调用方的栈顶，
         // service 标记就和登记结果脱钩了。反证：加回一行 `Pop $0`，本测试红。
         assert!(
@@ -4570,25 +4570,25 @@ mod tests {
         }
     }
 
-    /// #1817 评审：任务读的 wanted-state 必须是安装器解析出的同一条路径（daemon 的
-    /// `service_root()` 也用 `%ProgramData%`；重定向时两处必须一致，否则任务读不到、
-    /// 直接自删、服务不再恢复）。路径放进 PowerShell 双引号串：Windows 路径不含双引号，
-    /// 里面的单引号在双引号串里是字面量，不会被 `$code = '…'` 那层截断。
-    /// 反证：改成在动作里用 GetFolderPath 现算，或把路径放进单引号串，本测试红。
+    /// #1817 评审：动作文本里不许出现任何路径字符。`$code = '…'` 是 PowerShell 单引号串，
+    /// 路径里一旦有 `'`（例如 `D:\Program'Data`）就会提前闭合，登记要么失败、要么拼出
+    /// 被截断的脚本。改为在动作里用 `$env:ProgramData` 现取——安装器与 daemon 的
+    /// `service_root()` 读的也是这个变量，重定向后三处仍一致。
+    /// 反证：把路径改回 `${PPASS_DATA}` 或用 GetFolderPath，本测试红。
     #[test]
-    fn recovery_task_reads_the_installer_resolved_data_path() {
+    fn recovery_task_takes_the_data_path_from_the_environment() {
         let hooks = include_str!("../windows/installer-hooks.nsh").replace("\r\n", "\n");
         let action = hooks
             .lines()
             .find(|l| l.contains("StrCpy $R7"))
             .expect("缺限时恢复任务的动作");
         assert!(
-            action.contains(r#"\$\"${PPASS_DATA}\wanted-state\$\""#),
-            "wanted-state 必须用安装器解析出的 ${{PPASS_DATA}}，并放进 PowerShell 双引号串"
+            action.contains(r"$$env:ProgramData"),
+            "wanted-state 必须由动作自己从 $env:ProgramData 取，不能拼路径文本"
         );
         assert!(
-            !action.contains("GetFolderPath"),
-            "不许在动作里重新推导路径：ProgramData 被重定向时会和安装器/daemon 不一致"
+            !action.contains("${PPASS_DATA}") && !action.contains("GetFolderPath"),
+            "动作里不许出现路径：单引号串会被路径里的 ' 截断；GetFolderPath 与安装器口径不一致"
         );
     }
 
