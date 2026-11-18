@@ -32,7 +32,9 @@
 	} = $props();
 
 	/* WAI-ARIA 模态对话框：打开时焦点进弹窗（第一个可聚焦元素，没有就聚焦面板本身）、
-	   Tab / Shift+Tab 在弹窗内循环、关闭后焦点回到打开前的元素（已不在 DOM 就跳过）；
+	   Tab / Shift+Tab 在弹窗内循环、关闭后焦点回到打开前的元素；触发元素已不在 DOM
+	   （「待确认加入」打开即移除触发按钮）或打开时本无焦点元素时，回主内容区 <main
+	   tabindex="-1"> 兜底，不落 body（#1132 验收 1）；
 	   打开期间背景整树 inert（#1132 D1：HTML 标准 inert 让 Tab、点按与读屏都到
 	   不了背景，是 APG「背景 inert」项的标准实现）——沿祖先链把不含弹窗的兄弟分支
 	   全部标 inert，弹窗自身与其祖先不动；清理时只摘掉自己标的，别人（如
@@ -66,7 +68,8 @@
 		}
 		return () => {
 			for (const el of marked) el.removeAttribute("inert");
-			if (opener && opener.isConnected) opener.focus();
+			if (opener && opener.isConnected && opener !== document.body) opener.focus();
+			else document.querySelector("main")?.focus();
 		};
 	});
 

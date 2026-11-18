@@ -92,7 +92,8 @@ export function createWizardFlow({
         title: t("ui.wizard_choose_folder_title"),
         fromDefault: true,
       });
-      if (dir) set({ libraryDir: dir });
+      // 成功同时清掉上一次失败落下的红条——不然重试成功后向导还挂着失败警告。
+      if (dir) set({ libraryDir: dir, error: "" });
     } catch (e) {
       set({ error: errMessage(e, "ui.wizard_save_failed") });
     }
@@ -101,7 +102,7 @@ export function createWizardFlow({
   async function useDefault() {
     try {
       await invoke("use_default_library_dir");
-      set({ libraryDir: defaultDir });
+      set({ libraryDir: defaultDir, error: "" });
     } catch (e) {
       set({ error: errMessage(e, "ui.wizard_save_failed") });
     }

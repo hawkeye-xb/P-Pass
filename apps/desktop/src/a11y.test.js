@@ -241,6 +241,16 @@ describe("#1132 axe 扫描零 violation", () => {
     audit: [auditEvent(1), auditEvent(2)],
   };
 
+  // 设备页扫描前先点进改名态：改名输入框（D2）只有这时才在 DOM 里——
+  // 不点进去，把 aria-label 拿掉 axe 也照样全绿，验收 6 的「label 必须出现」判不了红。
+  const enterRename = {
+    设备: async () => {
+      await fireEvent.click(screen.getByRole("button", { name: "客厅的手机" }));
+      await settle();
+      expect(screen.getByRole("textbox", { name: "改名" })).toBeTruthy();
+    },
+  };
+
   for (const [name, hash] of [
     ["总览", "#/overview"],
     ["照片", "#/photos"],
@@ -252,6 +262,7 @@ describe("#1132 axe 扫描零 violation", () => {
       daemon(RICH);
       await open(hash);
       await settle();
+      await enterRename[name]?.();
       expect((await scan()).map(fmt)).toEqual([]);
     });
   }
@@ -375,6 +386,8 @@ describe("#1132 axe 扫描零 violation", () => {
     await settle();
     await fireEvent.click(screen.getByRole("button", { name: "显示配对二维码" }));
     await settle();
+    // CodeRabbit：先断言弹窗真的开了再扫——点按失效时总览本身仍全绿，会漏扫整个弹窗。
+    expect(screen.getByRole("dialog", { name: "配对二维码" })).toBeTruthy();
     expect((await scan()).map(fmt)).toEqual([]);
   });
 });
@@ -436,6 +449,18 @@ describe("#1132 逐项断言", () => {
     expect(screen.getByRole("button", { name: "重试" })).toBeTruthy();
   });
 
+  // CodeRabbit（ARIA22）：live region 要先挂载、后写内容——点「检查更新」时
+  // 区域和首条消息同时插入，读屏可能不播报首条；区域常驻（空闲时零高度）才补得上。
+  // 反证：状态行改回 `{#if updatePhase !== "idle"}` 条件挂载 ⇒ 本条红。
+  it("D4 更新状态区域在开始检查之前就已挂载", async () => {
+    daemon();
+    await open("#/settings");
+    await settle();
+    // 侧栏服务胶囊也是 role=status，按 testid 定位更新状态区。
+    const region = document.querySelector('[data-testid="update-status"]');
+    expect(region?.getAttribute("role")).toBe("status");
+  });
+
   // D5：切步后焦点掉到 BODY 是卡上原发现。
   it("D5 macOS 向导：切步焦点落在新步骤标题，当前步有 aria-current", async () => {
     invokeMock.mockImplementation(async (cmd) => (cmd === "power_hint" ? { kind: "never" } : null));
@@ -470,9 +495,12 @@ describe("#1132 逐项断言", () => {
     expect(document.querySelector('[aria-current="step"]').textContent).toContain("2");
   });
 
-  // D6：按钮名重复 ×40 的根因；大图 alt="" 的根因。
-  it("D6 缩略图名称各不相同，大图 alt 非空", async () => {
-    daemon({ photos: [photo(1), photo(2), photo(3)] });
+  // D6：按钮名重复 ×40 的根因；大图 alt="" 的根因。照片给两张同一分钟的
+  // （连拍）——名称唯一只能靠序号兜住，不能靠拍摄时间错开（CodeRabbit）。
+  it("D6 缩略图名称各不相同（同一分钟连拍也如此），大图 alt 非空", async () => {
+    daemon({
+      photos: [photo(1), photo(2), { ...photo(3), taken_at: photo(2).taken_at }],
+    });
     await open("#/photos");
     await settle();
     const thumbs = screen.getAllByRole("button", { name: /查看大图/ });
@@ -496,6 +524,35 @@ describe("#1132 逐项断言", () => {
     expect(names).toContain("移除 客厅的手机");
     expect(names).toContain("移除 书房的平板");
     expect(new Set(names).size).toBe(2);
+  });
+
+  // CodeRabbit（Major）：大图查看器开着时来了配对申请——确认弹窗自动打开，
+  // 但两个遮罩同 z-50，查看器还盖在上面又被 inert，用户看到的是一层点不动的
+  // 查看器，可操作的确认弹窗反而在底下。修法：确认弹窗打开时把查看器关掉。
+  // 反证：去掉 showConfirmModal = true 旁的 photoViewer = null ⇒ 本条红。
+  it("配对申请到达时关掉开着的照片查看器，确认弹窗独占最上层", async () => {
+    daemon({ photos: [photo(1)] });
+    await open("#/photos");
+    await settle();
+    await fireEvent.click(screen.getAllByRole("button", { name: /查看大图/ })[0]);
+    await settle();
+    expect(screen.queryByRole("dialog", { name: /查看大图/ })).toBeTruthy();
+    // daemon 队列里出现一条申请（事件触发 refresh，重拉 pairing.pending 后自动弹确认框）。
+    const base = invokeMock.getMockImplementation();
+    invokeMock.mockImplementation(async (cmd, args) => {
+      if (daemonMethodOf(cmd) === "pairing.pending") {
+        return {
+          pending: [
+            { node_id: "cc".repeat(64), known: false, name: "客厅的 iPhone", requested_at: NOW, expired: false },
+          ],
+        };
+      }
+      return base(cmd, args);
+    });
+    handlers.get("daemon-event")?.({ payload: { event: "pairing.pending_changed", data: {} } });
+    await settle();
+    expect(screen.queryByRole("dialog", { name: /查看大图/ })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "客厅的 iPhone 请求加入" })).toBeTruthy();
   });
 });
 
@@ -535,7 +592,22 @@ describe("#1132 对比度（D7 / D12）", () => {
     ]) {
       const src = srcFile(f);
       expect(src).not.toContain("ring-ring/50");
+      // CodeRabbit：宽度和颜色都钉住——只查颜色类时，整个 focus-visible:ring-3
+      // 被删掉这条测试不红。反证：删掉任一文件的 focus-visible:ring-3 ⇒ 本条红。
+      expect(src).toContain("focus-visible:ring-3");
+      expect(src).toContain("focus-visible:ring-ring");
     }
-    expect(srcFile("lib/components/ui/button/button.svelte")).toContain("focus-visible:ring-ring");
+  });
+
+  // D7 同类（CodeRabbit）：向导/设备/活动/设置的错误码行也是 12px 半透明小字
+  // ——act 压 80% 后纸底 4.03:1、act-bg 上 3.56:1，都低于 4.5。同 D7 口径：
+  // 去掉半透明，act 直接落底（纸底 5.70:1、act-bg 4.86:1）。
+  // 反证：往任一错误码行加回 opacity-80 ⇒ 本条红。
+  it("D7 同类：错误码行不再压透明度，act 在纸底 / act-bg ≥ 4.5:1", () => {
+    expect(contrast(value("act"), value("paper"))).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(value("act"), value("act-bg"))).toBeGreaterThanOrEqual(4.5);
+    for (const f of ["App.svelte", "Wizard.svelte", "WizardWindows.svelte"]) {
+      expect(srcFile(f)).not.toContain("text-[12px] opacity-80");
+    }
   });
 });

@@ -5,8 +5,9 @@
 //    反证：去掉 $effect 里的 focus() 调用 ⇒ 本条红。
 // 2. Tab 在最后一个元素上回到第一个，Shift+Tab 在第一个上到最后一个，焦点不出弹窗。
 //    反证：去掉 onKeydown 里 Tab 分支 ⇒ 本条红（jsdom 不做原生 Tab 移动，焦点停在原处）。
-// 3. 关闭后焦点回到打开前的元素；该元素已不在 DOM 就不动。
-//    反证：去掉 $effect 清理函数里的 opener.focus() ⇒ 本条红。
+// 3. 关闭后焦点回到打开前的元素；该元素已不在 DOM（或打开时本无焦点）就回
+//    main 兜底（tabindex=-1），不落 body（#1132 验收 1）。
+//    反证：去掉 $effect 清理函数里的 opener.focus() 与 main 兜底 ⇒ 本条红。
 import { cleanup, render } from "@testing-library/svelte";
 import { createRawSnippet } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -79,6 +80,8 @@ describe("dialog 焦点管理", () => {
     const panel = document.querySelector('[role="dialog"]');
     expect(panel.getAttribute("inert")).toBe(null);
     expect(document.getElementById("a").closest('[role="dialog"]')).toBe(panel);
+    // CodeRabbit：遮罩子树整棵 inert 时这条也红——内部控件的祖先链上不许有 inert。
+    expect(document.getElementById("a").closest("[inert]")).toBe(null);
     // 关闭：解除背景 inert，焦点回到触发按钮（另一用例已钉）。
     await rerender({ open: false });
     expect(o.getAttribute("inert")).toBe(null);
@@ -120,7 +123,7 @@ describe("dialog 焦点管理", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("关闭后焦点回到打开前的元素；元素已不在 DOM 就跳过", async () => {
+  it("关闭后焦点回到打开前的元素；元素已移除时回 main 兜底，不落 body", async () => {
     const o = opener();
     const { rerender } = render(Dialog, { open: true, children: body('<button id="a">甲</button>') });
     await Promise.resolve();
@@ -128,11 +131,16 @@ describe("dialog 焦点管理", () => {
     await rerender({ open: false });
     expect(document.activeElement).toBe(o);
 
+    // #1132 验收 1：触发元素已被移除时回到一个明确的兜底元素，而不是 body
+    // （「待确认加入」打开时触发按钮即被移除——旧实现关窗后焦点落在 body）。
+    const main = document.createElement("main");
+    main.setAttribute("tabindex", "-1");
+    document.body.appendChild(main);
     const o2 = opener();
     const r2 = render(Dialog, { open: true, children: body('<button id="c">丙</button>') });
     await Promise.resolve();
     o2.remove();
     await r2.rerender({ open: false });
-    expect(document.activeElement).toBe(document.body);
+    expect(document.activeElement).toBe(main);
   });
 });

@@ -423,6 +423,10 @@
       pairRequests = synced.rows;
       if (synced.added.length > 0) {
         showPairModal = false;
+        // 弹窗同时只留一个：确认弹窗打开时把还开着的大图查看器关掉。两个遮罩
+        // 同 z-50，查看器后渲染仍盖在上面，被 inert 后用户看到的是一层点不动
+        // 的查看器，可操作的确认弹窗反而在底下（CodeRabbit）。
+        photoViewer = null;
         showConfirmModal = true;
       }
       // DEV-03 + #1577：主列表要渲染「已配对」与「已断开」两组，而「已断开」的
@@ -1617,7 +1621,7 @@
        DESK-36 (#456)：用户自己点了停止（user_stopped）不算中途退出——
        留在主界面给「启动服务」，判定见 serviceGate.js。 -->
   <div class="titlebar-drag-region wizard-titlebar-drag-region" aria-hidden="true"></div>
-  <main class="wizard-shell">
+  <main class="wizard-shell" tabindex="-1">
     <header>
       <h1>P-Pass</h1>
     </header>
@@ -1675,7 +1679,9 @@
       </div>
     </aside>
 
-    <main class="content" data-page={page}>
+    <!-- tabindex=-1：弹窗触发元素被移除（关掉后焦点回不来）时，Dialog 组件把
+         焦点兜底到这里——可编程聚焦、不进 Tab 序，向导壳同理。 -->
+    <main class="content" data-page={page} tabindex="-1">
       <!-- #1132 D11：主界面缺 h1（axe `page-has-heading-one`）；不放可见大标题，
            视觉由各页的 h2 页题承担，这里补一个读屏可见的 sr-only h1。 -->
       <h1 class="sr-only">P-Pass</h1>
@@ -1876,7 +1882,7 @@
                        this one data call failed. Say it here, never turn the
                        service badge red for it. -->
                   <p class="m-0 mb-[10px] text-[13px] leading-[1.6] text-act" data-testid="devices-error">
-                    {devicesError.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(devicesError)}</span>
+                    {devicesError.text}<span class="mt-[2px] block text-[12px]">{errCodeLine(devicesError)}</span>
                   </p>
                 {/if}
                 {#if pairedCount === 0}
@@ -1972,7 +1978,7 @@
           <Card size="flush" class="min-h-0 flex-1 overflow-y-auto">
             {#if devicesError}
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-act" data-testid="devices-error">
-                {devicesError.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(devicesError)}</span>
+                {devicesError.text}<span class="mt-[2px] block text-[12px]">{errCodeLine(devicesError)}</span>
               </p>
             {/if}
             {#if devices.length === 0}
@@ -2186,7 +2192,7 @@
                    吞掉，这一页只是变空——和「确实还没有任何记录」长得一模一样，
                    用户会以为备份从没发生过。 -->
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-act" data-testid="audit-error"
-                >{auditError.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(auditError)}</span></p
+                >{auditError.text}<span class="mt-[2px] block text-[12px]">{errCodeLine(auditError)}</span></p
               >
             {:else if visibleAudit.length === 0}
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.log_empty")}</p>
@@ -2286,9 +2292,11 @@
                 <!-- UPD-06 (#616)：状态机的显式状态行——过程可见、失败可重试，
                      不再只靠一闪而过的 toast（旧实现连按钮都不禁用）。
                      #1132 D4：状态行用 role="status"（隐式 aria-live=polite）
-                     播报变化；失败用 role="alert"；进度条补 progressbar 语义。 -->
-                {#if updatePhase !== "idle"}
-                  <div role="status" class="border-b border-divider px-[22px] py-[14px] text-[13px] leading-[1.6] text-ink-40">
+                     播报变化；失败用 role="alert"；进度条补 progressbar 语义。
+                     区域常驻（ARIA22：live region 要先挂载、后写内容——点「检查
+                     更新」时区域和首条消息同时插入，读屏可能不播报首条）；
+                     空闲时内容为空、不带边框与内边距，零高度不占版面。 -->
+                <div role="status" data-testid="update-status" class={updatePhase === "idle" ? "text-[13px] leading-[1.6] text-ink-40" : "border-b border-divider px-[22px] py-[14px] text-[13px] leading-[1.6] text-ink-40"}>
                     {#if updatePhase === "checking"}
                       <span>{t("ui.update_checking")}</span>
                     {:else if updatePhase === "up-to-date"}
@@ -2314,13 +2322,12 @@
                     {:else if updatePhase === "installed" || updatePhase === "relaunching"}
                       <span>{t("ui.update_installed_state")}</span>
                     {:else if updatePhase === "failed"}
-                      <span role="alert" class="text-act">{updateError?.text}{#if updateError}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(updateError)}</span>{/if}</span>
+                      <span role="alert" class="text-act">{updateError?.text}{#if updateError}<span class="mt-[2px] block text-[12px]">{errCodeLine(updateError)}</span>{/if}</span>
                       <Button variant="secondary" class="ml-[10px]" onclick={() => checkForUpdate(true)}>
                         {t("ui.update_retry")}
                       </Button>
                     {/if}
                   </div>
-                {/if}
                 <!-- UPD-06 (#616)：**壳旧** ⇒ 换壳。磁盘上已经是新版、运行中的壳还是旧的
                      ——这一行是「更新装完没换壳」的唯一出路（旧实现这里给的是方向相反的
                      「重启后台服务」，按了永远不收敛）。 -->
@@ -2458,7 +2465,7 @@
             {#if many}<p class="pending-name">{item.name}</p>{/if}
             {#if sub}<p class="pending-meta">{sub}</p>{/if}
             {#if req.phase === "failed"}
-              <p class="pending-error" role="alert">{t("ui.err_pair_code_wrong")}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(errMessage("ui.err_pair_code_wrong"))}</span></p>
+              <p class="pending-error" role="alert">{t("ui.err_pair_code_wrong")}<span class="mt-[2px] block text-[12px]">{errCodeLine(errMessage("ui.err_pair_code_wrong"))}</span></p>
               <div class="pending-actions" data-testid="pending-actions">
                 <Button onclick={() => showQrAgain(req.id)}>{t("ui.pair_show_qr_again")}</Button>
               </div>

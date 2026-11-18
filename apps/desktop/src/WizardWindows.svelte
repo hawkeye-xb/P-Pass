@@ -56,7 +56,7 @@
   <!-- #1132 D4：错误要用 role="alert" 播报。 -->
   {#if view.error}
     <p role="alert" class="m-0 rounded-md bg-act-bg px-[14px] py-[10px] text-[15px] text-act">
-      {view.error.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(view.error)}</span>
+      {view.error.text}<span class="mt-[2px] block text-[12px]">{errCodeLine(view.error)}</span>
     </p>
   {/if}
 

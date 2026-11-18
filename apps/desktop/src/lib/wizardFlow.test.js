@@ -72,6 +72,29 @@ describe("选库", () => {
     expect(invokeMock).toHaveBeenLastCalledWith("use_default_library_dir");
     expect(view.libraryDir).toBe("/Pictures/P-Pass Library");
   });
+
+  // CodeRabbit：选目录失败落下的红条，重试成功后要清掉——不然向导一直挂着
+  // 失败警告。chooseFolder 与 useDefault 同一处理。
+  // 反证：成功分支去掉 error: "" ⇒ 本条红。
+  it("选目录失败后重试成功，红条清掉", async () => {
+    const errKey = (e) => (typeof e === "string" ? e : e?.key);
+    const { flow, view } = make();
+    invokeMock.mockRejectedValueOnce(new Error("no folder"));
+    await flow.chooseFolder();
+    expect(errKey(view.error)).toBe("ui.wizard_save_failed");
+    invokeMock.mockResolvedValueOnce("/Volumes/X/Lib");
+    await flow.chooseFolder();
+    expect(view.error).toBe("");
+    expect(view.libraryDir).toBe("/Volumes/X/Lib");
+
+    invokeMock.mockRejectedValueOnce(new Error("no default"));
+    await flow.useDefault();
+    expect(errKey(view.error)).toBe("ui.wizard_save_failed");
+    invokeMock.mockResolvedValueOnce(undefined);
+    await flow.useDefault();
+    expect(view.error).toBe("");
+    expect(view.libraryDir).toBe("/Pictures/P-Pass Library");
+  });
 });
 
 describe("第 1 → 2 步", () => {
