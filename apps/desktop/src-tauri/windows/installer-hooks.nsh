@@ -325,15 +325,12 @@ Function PPassRegisterUpdateRecoveryTask
   nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$code = $\'$R7$\'; $$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($$code)); $$arg = $\'-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $\' + $$encoded; $$start = (Get-Date).AddMinutes(1); $$t = New-ScheduledTaskTrigger -Once -At $$start -RepetitionInterval (New-TimeSpan -Minutes 1); $$t.EndBoundary = $$start.AddMinutes(10).ToString($\'s$\'); $$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances $\'IgnoreNew$\' -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 1); $$p = New-ScheduledTaskPrincipal -UserId $\'SYSTEM$\' -LogonType $\'ServiceAccount$\' -RunLevel $\'Highest$\'; $$a = New-ScheduledTaskAction -Execute $\'powershell.exe$\' -Argument $$arg; Register-ScheduledTask -TaskName $\'${PPASS_RECOVERY_TASK}$\' -Trigger $$t -Settings $$s -Principal $$p -Action $$a -Force -ErrorAction Stop"'
   Pop $0
   Pop $1
-  ; 登记失败时把 PowerShell 的报错打进安装日志，E3 才有得查。
-  ${If} $0 != 0
-    DetailPrint "update-recovery task registration failed: $1"
-    ; 静默安装看不到 DetailPrint，落一份到 TEMP，E3 排查时能读到真实报错。
-    FileOpen $3 "$TEMP\ppass-update-recovery-task.log" w
-    FileWrite $3 "register_exit=$0$\r$\n"
-    FileWrite $3 "$1$\r$\n"
-    FileClose $3
-  ${EndIf}
+  ; 无论成败都把注册命令的输出落盘：退出码 0 也可能什么都没做，只有输出能说明。
+  DetailPrint "update-recovery task registration exit=$0"
+  FileOpen $3 "$TEMP\ppass-update-recovery-task.log" w
+  FileWrite $3 "register_exit=$0$\r$\n"
+  FileWrite $3 "$1$\r$\n"
+  FileClose $3
   ; 成功判据是「任务真的存在」，不是注册命令的退出码：退出码 0 也可能什么都没建出来。
   nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /Query /TN "${PPASS_RECOVERY_TASK}"'
   Pop $0
