@@ -4548,13 +4548,40 @@ mod tests {
                 .unwrap_or_else(|| panic!("缺 {name}"));
             let end = start + hooks[start..].find("!macroend").expect("宏没有结束");
             let block = &hooks[start..end];
-            assert!(
-                block
-                    .find(r#""$SYSDIR\schtasks.exe" /Delete /TN "${PPASS_RECOVERY_TASK}" /F"#)
-                    .is_some(),
-                "{name} 没有清理限时恢复任务 P-PassUpdateRecovery"
-            );
+            let delete = block
+                .find(r#""$SYSDIR\schtasks.exe" /Delete /TN "${PPASS_RECOVERY_TASK}" /F"#)
+                .unwrap_or_else(|| panic!("{name} 没有清理限时恢复任务 P-PassUpdateRecovery"));
+            // 评审：/Delete 只删登记、不中断正在跑的实例；它会在下面 kill 掉服务之后
+            // 把 daemon 再拉起来。必须先 /End。反证：去掉 /End 这一行，本测试红。
+            let stop = block
+                .find(r#""$SYSDIR\schtasks.exe" /End /TN "${PPASS_RECOVERY_TASK}""#)
+                .unwrap_or_else(|| panic!("{name} 清理任务前没有 /End 终止运行中的实例"));
+            assert!(stop < delete, "{name}：必须先 /End 再 /Delete");
+            if name == "NSIS_HOOK_PREINSTALL" {
+                let kill = block.find("taskkill.exe").expect("PREINSTALL 没有结束进程");
+                assert!(delete < kill, "清任务必须在结束进程之前，否则进程会被拉起");
+            }
         }
+    }
+
+    /// #1817 评审：任务动作里的 wanted-state 路径必须由系统 API 现算。把 ProgramData
+    /// 拼进 `$code = '…'` 时，路径里的单引号会让 PowerShell 字符串提前结束、任务登记失败。
+    /// 反证：把路径改回 `${PPASS_DATA}\wanted-state`，本测试红。
+    #[test]
+    fn recovery_task_does_not_interpolate_the_data_path_into_the_script() {
+        let hooks = include_str!("../windows/installer-hooks.nsh").replace("\r\n", "\n");
+        let action = hooks
+            .lines()
+            .find(|l| l.contains("StrCpy $R7"))
+            .expect("缺限时恢复任务的动作");
+        assert!(
+            !action.contains("${PPASS_DATA}"),
+            "动作里不许拼 NSIS 数据路径：路径含单引号会破坏 PowerShell 字符串"
+        );
+        assert!(
+            action.contains("[Environment]::GetFolderPath"),
+            "wanted-state 路径应由 CommonApplicationData 现算"
+        );
     }
 
     #[test]
