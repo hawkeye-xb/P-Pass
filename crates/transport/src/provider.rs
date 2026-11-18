@@ -1487,9 +1487,10 @@ mod net29_tests {
     /// - `time::pause()` 只对 current_thread runtime 生效，provider 自己的
     ///   runtime 是 multi_thread（`BlobsProvider::build`），停不了；
     /// - 但 `wait_online` 的 `tokio::time::timeout` 认的是**当前任务所在的**
-    ///   runtime。所以测试自建一个暂停的 current_thread runtime，直接 await
-    ///   等待所在的 `online_endpoint`（`serve` 里唯一碰时钟的一步），定时器就
-    ///   落在虚拟时钟上。
+    ///   runtime。所以测试自建一个暂停的 current_thread runtime，在它上面 await
+    ///   整个 `serve_async`（`serve` 的同步外壳只是 block_on 它），定时器就落在
+    ///   虚拟时钟上；`serve_async` 里若多等一次 deadline（重试），虚拟时间会走
+    ///   两个 deadline，这里立刻红。
     #[test]
     fn a_persistently_offline_provider_replaces_its_endpoint_on_each_failed_serve() {
         let dir = tempfile::tempdir().unwrap();
@@ -1516,10 +1517,11 @@ mod net29_tests {
             // outside `block_on` (a runtime cannot be entered from inside one).
             let (error, waited) = virtual_clock.block_on(async {
                 let started = tokio::time::Instant::now();
-                let error = match provider.online_endpoint("serving").await {
-                    Ok(_) => panic!("the never-online endpoint must miss the deadline"),
-                    Err(error) => error.to_string(),
-                };
+                let error = provider
+                    .serve_async(Hash::from_bytes(import.hash))
+                    .await
+                    .unwrap_err()
+                    .to_string();
                 (error, tokio::time::Instant::now() - started)
             });
             assert!(error.contains("did not become online"), "{error}");
