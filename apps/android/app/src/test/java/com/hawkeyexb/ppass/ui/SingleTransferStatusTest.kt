@@ -167,12 +167,25 @@ class SingleTransferStatusTest {
      * #1799：设置组里可点的行给标准 button 语义（role = Role.Button，TalkBack 报「按钮」）；
      * 账目行（onClick = null）保持不可点——MOB-100：有雪佛龙却点不动比没有更坏，这条防线不许松。
      * 行高例外（UI-13：不套 ListItem 的量出理由）原样保留。
-     * 反证：可点行退回无 role 的 clickable，第一条红。
+     * 反证：可点行退回无 role 的 clickable、或把 clickable 提出条件分支（无条件挂上、回调传空），
+     * 第一条红；箭头或间距改成无条件显示，第二、三条红。
      */
     @Test
     fun clickable_rows_carry_button_semantics_and_accounts_stay_inert() {
         val row = homeScreen().substringAfter("private fun CellRow(").substringBefore("\n}\n")
-        assertTrue("可点行必须带 role = Role.Button", row.contains("role = Role.Button"))
-        assertTrue("账目行仍然不画「›」也不可点（onClick == null 分支保留）", row.contains("if (onClick != null)"))
+        // #1879 评审：断言拆开、各自可判红——role 挂在「onClick != null」守卫分支里，
+        // 不是「clickable 无条件挂上、回调传空」的假不可点。
+        assertTrue(
+            "可点行必须带 role = Role.Button，且 clickable 只在 onClick != null 分支里",
+            row.contains(".let { if (onClick != null) it.clickable(role = Role.Button, onClick = onClick) else it }"),
+        )
+        assertTrue(
+            "账目行不画右侧间距（value 行的 Spacer 由 onClick != null 守卫）",
+            row.contains("if (onClick != null) Spacer(Modifier.width(4.dp))"),
+        )
+        assertTrue(
+            "账目行仍然不画「›」（箭头显隐由 onClick != null 守卫）",
+            row.contains("if (onClick != null) Text(\"›\""),
+        )
     }
 }

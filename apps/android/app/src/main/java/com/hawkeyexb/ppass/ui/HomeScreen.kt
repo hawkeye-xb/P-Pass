@@ -1380,7 +1380,9 @@ private val CellRowHeight = 52.dp
  *  动作挂在整行一个节点上），行内 Switch 只画状态（`onCheckedChange =
  *  null`）——这是 Compose 官方文档的开关行写法；此前行无语义、TalkBack
  *  要分别聚焦文字与开关两个节点。hint 的独立点击出口保留：嵌套
- *  clickable 是独立的语义合并边界，不会被行级 toggleable 吞掉。 */
+ *  clickable 是独立的语义合并边界，不会被行级 toggleable 吞掉；hint
+ *  可点时带 `Role.Button`（#1879 评审：TalkBack 报「按钮」，与同卡其它
+ *  动作同一口径）。 */
 @Composable
 private fun RuleSwitchRow(
     label: String,
@@ -1408,7 +1410,7 @@ private fun RuleSwitchRow(
                     hint,
                     fontSize = 12.sp, lineHeight = 17.sp, color = hintColor,
                     modifier = if (onHintClick != null) {
-                        Modifier.clickable(onClick = onHintClick)
+                        Modifier.clickable(role = Role.Button, onClick = onHintClick)
                     } else {
                         Modifier
                     },

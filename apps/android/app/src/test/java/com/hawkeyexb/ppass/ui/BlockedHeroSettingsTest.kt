@@ -70,8 +70,12 @@ class BlockedHeroSettingsTest {
             row.contains("onCheckedChange = onCheckedChange"),
         )
         assertTrue("行内 Switch 只画状态（onCheckedChange = null）", row.contains("onCheckedChange = null"))
-        // 行级 toggleable 合并语义后，状态 hint 的独立点击出口（嵌套 clickable 是独立语义节点）必须保留。
-        assertTrue("后台状态 hint 的点击出口保留（onHintClick）", row.contains("onHintClick") && row.contains("clickable(onClick = onHintClick)"))
+        // 行级 toggleable 合并语义后，状态 hint 的独立点击出口（嵌套 clickable 是独立语义节点）必须保留，
+        // 且带标准 button 语义（#1879 评审：改断言锁定 role 写法，出口保留的意图不变）。
+        assertTrue(
+            "后台状态 hint 的点击出口保留，且带 Role.Button（onHintClick）",
+            row.contains("onHintClick") && row.contains("clickable(role = Role.Button, onClick = onHintClick)"),
+        )
     }
 
     /**
