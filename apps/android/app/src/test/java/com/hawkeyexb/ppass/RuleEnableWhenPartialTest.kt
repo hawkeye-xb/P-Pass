@@ -71,8 +71,13 @@ class RuleEnableWhenPartialTest {
         assertFalse("被锁时不再申请", settings.contains("rulePermission.launch"))
         assertFalse("不预写开关", settings.contains("rulePrefs.set(true)"))
         val request = toggle.substringAfter("RuleEnableRoute.Request -> {")
-        assertTrue(request.contains("rulePermission.launch"))
-        assertTrue(main.contains("shouldShowRequestPermissionRationale(activity, Manifest.permission.READ_MEDIA_IMAGES)"))
+        // #1788：申请改走共用发射口（发射成功记「本机申请过一次」，rationale 分不清「没申请过」与「被锁」）。
+        assertTrue("Request 经发射口申请", request.contains("launchAlbumAccessPrompt(rulePermission"))
+        assertTrue("#1788：还能不能弹框由发射记录 + 系统 rationale 共同判定，且问的是本机实际申请的那支权限",
+            main.contains("shouldShowRequestPermissionRationale(it, primary)") &&
+                main.contains("requiredMediaPermissions().first()") &&
+                main.contains("systemCanPromptAlbumAccess(") &&
+                main.contains("AlbumAccessPromptPrefs(context).requestedOnce("))
     }
 
     /**

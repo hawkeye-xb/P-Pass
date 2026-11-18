@@ -374,6 +374,9 @@ fun PPassApp() {
     // MOB-94: 三档，不是布尔。全拒那一档此前落进了「正常」分支，
     // 首页因此显示「0 / 0 张已回家 · 照片都存好了」。
     var mediaAccess by remember { mutableStateOf(mediaAccess(context)) }
+    // #1788：范围页相册提示的动作分流——系统还肯不肯为相册权限弹框（rationale）。
+    // ON_RESUME（去设置回来）与页内申请返回（被锁时点了也不弹）都要重读。
+    var albumAccessCanPrompt by remember { mutableStateOf(canPromptForFullMediaAccess(context)) }
     // #843：读得到照片的拍摄地点吗（ACCESS_MEDIA_LOCATION）。读不到时照常备份，首页挂提示；回到前台重读。
     var mediaLocation by remember { mutableStateOf(AndroidMediaImporter.canReadMediaLocation(context)) }
     val locationPermission = rememberLauncherForActivityResult(
@@ -457,8 +460,18 @@ fun PPassApp() {
     ) { _ ->
         mediaAccess = mediaAccess(context)
         mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
+        // #1788：被锁时点了也不弹框——按发射记录与最新 rationale 把页内动作换成「去设置」。
+        albumAccessCanPrompt = canPromptForFullMediaAccess(context)
         PLog.i("PPassFlow", "scope: photo access after prompt=$mediaAccess")
     }
+    // #1788：相册权限的申请口共用这一个发射口——发射成功先记「本机申请过一次」。
+    // rationale 把「从没申请过」与「被永久拒绝」都读成 false，只有自己的发射记录分得开；
+    // 漏接一个申请口，从那里进来的用户就会被误判（单张备份出口不弹权限框，自然也不记）。
+    val launchAlbumAccessPrompt: (androidx.activity.result.ActivityResultLauncher<Array<String>>, Array<String>) -> Unit =
+        { launcher, permissions ->
+            launcher.launch(permissions)
+            com.hawkeyexb.ppass.backup.AlbumAccessPromptPrefs(context).markRequested()
+        }
 
     // UPD-02: 更新状态机——检查/下载/校验/安装/回执全链状态在
     // UpdateUiController 一处汇合，这里只接线：触发节点 1（冷启动，下方
@@ -590,6 +603,8 @@ fun PPassApp() {
                     // #1353：从系统设置改完权限回来，按真实权限现算；变了就记一行（回来读到 FULL = 状态卡消失、自动备份恢复）。
                     if (mediaAccess != accessBefore) PLog.i("PPassFlow", "photo access on resume: $accessBefore -> $mediaAccess")
                     mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
+                    // #1788：去系统设置的相册页回来，rationale 可能翻面——范围页动作按真实状态重算。
+                    albumAccessCanPrompt = canPromptForFullMediaAccess(context)
                     resumeCount++
                     heartbeat.start()
                     timeline.start()
@@ -743,7 +758,7 @@ fun PPassApp() {
                 }
                 RuleEnableRoute.Request -> {
                     pendingRulePairing = pairing
-                    rulePermission.launch(withMediaLocation(requiredMediaPermissions()))
+                    launchAlbumAccessPrompt(rulePermission, withMediaLocation(requiredMediaPermissions()))
                 }
             }
         }
@@ -846,7 +861,7 @@ fun PPassApp() {
             screen = Screen.Buckets(pairing, emptySet(), firstTime = true)
         } else {
             decisionPermissionPairing = pairing
-            runCatching { decisionPermission.launch(withMediaLocation(requiredMediaPermissions())) }.onFailure {
+            runCatching { launchAlbumAccessPrompt(decisionPermission, withMediaLocation(requiredMediaPermissions())) }.onFailure {
                 PLog.w("PPassFlow", "onboarding: permission prompt failed to open", it)
                 decisionPermissionPairing = null
                 decisionLock.unlock()
@@ -1594,7 +1609,7 @@ fun PPassApp() {
                                     PackageManager.PERMISSION_GRANTED
                             }
                             if (needed.isEmpty()) holder.backupNow()
-                            else mediaPermission.launch(withMediaLocation(needed))
+                            else launchAlbumAccessPrompt(mediaPermission, withMediaLocation(needed))
                         },
                         // MOB-02 §二: 部分授权引导（只授权了部分照片 →
                         // 一键去系统设置；部分授权态不保存范围、不显示假 0/0）。
@@ -1765,10 +1780,13 @@ fun PPassApp() {
                     selectedFolderKeys = selectedFolders,
                     saving = scopeSaving,
                     albumAccess = mediaAccess,
+                    albumAccessCanPrompt = albumAccessCanPrompt,
                     onRequestAlbumAccess = {
                         // #1794：相册权限只在用户点页内入口时才申请（进页不再先弹框）。
-                        bucketAlbumPermission.launch(withMediaLocation(requiredMediaPermissions()))
+                        launchAlbumAccessPrompt(bucketAlbumPermission, withMediaLocation(requiredMediaPermissions()))
                     },
+                    // #1788：系统不再弹框（rationale=false）时页内动作改「去设置」，去应用详情页开相册权限。
+                    onOpenAlbumSettings = { openAppDetailsSettings(context) },
                     onAddFolder = {
                         folderToReauthorize = null
                         folderPicker.launch(null)
@@ -1921,11 +1939,35 @@ internal fun ruleScopeUsesAlbums(scope: ScopeRead): Boolean = when (scope) {
     is ScopeRead.Unreadable -> true
 }
 
-/** 系统还会不会为「全部照片」弹框：shouldShowRequestPermissionRationale(READ_MEDIA_IMAGES)。API 33 以下没有部分权限，按会弹算。 */
+/**
+ * #1788：系统还会不会为相册权限弹框（纯判定，四种入参组合单测直接跑）。
+ * shouldShowRequestPermissionRationale 把「从没申请过」与「被永久拒绝」都读成 false，单靠它区分不开——
+ * 用本机自己的发射记录补上这一维（读写都在 [com.hawkeyexb.ppass.backup.AlbumAccessPromptPrefs]）：
+ * 从没申请过就该弹（首次必然有弹框），申请过且 rationale=true 是拒过一次还能再问，
+ * 申请过且 rationale=false 才是真的被锁（只剩应用详情页）。
+ */
+internal fun systemCanPromptAlbumAccess(requestedOnce: Boolean, rationale: Boolean): Boolean =
+    !requestedOnce || rationale
+
+/**
+ * #1788：系统还会不会为相册权限弹框。rationale 单输入分不清「从没申请过」与「被永久拒绝」
+ * （两者都读 false），所以带上本机自己的发射记录；问的是本机实际申请的那支权限——
+ * API 33+ 是 READ_MEDIA_IMAGES，更低是 READ_EXTERNAL_STORAGE（那些版本上前者不存在）。
+ */
 internal fun canPromptForFullMediaAccess(context: Context): Boolean {
-    if (android.os.Build.VERSION.SDK_INT < 33) return true
-    val activity = context as? android.app.Activity ?: return true
-    return androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.READ_MEDIA_IMAGES)
+    val activity = context as? android.app.Activity
+    val primary = requiredMediaPermissions().first()
+    val rationale: Boolean? = activity?.let {
+        androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(it, primary)
+    }
+    return systemCanPromptAlbumAccess(
+        requestedOnce = com.hawkeyexb.ppass.backup.AlbumAccessPromptPrefs(context).requestedOnce(
+            photoGranted = ContextCompat.checkSelfPermission(context, primary) ==
+                PackageManager.PERMISSION_GRANTED,
+            rationale = rationale,
+        ),
+        rationale = rationale == true,
+    )
 }
 
 private fun requiredMediaPermissions(): List<String> =

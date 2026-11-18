@@ -186,9 +186,12 @@ private fun SourceTypeGlyph(folder: Boolean) {
     }
 }
 
-/** #1794：没有相册权限时相册区的现状说明 + 申请入口（样式同首页权限卡）。 */
+/** #1794：没有相册权限时相册区的现状说明 + 申请入口（样式同首页权限卡）。
+ *  #1788：系统不再弹框时动作改「去设置」（对齐 iOS 同位置的 requestAccess / openAppSettings 分流），
+ *  出口由调用方接应用详情页，设置回来按真实权限刷新。 */
 @Composable
-private fun AlbumNoAccessNotice(onRequest: () -> Unit) {
+private fun AlbumNoAccessNotice(canPrompt: Boolean, onRequest: () -> Unit, onOpenSettings: () -> Unit) {
+    val opensSettings = albumNoAccessNoticeOpensSettings(canPrompt)
     Surface(
         color = PPColor.ActBg,
         shape = RoundedCornerShape(16.dp),
@@ -206,12 +209,17 @@ private fun AlbumNoAccessNotice(onRequest: () -> Unit) {
             )
             Spacer(Modifier.height(10.dp))
             OutlinedButton(
-                onClick = onRequest,
+                onClick = if (opensSettings) onOpenSettings else onRequest,
                 modifier = Modifier.height(40.dp),
                 shape = RoundedCornerShape(14.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.4f)),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = PPColor.Act),
-            ) { Text(stringResource(R.string.scope_album_no_access_action), fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+            ) {
+                Text(
+                    stringResource(if (opensSettings) R.string.auto_backup_blocked_action else R.string.scope_album_no_access_action),
+                    fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                )
+            }
         }
     }
 }
@@ -307,6 +315,14 @@ internal fun bucketScreenEmptyNoticeVisible(
     access: MediaAccess,
 ): Boolean = bucketsEmpty && foldersEmpty && bucketScreenOffersAlbumChoices(access)
 
+/**
+ * #1788：范围页相册提示的动作去向——系统还肯弹框（rationale=true）就页内申请；不再弹框
+ * （问过至少一次后被锁，Android 官方口径：shouldShowRequestPermissionRationale）改「去设置」。
+ * 对齐 iOS 同位置的 requestAccess / openAppSettings 分流；NONE 且 rationale=false 在本 App
+ * 只可能是被锁——进范围页前 onboarding 的系统权限框一定先问过一次（同 `ruleEnableRoute` 部分态的口径）。
+ */
+internal fun albumNoAccessNoticeOpensSettings(canPrompt: Boolean): Boolean = !canPrompt
+
 data class FolderBucketUi(
     val key: String,
     val bucket: MediaScanner.Bucket,
@@ -326,7 +342,10 @@ fun BucketScreen(
     selectedFolderKeys: Set<String> = emptySet(),
     saving: Boolean = false,
     albumAccess: MediaAccess = MediaAccess.FULL,
+    /** #1788：系统还肯不肯为相册权限弹框（rationale）；false = 被锁，页内动作改「去设置」。 */
+    albumAccessCanPrompt: Boolean = true,
     onRequestAlbumAccess: () -> Unit = {},
+    onOpenAlbumSettings: () -> Unit = {},
     onAddFolder: () -> Unit = {},
     onRemoveFolder: (String) -> Unit = {},
     onReauthorizeFolder: (String) -> Unit = {},
@@ -377,7 +396,11 @@ fun BucketScreen(
                     // #1794：没有相册权限时相册区不给选，只说现状 + 申请入口；文件夹区照常。
                     if (!offersAlbums) {
                         item(key = "album-no-access", span = { GridItemSpan(maxLineSpan) }) {
-                            AlbumNoAccessNotice(onRequest = onRequestAlbumAccess)
+                            AlbumNoAccessNotice(
+                                canPrompt = albumAccessCanPrompt,
+                                onRequest = onRequestAlbumAccess,
+                                onOpenSettings = onOpenAlbumSettings,
+                            )
                         }
                     }
                     if (bucketScreenEmptyNoticeVisible(buckets.isEmpty(), folderBuckets.isEmpty(), albumAccess)) {
