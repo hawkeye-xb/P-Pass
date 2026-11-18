@@ -374,6 +374,9 @@ fun PPassApp() {
     // MOB-94: 三档，不是布尔。全拒那一档此前落进了「正常」分支，
     // 首页因此显示「0 / 0 张已回家 · 照片都存好了」。
     var mediaAccess by remember { mutableStateOf(mediaAccess(context)) }
+    // #1788：范围页相册提示的动作分流——系统还肯不肯为相册权限弹框（rationale）。
+    // ON_RESUME（去设置回来）与页内申请返回（被锁时点了也不弹）都要重读。
+    var albumAccessCanPrompt by remember { mutableStateOf(canPromptForFullMediaAccess(context)) }
     // #843：读得到照片的拍摄地点吗（ACCESS_MEDIA_LOCATION）。读不到时照常备份，首页挂提示；回到前台重读。
     var mediaLocation by remember { mutableStateOf(AndroidMediaImporter.canReadMediaLocation(context)) }
     val locationPermission = rememberLauncherForActivityResult(
@@ -457,6 +460,8 @@ fun PPassApp() {
     ) { _ ->
         mediaAccess = mediaAccess(context)
         mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
+        // #1788：被锁时点了也不弹框——按最新 rationale 把页内动作换成「去设置」。
+        albumAccessCanPrompt = canPromptForFullMediaAccess(context)
         PLog.i("PPassFlow", "scope: photo access after prompt=$mediaAccess")
     }
 
@@ -590,6 +595,8 @@ fun PPassApp() {
                     // #1353：从系统设置改完权限回来，按真实权限现算；变了就记一行（回来读到 FULL = 状态卡消失、自动备份恢复）。
                     if (mediaAccess != accessBefore) PLog.i("PPassFlow", "photo access on resume: $accessBefore -> $mediaAccess")
                     mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
+                    // #1788：去系统设置的相册页回来，rationale 可能翻面——范围页动作按真实状态重算。
+                    albumAccessCanPrompt = canPromptForFullMediaAccess(context)
                     resumeCount++
                     heartbeat.start()
                     timeline.start()
@@ -1765,10 +1772,13 @@ fun PPassApp() {
                     selectedFolderKeys = selectedFolders,
                     saving = scopeSaving,
                     albumAccess = mediaAccess,
+                    albumAccessCanPrompt = albumAccessCanPrompt,
                     onRequestAlbumAccess = {
                         // #1794：相册权限只在用户点页内入口时才申请（进页不再先弹框）。
                         bucketAlbumPermission.launch(withMediaLocation(requiredMediaPermissions()))
                     },
+                    // #1788：系统不再弹框（rationale=false）时页内动作改「去设置」，去应用详情页开相册权限。
+                    onOpenAlbumSettings = { openAppDetailsSettings(context) },
                     onAddFolder = {
                         folderToReauthorize = null
                         folderPicker.launch(null)

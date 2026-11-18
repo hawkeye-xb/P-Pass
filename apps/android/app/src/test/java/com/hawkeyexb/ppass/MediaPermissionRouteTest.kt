@@ -50,6 +50,25 @@ class MediaPermissionRouteTest {
         assertTrue(buckets.contains("scopeStore.saveScope("))
     }
 
+    /**
+     * #1788（产品定案 #1783）：系统不再允许弹窗时，范围页相册提示的动作改为「去设置」，返回后按真实权限更新。
+     * 对齐 iOS 同位置的 requestAccess / openAppSettings 分流。反证：撤掉页内分流，
+     * 或去掉申请返回 / ON_RESUME 两处的重读，本条红。
+     */
+    @Test
+    fun locked_album_access_switches_the_scope_notice_to_open_settings() {
+        val screen = File("src/main/java/com/hawkeyexb/ppass/ui/BucketScreen.kt").readText()
+        assertTrue("动作分流是页内纯判定", screen.contains("internal fun albumNoAccessNoticeOpensSettings(canPrompt: Boolean)"))
+        assertTrue("被锁时动作用「去设置」（与状态卡同一个词）", screen.contains("R.string.auto_backup_blocked_action"))
+        assertTrue("页内提示带上系统还肯不肯弹框", screen.contains("canPrompt = albumAccessCanPrompt"))
+        assertTrue("「去设置」出口由 MainActivity 接到应用详情页", main.contains("onOpenAlbumSettings = { openAppDetailsSettings(context) }"))
+        val launcher = main.substringAfter("val bucketAlbumPermission = rememberLauncherForActivityResult")
+            .substringBefore("\n    }\n")
+        assertTrue("申请返回也要重读：被锁时点了不弹框，动作要当场翻面", launcher.contains("albumAccessCanPrompt = canPromptForFullMediaAccess(context)"))
+        val resume = main.substringAfter("Lifecycle.Event.ON_RESUME -> {").substringBefore("resumeCount++")
+        assertTrue("从设置回来按真实状态重算页内动作", resume.contains("albumAccessCanPrompt = canPromptForFullMediaAccess(context)"))
+    }
+
     @Test
     fun update_dialog_does_not_cover_the_first_scope_page() {
         assertTrue(main.contains("if (!isOnboardingScreen(screen) && !updateDialogSuppressed)"))
