@@ -24,6 +24,45 @@ enum UIReg {
         print("UIREG \(line)")
         fflush(stdout)
     }
+
+    /// 按按钮表点当前画面上系统弹窗的按钮（按 roots 顺序找 `alerts`）；返回点到的文字。
+    /// 非 `UIRegressCase` 的驱动（FolderPickerDrive）也走这一份：按钮表、staged alert 里 label 出现两份、
+    /// 点不了时按坐标点，这些细节只在这里维护一次。
+    @discardableResult
+    static func tapAlertButton(_ choices: [String], roots: [XCUIApplication],
+                               onUnmatched: ((XCUIElement, [String]) -> Void)? = nil) -> String? {
+        for root in roots {
+            let alerts = root.alerts
+            guard alerts.count > 0 else { continue }
+            for i in 0..<alerts.count {
+                let alert = alerts.element(boundBy: i)
+                let buttons = alert.buttons
+                // 先把 label 记下来：点完弹窗就消失，之后再读元素的 label 会重新查一次、查不到就判用例失败。
+                var labels: [String] = []
+                var matched: [(label: String, element: XCUIElement)] = []
+                for j in 0..<buttons.count {
+                    let b = buttons.element(boundBy: j)
+                    if b.exists {
+                        let label = b.label
+                        labels.append(label)
+                        if SystemButton.matches(label, choices) { matched.append((label, b)) }
+                    }
+                }
+                if !matched.isEmpty {
+                    // staged alert 里同一个 label 会出现两份，优先点真能点的那个；都不能点时按第一个的坐标点。
+                    let target = matched.first(where: { $0.element.isHittable }) ?? matched[0]
+                    if target.element.isHittable {
+                        target.element.tap()
+                    } else {
+                        target.element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                    }
+                    return target.label
+                }
+                onUnmatched?(alert, labels)
+            }
+        }
+        return nil
+    }
 }
 
 /// 系统弹窗按钮的说法（中英；iOS 17 / 18 / 26 的写法都列上）。比对前统一去掉省略号、弯引号、大小写。
@@ -187,42 +226,13 @@ class UIRegressCase: XCTestCase {
     /// 在给定进程里找带某个按钮的弹窗并点它；返回点到的按钮文字。
     @discardableResult
     func tapAlertButton(_ choices: [String], roots: [XCUIApplication]) -> String? {
-        for root in roots {
-            let alerts = root.alerts
-            guard alerts.count > 0 else { continue }
-            for i in 0..<alerts.count {
-                let alert = alerts.element(boundBy: i)
-                let buttons = alert.buttons
-                let count = buttons.count
-                var labels: [String] = []
-                // 先把 label 记下来：点完弹窗就消失，之后再读元素的 label 会重新查一次、查不到就判用例失败。
-                var matched: [(label: String, element: XCUIElement)] = []
-                for j in 0..<count {
-                    let b = buttons.element(boundBy: j)
-                    if b.exists {
-                        let label = b.label
-                        labels.append(label)
-                        if SystemButton.matches(label, choices) { matched.append((label, b)) }
-                    }
-                }
-                if !matched.isEmpty {
-                    // staged alert 里同一个 label 会出现两份，优先点真能点的那个；都不能点时按第一个的坐标点。
-                    let target = matched.first(where: { $0.element.isHittable }) ?? matched[0]
-                    if target.element.isHittable {
-                        target.element.tap()
-                    } else {
-                        target.element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-                    }
-                    return target.label
-                }
-                if !Self.loggedAlertLabels.contains(alert.label) {
-                    Self.loggedAlertLabels.insert(alert.label)
-                    UIReg.say("ALERT_UNMATCHED label=\(alert.label) buttons=\(labels)")
-                    print("--- alert detail ---\n\(alert.debugDescription)")
-                }
+        UIReg.tapAlertButton(choices, roots: roots) { alert, labels in
+            if !Self.loggedAlertLabels.contains(alert.label) {
+                Self.loggedAlertLabels.insert(alert.label)
+                UIReg.say("ALERT_UNMATCHED label=\(alert.label) buttons=\(labels)")
+                print("--- alert detail ---\n\(alert.debugDescription)")
             }
         }
-        return nil
     }
 
     /// 点掉当前画面上任何一种已知系统弹窗（允许 / 无线数据 / 本用例要的照片答案）；返回点到的按钮文字。
