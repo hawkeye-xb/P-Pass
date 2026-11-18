@@ -39,6 +39,15 @@ internal class InMemoryPickedStore : PickedStore {
         )
     }
 
+    override fun summary(): PickedBatchSummary? {
+        if (rows.isEmpty()) return null
+        // 与 SqlitePickedStore 同口径：全部行的聚合，不按批次分组（评审 Ad）。
+        return PickedBatchSummary(
+            0L, rows.size, rows.count { it.state.open }, rows.count { it.state == PickedState.DELIVERED },
+            rows.count { it.state == PickedState.ALREADY_THERE }, rows.count { it.state == PickedState.FAILED },
+        )
+    }
+
     override fun clearAll(): List<String> = rows.map { it.uri }.also { rows.clear() }
 
     override fun clearSettled() {
