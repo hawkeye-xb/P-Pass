@@ -29,8 +29,10 @@ enum UIReg {
     /// 非 `UIRegressCase` 的驱动（FolderPickerDrive）也走这一份：按钮表、staged alert 里 label 出现两份、
     /// 点不了时按坐标点，这些细节只在这里维护一次。
     /// [photoChoices] 只在**照片权限框**里参与匹配：别的弹窗也常有「允许 / 不允许」，不能拿照片答案去点它。
+    /// [photosOnly]：只认照片框（等照片答案时用），碰到的别的弹窗一律跳过、不点。
     @discardableResult
-    static func tapAlertButton(_ choices: [String], photoChoices: [String] = [], roots: [XCUIApplication],
+    static func tapAlertButton(_ choices: [String], photoChoices: [String] = [], photosOnly: Bool = false,
+                               roots: [XCUIApplication],
                                onUnmatched: ((XCUIElement, [String]) -> Void)? = nil) -> SystemAlertTap? {
         for root in roots {
             let alerts = root.alerts
@@ -52,7 +54,7 @@ enum UIReg {
                 let isPhotos = alertIdentifier.lowercased().contains("tccservicephotos")
                     || info.contains { $0.identifier.lowercased().contains("tccservicephotos") }
                 let pool = isPhotos ? choices + photoChoices : choices
-                let matched = info.filter { SystemButton.matches($0.label, pool) }
+                let matched = (photosOnly && !isPhotos) ? [] : info.filter { SystemButton.matches($0.label, pool) }
                 if !matched.isEmpty {
                     // staged alert 里同一个 label 会出现两份，优先点真能点的那个；都不能点时按第一个的坐标点。
                     let target = matched.first(where: { $0.element.isHittable }) ?? matched[0]
@@ -243,8 +245,9 @@ class UIRegressCase: XCTestCase {
 
     /// 同上，但带上弹窗身份（照片框要按 identifier 认，见 `UIReg.tapAlertButton`）。
     @discardableResult
-    func tapAlert(_ choices: [String], photoChoices: [String] = [], roots: [XCUIApplication]) -> SystemAlertTap? {
-        UIReg.tapAlertButton(choices, photoChoices: photoChoices, roots: roots) { alert, labels in
+    func tapAlert(_ choices: [String], photoChoices: [String] = [], photosOnly: Bool = false,
+                  roots: [XCUIApplication]) -> SystemAlertTap? {
+        UIReg.tapAlertButton(choices, photoChoices: photoChoices, photosOnly: photosOnly, roots: roots) { alert, labels in
             if !Self.loggedAlertLabels.contains(alert.label) {
                 Self.loggedAlertLabels.insert(alert.label)
                 UIReg.say("ALERT_UNMATCHED label=\(alert.label) buttons=\(labels)")
@@ -274,9 +277,11 @@ class UIRegressCase: XCTestCase {
     private func alertGone(_ tap: SystemAlertTap, timeout: TimeInterval = 3) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
+            // 弹窗可能挂在两棵树里，两棵都要查：只有两边都查不到才算消失。
             let stillUp = tap.alertIdentifier.isEmpty
                 ? (springboard.alerts.count > 0 || app.alerts.count > 0)
-                : springboard.alerts.matching(identifier: tap.alertIdentifier).firstMatch.exists
+                : (springboard.alerts.matching(identifier: tap.alertIdentifier).firstMatch.exists
+                    || app.alerts.matching(identifier: tap.alertIdentifier).firstMatch.exists)
             if !stillUp { return true }
             usleep(200_000)
         }
@@ -300,9 +305,8 @@ class UIRegressCase: XCTestCase {
         }
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if let tap = tapAlert(choices, roots: [springboard, app]) {
-                // 等照片框时只认照片框：别的弹窗也常有「不允许」，不能拿它替照片答案。
-                guard what != "photos" || tap.isPhotos else { usleep(300_000); continue }
+            // 等照片框时只认照片框：别的弹窗也常有「不允许」，不能拿它替照片答案（`photosOnly` 在点击前就过滤）。
+            if let tap = tapAlert(choices, photosOnly: what == "photos", roots: [springboard, app]) {
                 UIReg.say("SYSTEM_ALERT \(what) tapped=\(tap.label)")
                 return true
             }

@@ -48,15 +48,17 @@ def ts(l):
         return datetime.fromisoformat(l.split(" ", 1)[0]).timestamp()
     except ValueError:
         return None
-# 本例的进程：**第一条**时间不早于开跑时刻（留 5 秒时钟误差）的 `process start: pid=`。
+# 本例的进程：**第一条**开跑时刻之后的 `process start: pid=`。
 # 不能取最后一条：用例跑完 App 被系统后台任务拉起时日志里会多一条启动，按最后一条切片会把通过行切掉（#1850 实测 8 次撞 3 次）。
-# 取第一条不会跨例泄漏——切点本身就在本例开跑之后，上一例的行都在切点之前。
-start = None
+# 也不先吃 5 秒时钟容差：容差窗口里的启动行可能是上一例结束时被后台拉起的 App，会把上一例的行带进切片。
+# 只有开跑时刻之后一条启动都没有（设备与主机时钟差）时，才退回容差窗口里最早的那一条。
+cands = []
 for i, l in enumerate(lines):
+    if "process start: pid=" not in l: continue
     t = ts(l)
-    if "process start: pid=" in l and t is not None and t >= since - 5:
-        start = i
-        break
+    if t is not None and t >= since - 5: cands.append((i, t))
+exact = [c for c in cands if c[1] >= since]
+start = (exact[0] if exact else cands[0])[0] if cands else None
 if start is None:
     print("FAIL\t日志里没有本例开跑之后的 App 启动行（process start）"); sys.exit(0)
 pid = re.search(r"pid=(\d+)", lines[start]).group(1)

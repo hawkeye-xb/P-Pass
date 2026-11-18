@@ -54,6 +54,26 @@ expect FAIL SettingsPick "$T/order.log" "$NOW" "选了但没登记上不算过"
 printf '%s picked: 1 registered\n' "$(iso "$NOW")" >>"$T/order.log"
 expect PASS SettingsPick "$T/order.log" "$NOW" "设置页再选一次"
 
+# 用例跑完后 App 被系统后台任务拉起（同一开跑时刻之后有两条 process start）⇒ 通过行不许被切掉（#1850）。
+cat >"$T/relaunch.log" <<EOF
+$(iso "$NOW") process start: pid=200 version=0.11.0(1) appState=active
+$(iso "$NOW") onboarding: decision shown
+$(iso "$NOW") onboarding: photo access after prompt=full
+$(iso "$((NOW + 4))") process start: pid=300 version=0.11.0(1) appState=active
+$(iso "$((NOW + 4))") launch origin: background (com.hawkeyexb.ppass.refresh)
+EOF
+expect PASS DecisionScopeFull "$T/relaunch.log" "$NOW" "用例结束后后台拉起 App 不切掉通过行"
+
+# 上一例的启动行落在开跑前 5 秒的时钟容差窗口里、本例自己的启动在后面 ⇒ 不许把上一例的行带进切片。
+cat >"$T/tolerance.log" <<EOF
+$(iso "$((NOW - 2))") process start: pid=100 version=0.11.0(1) appState=active
+$(iso "$((NOW - 1))") onboarding: decision shown
+$(iso "$((NOW - 1))") onboarding: photo access after prompt=full
+$(iso "$((NOW + 3))") process start: pid=200 version=0.11.0(1) appState=active
+$(iso "$((NOW + 3))") logs: Logs excluded from backup = true
+EOF
+expect FAIL DecisionScopeFull "$T/tolerance.log" "$NOW" "容差窗口里的上一例启动不许带进来"
+
 # 未知用例、日志拉不回 ⇒ FAIL。
 expect FAIL NoSuchCase "$T/ok.log" "$NOW" "判定表里没有的用例"
 expect FAIL DecisionScopeFull "$T/missing.log" "$NOW" "日志拉不回"

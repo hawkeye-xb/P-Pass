@@ -232,7 +232,7 @@ final class FolderPickerDrive: XCTestCase {
         let deadline = Date().addingTimeInterval(6)
         while Date() < deadline {
             if let tapped = UIReg.tapAlertButton(SystemButton.photosFull, roots: [springboard, app]) {
-                UIReg.say("SYSTEM_ALERT photos tapped=\(tapped) (press-home)")
+                UIReg.say("SYSTEM_ALERT photos tapped=\(tapped.label) (press-home)")
                 granted = true
                 break
             }
