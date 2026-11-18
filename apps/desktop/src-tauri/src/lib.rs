@@ -4570,23 +4570,25 @@ mod tests {
         }
     }
 
-    /// #1817 评审：任务动作里的 wanted-state 路径必须由系统 API 现算。把 ProgramData
-    /// 拼进 `$code = '…'` 时，路径里的单引号会让 PowerShell 字符串提前结束、任务登记失败。
-    /// 反证：把路径改回 `${PPASS_DATA}\wanted-state`，本测试红。
+    /// #1817 评审：任务读的 wanted-state 必须是安装器解析出的同一条路径（daemon 的
+    /// `service_root()` 也用 `%ProgramData%`；重定向时两处必须一致，否则任务读不到、
+    /// 直接自删、服务不再恢复）。路径放进 PowerShell 双引号串：Windows 路径不含双引号，
+    /// 里面的单引号在双引号串里是字面量，不会被 `$code = '…'` 那层截断。
+    /// 反证：改成在动作里用 GetFolderPath 现算，或把路径放进单引号串，本测试红。
     #[test]
-    fn recovery_task_does_not_interpolate_the_data_path_into_the_script() {
+    fn recovery_task_reads_the_installer_resolved_data_path() {
         let hooks = include_str!("../windows/installer-hooks.nsh").replace("\r\n", "\n");
         let action = hooks
             .lines()
             .find(|l| l.contains("StrCpy $R7"))
             .expect("缺限时恢复任务的动作");
         assert!(
-            !action.contains("${PPASS_DATA}"),
-            "动作里不许拼 NSIS 数据路径：路径含单引号会破坏 PowerShell 字符串"
+            action.contains(r#"\$\"${PPASS_DATA}\wanted-state\$\""#),
+            "wanted-state 必须用安装器解析出的 ${{PPASS_DATA}}，并放进 PowerShell 双引号串"
         );
         assert!(
-            action.contains("[Environment]::GetFolderPath"),
-            "wanted-state 路径应由 CommonApplicationData 现算"
+            !action.contains("GetFolderPath"),
+            "不许在动作里重新推导路径：ProgramData 被重定向时会和安装器/daemon 不一致"
         );
     }
 
