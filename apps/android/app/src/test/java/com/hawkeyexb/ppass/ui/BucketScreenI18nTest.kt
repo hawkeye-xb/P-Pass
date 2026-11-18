@@ -40,6 +40,10 @@ class BucketScreenI18nTest {
             "BucketCard must localize a null bucket name",
             source.contains("b.name ?: stringResource(R.string.bucket_unnamed)"),
         )
+        assertTrue(
+            "folder card must localize a null bucket name too (deleting either fallback must fail)",
+            source.contains("folder.bucket.name ?: stringResource(R.string.bucket_unnamed)"),
+        )
     }
 
     @Test

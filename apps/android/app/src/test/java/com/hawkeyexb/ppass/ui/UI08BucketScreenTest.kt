@@ -51,17 +51,20 @@ class UI08BucketScreenTest {
 
     /**
      * #1797：同名来源要有类型标识——相册与文件夹的卡分别给各自类型词，由组件用标准图标 + 读屏描述呈现。
+     * 反证：两张卡的 kindLabel 互换后，本条红（标签必须各自出现在对应的卡片调用里）。
      */
     @Test
     fun same_name_sources_get_distinct_type_labels() {
         val source = bucketScreenSource()
+        val albumBlock = source.substringAfter("items(buckets").substringBefore("items(folderBuckets")
+        val folderBlock = source.substringAfter("items(folderBuckets").substringBefore("item(key = \"add-folder\")")
         assertTrue(
             "相册卡要带相册类型词",
-            source.contains("kindLabel = stringResource(R.string.source_kind_album)"),
+            albumBlock.contains("kindLabel = stringResource(R.string.source_kind_album)"),
         )
         assertTrue(
             "文件夹卡要带文件夹类型词",
-            source.contains("kindLabel = stringResource(R.string.source_kind_folder)"),
+            folderBlock.contains("kindLabel = stringResource(R.string.source_kind_folder)"),
         )
     }
 
@@ -103,8 +106,9 @@ class UI08BucketScreenTest {
     }
 
     /**
-     * #1797：失效目录的重新授权与移除收进标准菜单；重新授权仍直连授权动作，
-     * 移除仍先过原确认弹窗。反证：菜单丢掉任一动作或绕过确认弹窗，本条红。
+     * #1797：失效目录的重新授权与移除收进标准菜单；重新授权仍直连授权动作、只挂在权限失效
+     * 条件里，移除仍先过原确认弹窗。反证：菜单丢掉任一动作、绕过确认弹窗、
+     * 或权限条件反转（needsPermission 为真反而不给重新授权）后，本条红。
      */
     @Test
     fun needs_permission_folder_keeps_reauthorize_and_remove_actions() {
@@ -112,10 +116,16 @@ class UI08BucketScreenTest {
         val folderBlock = source.substringBefore("item(key = \"add-folder\")")
             .substringAfter("items(folderBuckets")
         assertTrue("文件夹卡的动作收进标准菜单", folderBlock.contains("menuActions = buildList"))
-        assertTrue("失效目录仍显示重新授权", folderBlock.contains("SourceMenuAction(stringResource(R.string.folder_reauthorize))"))
-        assertTrue("失效目录的重新授权仍直连 onReauthorizeFolder(folder.key)", folderBlock.contains("onReauthorizeFolder(folder.key)"))
+        assertTrue("重新授权必须挂在 needsPermission 条件里", folderBlock.contains("if (folder.needsPermission) {"))
+        val guarded = folderBlock.substringAfter("if (folder.needsPermission) {")
+            .substringBefore("add(SourceMenuAction(stringResource(R.string.folder_remove))")
+        assertTrue("失效目录仍显示重新授权", guarded.contains("SourceMenuAction(stringResource(R.string.folder_reauthorize))"))
+        assertTrue("失效目录的重新授权仍直连 onReauthorizeFolder(folder.key)", guarded.contains("onReauthorizeFolder(folder.key)"))
         assertTrue("失效目录同时保留移除", folderBlock.contains("SourceMenuAction(stringResource(R.string.folder_remove))"))
         assertTrue("移除仍进入原确认弹窗", folderBlock.contains("removing = folder"))
+        assertFalse("移除不许在确认前（网格块里）直接触发 onRemoveFolder", folderBlock.contains("onRemoveFolder("))
+        val dialog = source.substringAfter("removing?.let")
+        assertTrue("确认后才回调 onRemoveFolder(folder.key)", dialog.contains("onRemoveFolder(folder.key)"))
     }
 
     /**
