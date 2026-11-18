@@ -22,16 +22,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.pluralStringResource
@@ -771,18 +778,19 @@ fun HomeScreen(
                     if (copy.detail.isNotEmpty()) {
                         var showDetail by remember { mutableStateOf(false) }
                         Spacer(Modifier.height(6.dp))
-                        Text(
-                            stringResource(
-                                if (showDetail) R.string.trouble_details_hide
-                                else R.string.trouble_details_show
-                            ),
-                            fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                            color = PPColor.Ink40,
-                            textDecoration = TextDecoration.Underline,
-                            modifier = Modifier
-                                .clickable { showDetail = !showDetail }
-                                .padding(vertical = 4.dp),
-                        )
+                        // #1799：开合交给标准 TextButton——role、最小触控区与涟漪由组件给出；
+                        // 文案（展开/收起）与弱化视觉（Ink40 + 下划线）不变。
+                        TextButton(onClick = { showDetail = !showDetail }) {
+                            Text(
+                                stringResource(
+                                    if (showDetail) R.string.trouble_details_hide
+                                    else R.string.trouble_details_show
+                                ),
+                                fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                                color = PPColor.Ink40,
+                                textDecoration = TextDecoration.Underline,
+                            )
+                        }
                         if (showDetail) {
                             Text(
                                 copy.detail,
@@ -1048,10 +1056,15 @@ private fun MorePage(
 ) {
     Column(Modifier.fillMaxSize().background(PPColor.Paper).padding(20.dp, 14.dp, 20.dp, 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "‹", fontSize = 24.sp, color = PPColor.Ink,
-                modifier = Modifier.clickable(onClick = onBack).padding(4.dp, 0.dp, 12.dp, 0.dp),
-            )
+            // #1799：返回交给标准 IconButton + ArrowBack（与 #1797 范围页两端同款）——
+            // 触控区、涟漪与「返回」描述由组件给出，不再用自绘「‹」字符承载点击。
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.back),
+                    tint = PPColor.Ink,
+                )
+            }
             Text(
                 stringResource(R.string.more_label),
                 fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
@@ -1129,10 +1142,14 @@ private fun StorageComputerDetail(
     var armed by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().background(PPColor.Paper).padding(20.dp, 14.dp, 20.dp, 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "‹", fontSize = 24.sp, color = PPColor.Ink,
-                modifier = Modifier.clickable(onClick = onBack).padding(4.dp, 0.dp, 12.dp, 0.dp),
-            )
+            // #1799：同 MorePage——标准 IconButton + ArrowBack（#1797 两端同款）。
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.back),
+                    tint = PPColor.Ink,
+                )
+            }
             Text(
                 stringResource(R.string.storage_computer),
                 fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
@@ -1358,7 +1375,14 @@ private val CellRowHeight = 52.dp
  *  的信息位，不冲突——label 永远只说"这是什么配置"，hint 永远只说
  *  "这个配置眼下的真实运行情况"。hintColor 让状态类 hint 能用琥珀色
  *  跟静态说明文字（Ink40）区分；onHintClick 让状态行本身可点，去处理
- *  异常，不需要在开关行外面再叠一个 CellRow。 */
+ *  异常，不需要在开关行外面再叠一个 CellRow。
+ *  #1799：行本体用 M3 标准 `toggleable`（Role.Switch + 开合状态 + 点击
+ *  动作挂在整行一个节点上），行内 Switch 只画状态（`onCheckedChange =
+ *  null`）——这是 Compose 官方文档的开关行写法；此前行无语义、TalkBack
+ *  要分别聚焦文字与开关两个节点。hint 的独立点击出口保留：嵌套
+ *  clickable 是独立的语义合并边界，不会被行级 toggleable 吞掉；hint
+ *  可点时带 `Role.Button`（#1879 评审：TalkBack 报「按钮」，与同卡其它
+ *  动作同一口径）。 */
 @Composable
 private fun RuleSwitchRow(
     label: String,
@@ -1369,7 +1393,14 @@ private fun RuleSwitchRow(
     onHintClick: (() -> Unit)? = null,
 ) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = CellRowHeight).padding(horizontal = 16.dp),
+        Modifier.fillMaxWidth()
+            .toggleable(
+                value = checked,
+                onValueChange = onCheckedChange,
+                role = Role.Switch,
+            )
+            .heightIn(min = CellRowHeight)
+            .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -1379,7 +1410,7 @@ private fun RuleSwitchRow(
                     hint,
                     fontSize = 12.sp, lineHeight = 17.sp, color = hintColor,
                     modifier = if (onHintClick != null) {
-                        Modifier.clickable(onClick = onHintClick)
+                        Modifier.clickable(role = Role.Button, onClick = onHintClick)
                     } else {
                         Modifier
                     },
@@ -1387,10 +1418,11 @@ private fun RuleSwitchRow(
             }
         }
         // 开启色与 iOS 设置页 Toggle 同为 safe（SettingsScreen.swift .tint(PPColor.safe)）；
-        // 关闭态与禁用态走 PPTheme 的 colorScheme。
+        // 关闭态与禁用态走 PPTheme 的 colorScheme。#1799：动作已由整行
+        // toggleable 承载，开关本体只画状态（onCheckedChange = null）。
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
+            onCheckedChange = null,
             colors = SwitchDefaults.colors(
                 checkedTrackColor = PPColor.Safe,
                 checkedThumbColor = PPColor.Paper,
@@ -1404,12 +1436,15 @@ private fun RuleSwitchRow(
  *
  *  MOB-100：`onClick == null` 的行是**账目**，不是入口——不可点，也不画
  *  「›」。有雪佛龙却点不动比没有雪佛龙更坏，那就是本卡要修的 D3 形状
- *  （有按钮、按钮不做事）换一个地方重演。 */
+ *  （有按钮、按钮不做事）换一个地方重演。
+ *  #1799：可点行带标准 `role = Role.Button`（TalkBack 报「按钮」）；行高
+ *  例外保留——UI-13 评估过 `ListItem`（单行 56dp），比设计稿 52dp 高出
+ *  4dp 且整卡变松散，量出的冲突仍在，故继续走 Row + role 的薄语义封装。 */
 @Composable
 private fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)? = null) {
     Row(
         Modifier.fillMaxWidth()
-            .let { if (onClick != null) it.clickable(onClick = onClick) else it }
+            .let { if (onClick != null) it.clickable(role = Role.Button, onClick = onClick) else it }
             .heightIn(min = CellRowHeight)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,

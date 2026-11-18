@@ -23,13 +23,10 @@
 // 没有"知悉但暂不处理"的中间态。
 package com.hawkeyexb.ppass.ui
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -37,6 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -122,7 +120,9 @@ fun topNotice(notices: List<HomeNotice>): HomeNotice? =
  *  同一族视觉（设计稿 layout-v1 的提示条）。UI-12: `critical` 切到强色
  *  （与 `PPColor.Act`/`ActBg` 同一族，跟"配对失效"红卡用的是同一套
  *  语义色），"知道了"用比处理动作更弱的视觉（无下划线、Ink40）区分
- *  主次两个动作。 */
+ *  主次两个动作。
+ *  #1799：两个动作交给 M3 `TextButton`——role、最小触控区与涟漪由组件
+ *  给出，不再用自绘 clickable 文本（此前触控区只有一行文字高）。 */
 @Composable
 fun NoticeCard(notice: HomeNotice) {
     val bg = if (notice.critical) PPColor.ActBg else PPColor.WaitingBg
@@ -146,27 +146,28 @@ fun NoticeCard(notice: HomeNotice) {
                 modifier = Modifier.weight(1f),
             )
             if (notice.dismissLabel != null) {
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    notice.dismissLabel,
-                    fontSize = 13.sp, fontWeight = FontWeight.Medium, color = PPColor.Ink40,
-                    modifier = Modifier.clickable(onClick = notice.onDismiss).padding(4.dp),
-                )
+                TextButton(onClick = notice.onDismiss) {
+                    Text(
+                        notice.dismissLabel,
+                        fontSize = 13.sp, fontWeight = FontWeight.Medium, color = PPColor.Ink40,
+                    )
+                }
             }
             if (notice.actionLabel != null) {
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    notice.actionLabel,
-                    fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
-                    textDecoration = TextDecoration.Underline,
-                    modifier = Modifier.clickable(onClick = notice.onAction).padding(4.dp),
-                )
+                TextButton(onClick = notice.onAction) {
+                    Text(
+                        notice.actionLabel,
+                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+                        textDecoration = TextDecoration.Underline,
+                    )
+                }
             }
         }
     }
 }
 
-/** C1（10-30 用户定版）的一行版式：左边正文、右边动作与 ×。设置页带 × 的提示条与照片页引导位（#1322）共用。 */
+/** C1（10-30 用户定版）的一行版式：左边正文、右边动作与 ×。设置页带 × 的提示条与照片页引导位（#1322）共用。
+ *  #1799：动作交给标准 TextButton（与 [NoticeCard] 同一处理）；「×」已是标准 IconButton 不动。 */
 @Composable
 fun ClosableNoticeCard(
     body: String,
@@ -189,13 +190,13 @@ fun ClosableNoticeCard(
                 modifier = Modifier.weight(1f).padding(vertical = 10.dp),
             )
             if (actionLabel != null) {
-                Text(
-                    actionLabel,
-                    fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
-                    textDecoration = TextDecoration.Underline,
-                    modifier = Modifier.clickable(onClick = onAction)
-                        .padding(horizontal = 8.dp, vertical = 14.dp),
-                )
+                TextButton(onClick = onAction) {
+                    Text(
+                        actionLabel,
+                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+                        textDecoration = TextDecoration.Underline,
+                    )
+                }
             }
             // IconButton 自带 48dp 最小触控区（Material 规范），图标本身 20dp。
             IconButton(onClick = onClose) {
