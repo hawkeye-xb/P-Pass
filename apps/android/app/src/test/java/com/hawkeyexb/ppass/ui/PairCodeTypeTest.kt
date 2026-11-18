@@ -1,5 +1,6 @@
 // 配对验证码页的主次：验证码 > 电脑名 > 说明 > 电脑标识（扫码后直接到这一屏，#1118）。
-// 字号来自 Material 字号体系（这里用默认 Typography，App 里是 MaterialTheme.typography，主题没有自定义字号），
+// 字号来自 Material 字号体系（这里用默认 Typography，App 里是 MaterialTheme.typography；
+// 主题的自定义字号同样取自 tokens.json，pair-* 这几档与 M3 默认值相同），
 // tokens.json mobile-ui.type.pair-* 记的就是这些值——两边不许各写各的数。
 package com.hawkeyexb.ppass.ui
 

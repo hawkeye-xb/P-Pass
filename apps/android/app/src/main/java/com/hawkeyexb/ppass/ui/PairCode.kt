@@ -34,8 +34,9 @@ internal fun groupPairCode(code: String): String =
 /**
  * Type levels of [PairCodeScreen], most to least prominent: code > computer name > explanation >
  * computer identity; "Connecting to" is a small label above the name. Built from the Material type
- * scale ([MaterialTheme.typography] in the app, the default [Typography] in tests) — no hand-written
- * sizes except the explanation, raised to the phone body floor (tokens size.mobile.body-min).
+ * scale ([MaterialTheme.typography] in the app, the default [Typography] in tests; the theme's
+ * custom sizes come from tokens.json too, same values for these levels) — no hand-written sizes
+ * except the explanation, raised to the phone body floor (tokens size.mobile.body-min).
  * tokens.json mobile-ui.type.pair-* records the resulting sizes; iOS deviations live in platforms.ios.
  */
 internal data class PairCodeType(
