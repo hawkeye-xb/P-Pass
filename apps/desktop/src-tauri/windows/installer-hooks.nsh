@@ -302,6 +302,8 @@ Var PPassDataDir
 ;      服务存在、状态 STOPPED 时同样是 0。起不来就让下一轮再试，10 分钟后任务过期自删。
 Function PPassRegisterUpdateRecoveryTask
   StrCpy $R0 1
+  ; 每次进函数先清掉上一次的失败日志，免得把旧报错当成这次的。
+  Delete "$TEMP\ppass-update-recovery-task.log"
   ; 动作里不出现任何路径：wanted-state 由动作自己从 $env:ProgramData 取（见下），
   ; 与 PPassResolveDataDir 和 daemon 的 service_root 读同一个变量。
   ; PS 层的字符串一律用单引号（NSIS 里用 $\ 加引号字符转义）：动作值里有 cmd 层的

@@ -191,6 +191,13 @@ diag_daemon_reachable() { grep -q '"daemon_reachable":true' "$1/diag-export.json
 capture_daemon_log() { # capture_daemon_log <dir> <tag>
   local d="$1" tag="$2" log="$PD_DIR/logs/daemon.log"
   if [ -f "$log" ]; then tail -c 200000 "$log" >"$d/$tag-daemon.log" 2>/dev/null || true; fi
+  # #1817：安装器登记限时任务失败时会把 PowerShell 报错写到这个文件（静默安装看不到
+  # DetailPrint），收进证据目录，judge 与复盘才有原始报错可看。
+  local tasklog
+  tasklog="$(win_ps 'Write-Output (Join-Path $env:TEMP "ppass-update-recovery-task.log")' 2>/dev/null | tr -d '\r')"
+  if [ -n "$tasklog" ] && [ -f "$(cygpath -u "$tasklog" 2>/dev/null)" ]; then
+    cp "$(cygpath -u "$tasklog")" "$d/$tag-recovery-task.log" 2>/dev/null || true
+  fi
 }
 
 ensure_running() { # 恢复到「服务在运行 + wanted-state=running」的干净起点
