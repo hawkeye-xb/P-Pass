@@ -4461,11 +4461,18 @@ mod tests {
             .lines()
             .find(|l| l.contains("StrCpy $R7"))
             .expect("任务动作没有先查 wanted-state");
-        let action = action_line.replace("$\\'", "'").replace("$$", "$");
+        // 还原 NSIS 转义：`$\'` → `'`、`$\"` → `"`、`$$` → `$`。动作里的 `\$\"` 还原后是
+        // `\"`，正是穿过 `-Command "…"` 参数解析所需的形态；裸 `"` 一律视为错误。
+        let action = action_line
+            .replace("$\\'", "'")
+            .replace("$\\\"", "\"")
+            .replace("$$", "$");
         let read = action
             .find("Get-Content -LiteralPath")
             .expect("动作没有先读 wanted-state");
-        let stopped = action.find("-match \"stopped\"").expect("缺 stopped 判定");
+        let stopped = action
+            .find("-match \\\"stopped\\\"")
+            .expect("缺 stopped 判定");
         let stop_return = action.find("return").expect("stopped 分支没有 return");
         let catch = action.find("catch {").expect("读失败没有 catch 分支");
         let sc_start = action.find("& sc.exe start").expect("缺 sc.exe start");
@@ -4489,18 +4496,21 @@ mod tests {
             3,
             "动作里应有三处自删：stopped、读失败、真实 RUNNING 之后"
         );
-        let runn = action
-            .find("Select-String -Quiet \"RUNNING\"")
-            .expect("缺 RUNNING 判定");
-        // #1817 评审：`$LASTEXITCODE` 是 sc.exe 的退出码，服务存在但 STOPPED 时也是 0，
-        // 用它判断会让任务在第一轮就自删、重试形同不存在。必须用 Select-String 的结果。
-        assert!(
-            !action.contains("$LASTEXITCODE"),
-            "不许用 $LASTEXITCODE 判断 RUNNING（STOPPED 时也是 0）"
+        // #1817 评审：动作要穿过外层 `-Command "…"` 的 Windows 参数解析，动作里的双引号
+        // 必须写成 `\"`；裸引号会在那一层提前闭合参数，PowerShell 收到的脚本就断了。
+        assert_eq!(
+            action.matches('"').count(),
+            action.matches("\\\"").count(),
+            "动作里的双引号必须全部写成 \\\"（否则 -Command 参数提前闭合）"
         );
+        let runn = action
+            .find("Select-String -Quiet \\\"RUNNING\\\"")
+            .expect("缺 RUNNING 判定");
+        // #1817 评审：`$LASTEXITCODE` 是 sc.exe 的退出码，服务存在但 STOPPED 时也是 0。
+        // 它只能表示「查询成功」，不能拿来判断 RUNNING；删任务必须看 Select-String 的结果。
         let running_flag = action
-            .find("$running = (& sc.exe query")
-            .expect("RUNNING 判定没有赋给变量");
+            .find("$running = ($LASTEXITCODE -eq 0) -and")
+            .expect("RUNNING 判定没有把查询成功与匹配结果组合起来");
         let uses_flag = action
             .find("if ($running)")
             .expect("删任务没有用 RUNNING 判定结果");
@@ -4508,8 +4518,11 @@ mod tests {
             .rfind("Unregister-ScheduledTask")
             .expect("缺 RUNNING 后的自删");
         assert!(
-            sc_start < running_flag && running_flag < uses_flag && uses_flag < last_delete,
-            "只有真实 RUNNING 才删任务：sc start → 记录 RUNNING 判定 → if ($running) → 自删"
+            sc_start < running_flag
+                && running_flag < runn
+                && runn < uses_flag
+                && uses_flag < last_delete,
+            "只有真实 RUNNING 才删任务：sc start → 判定 RUNNING → if ($running) → 自删"
         );
     }
 
