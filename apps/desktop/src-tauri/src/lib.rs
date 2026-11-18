@@ -4340,6 +4340,7 @@ mod tests {
     ///     电池供电也允许恢复，绝不形成永久自启；
     ///   - SYSTEM 身份的动作要能读到 wanted-state：目录白名单不许动（daemon 会核对），
     ///     只给这一个文件补 SYSTEM 只读。
+    ///
     /// 反证：删掉 try/catch 或读取失败 return、去掉任一时限/电池放行、把注册挪到 stopped
     /// 核对之前，本测试红。
     #[test]
