@@ -5,12 +5,14 @@ import XCTest
 
 final class PickedImportTests: XCTestCase {
     /// #1840（产品口径 2026-11-17）：单次入口只允许图片与视频，不允许文件夹。
-    /// 视频被选中后走哪条链路由 `testPhotoPickerPayloadAcceptsVideo` 覆盖，这里钉住选择器本身不把视频挡在外面。
-    /// 反证：把 `PhotoPickerSheet.configuration()` 的 filter 改回 `.images`，本条红。
+    /// 视频被选中后走哪条链路由 `testPhotoPickerPayloadAcceptsVideo` 覆盖，这里钉住两件事：
+    /// 选择器真的用 `mediaFilter`（不是另写一份），且 `mediaFilter` 既不是只图片也不是只视频。
+    /// 反证：`configuration()` 的 filter 改回 `.images` → 第一条红；`mediaFilter` 改成 `.images` → 后两条红。
     func testPickerDoesNotLimitSelectionToImages() {
         let config = PhotoPickerSheet.configuration()
-        XCTAssertNotEqual(config.filter, .images, "只选图片会把视频挡在外面")
-        XCTAssertNotEqual(config.filter, .videos, "只选视频会把图片挡在外面")
+        XCTAssertEqual(config.filter, PhotoPickerSheet.mediaFilter, "选择器必须用 App 定义的那一份过滤条件")
+        XCTAssertNotEqual(PhotoPickerSheet.mediaFilter, .images, "只选图片会把视频挡在外面")
+        XCTAssertNotEqual(PhotoPickerSheet.mediaFilter, .videos, "只选视频会把图片挡在外面")
     }
 
     func testPhotoPickerPayloadAcceptsVideo() throws {
