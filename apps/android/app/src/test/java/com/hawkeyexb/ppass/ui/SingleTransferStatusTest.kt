@@ -130,10 +130,13 @@ class SingleTransferStatusTest {
         )
         assertEquals(5, Regex("PickedUploads\\.store\\(context\\)\\.summary\\(\\)").findAll(main).count())
         val store = File("src/main/java/com/hawkeyexb/ppass/backup/picked/PickedStore.kt").readText()
+        // 评审：按语句边界切出 summary() 的实现段整体断言——之前的负向正则 [^"'] 跨不过 SQL 里的
+        // 'pending' 这类引号，永远匹配不上，反证防线失效；这里改回单批口径（SQL 加 WHERE）必红。
+        val summarySql = store.substringAfter("override fun summary()", "").substringBefore("override fun clearSettled()")
+        assertTrue("summary() 实现必须存在（含 FROM picked 的全表查询）", summarySql.contains("FROM picked"))
         assertTrue(
             "summary() 必须是全表聚合，不许再按 MAX(batch_id) 过滤（改回去本条红）",
-            store.contains("SELECT COUNT(*), SUM(state IN ('pending','transferring')), SUM(state = 'delivered'),\" +\n                \" SUM(state = 'already_there'), SUM(state = 'failed') FROM picked\"") &&
-                !Regex("SELECT COUNT\\(\\*\\)[^\"']*FROM picked\"\\s*\\+\\s*\"\\s*WHERE batch_id").containsMatchIn(store),
+            !summarySql.contains("WHERE"),
         )
     }
 
