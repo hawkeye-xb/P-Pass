@@ -4433,42 +4433,29 @@ mod tests {
 
         // 任务登记（PowerShell）本体的参数与界限。NSIS 里 $\' 是字面单引号、$$ 是字面
         // $：先按 NSIS 转义规则还原出 PowerShell 真正收到的命令再断言。
-        let ps_line = hooks
-            .lines()
-            .find(|l| l.contains("Register-ScheduledTask"))
-            .expect("没有用 Register-ScheduledTask 登记限时恢复任务");
-        let ps = ps_line.replace("$\\'", "'").replace("$$", "$");
+        // 改为 Windows 原生做法：动作脚本写 .ps1、任务定义写 XML、schtasks /Create /XML。
+        // 旧做法把整条 PowerShell 命令塞进 -Command，真机上表现为「退出码 0 但任务没建出来」。
+        let ps = hooks.to_string();
         for needle in [
-            "-Once -At $start", // 1 分钟首触发（$start = now + 1min）
-            "-RepetitionInterval (New-TimeSpan -Minutes 1)", // 每 1 分钟重试
-            "-ExecutionTimeLimit (New-TimeSpan -Minutes 2)",
-            "-MultipleInstances 'IgnoreNew'",
-            "-DeleteExpiredTaskAfter (New-TimeSpan -Minutes 1)", // 耗尽任务自删
-            "-StartWhenAvailable",
-            "-AllowStartIfOnBatteries",
-            "-DontStopIfGoingOnBatteries",
-            "-EncodedCommand",
-            "-UserId 'SYSTEM'",
-            "-LogonType 'ServiceAccount'",
-            "-RunLevel 'Highest'",
-            "-TaskName '${PPASS_RECOVERY_TASK}'",
-            // 登记失败必须非零退出（cmdlet 默认的非终止错误会让 powershell 退出 0、
-            // 误写 service=1），反证：去掉 -ErrorAction Stop，本测试红。
-            "-ErrorAction Stop",
+            "<StartBoundary>$R1</StartBoundary>",
+            "<EndBoundary>$R2</EndBoundary>",
+            "<Repetition><Interval>PT1M</Interval>",
+            "<UserId>S-1-5-18</UserId>",
+            "<RunLevel>HighestAvailable</RunLevel>",
+            "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+            "<StartWhenAvailable>true</StartWhenAvailable>",
+            "<ExecutionTimeLimit>PT2M</ExecutionTimeLimit>",
+            "<DeleteExpiredTaskAfter>PT1M</DeleteExpiredTaskAfter>",
+            "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>",
+            "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
+            "/Create /TN \"${PPASS_RECOVERY_TASK}\" /XML",
+            "$INSTDIR\\update-recovery.ps1",
         ] {
-            assert!(ps.contains(needle), "限时恢复任务缺 {needle}");
+            assert!(ps.contains(needle), "任务定义缺 {needle}");
         }
 
-        // DeleteExpiredTaskAfter 只在触发器有 EndBoundary 时才生效：不设它，任务永不过期、
-        // 也就不会自删，等于留了个永久计划任务。反证：删掉 EndBoundary 赋值，本测试红。
-        let boundary = ps
-            .find("$t.EndBoundary = $start.AddMinutes(10)")
-            .expect("触发器缺 EndBoundary（DeleteExpiredTaskAfter 不会生效）");
-        let register = ps.find("Register-ScheduledTask").expect("缺任务登记");
-        assert!(
-            ps.contains("-At $start") && boundary < register,
-            "首触发与 EndBoundary 必须同一基准，且 EndBoundary 在登记之前设置"
-        );
+        // DeleteExpiredTaskAfter 只在触发器有 EndBoundary 时才生效：XML 里必须有它，
+        // 否则任务永不过期、不会自删，等于留了个永久计划任务。上面 needle 已覆盖。
 
         // 任务动作（PowerShell）：先读 wanted-state；命中 stopped ⇒ 自删 + return；
         // 读失败（catch）也自删 + return。两条都必须排在 sc.exe start 之前——用户停过
@@ -4486,9 +4473,7 @@ mod tests {
         let read = action
             .find("Get-Content -LiteralPath")
             .expect("动作没有先读 wanted-state");
-        let stopped = action
-            .find("-match \\\"stopped\\\"")
-            .expect("缺 stopped 判定");
+        let stopped = action.find("-match \"stopped\"").expect("缺 stopped 判定");
         let stop_return = action.find("return").expect("stopped 分支没有 return");
         let catch = action.find("catch {").expect("读失败没有 catch 分支");
         let sc_start = action.find("& sc.exe start").expect("缺 sc.exe start");
@@ -4512,15 +4497,9 @@ mod tests {
             3,
             "动作里应有三处自删：stopped、读失败、真实 RUNNING 之后"
         );
-        // #1817 评审：动作要穿过外层 `-Command "…"` 的 Windows 参数解析，动作里的双引号
-        // 必须写成 `\"`；裸引号会在那一层提前闭合参数，PowerShell 收到的脚本就断了。
-        assert_eq!(
-            action.matches('"').count(),
-            action.matches("\\\"").count(),
-            "动作里的双引号必须全部写成 \\\"（否则 -Command 参数提前闭合）"
-        );
+        // 动作现在是写进 .ps1 文件再执行的，不再穿过 `-Command "…"`，所以引号保持原样。
         let runn = action
-            .find("Select-String -Quiet \\\"RUNNING\\\"")
+            .find("Select-String -Quiet \"RUNNING\"")
             .expect("缺 RUNNING 判定");
         // #1817 评审：`$LASTEXITCODE` 是 sc.exe 的退出码，服务存在但 STOPPED 时也是 0。
         // 它只能表示「查询成功」，不能拿来判断 RUNNING；删任务必须看 Select-String 的结果。

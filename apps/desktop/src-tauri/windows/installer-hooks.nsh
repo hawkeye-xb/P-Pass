@@ -303,35 +303,45 @@ Var PPassDataDir
 ;      服务存在、状态 STOPPED 时同样是 0。起不来就让下一轮再试，10 分钟后任务过期自删。
 Function PPassRegisterUpdateRecoveryTask
   StrCpy $R0 1
-  ; 每次进函数先清掉上一次的失败日志，免得把旧报错当成这次的。
   Delete "$TEMP\ppass-update-recovery-task.log"
-  ; 动作里不出现任何路径：wanted-state 由动作自己从 $env:ProgramData 取（见下），
-  ; 与 PPassResolveDataDir 和 daemon 的 service_root 读同一个变量。
-  ; PS 层的字符串一律用单引号（NSIS 里用 $\ 加引号字符转义）：动作值里有 cmd 层的
-  ; 双引号，放进 PS 双引号串还得再转义一层；单引号串里双引号是字面量，只此一层。
-  ; PS 的 $ 变量在 NSIS 里写成 $$，不让 NSIS 当成自己的变量展开。
-  ; 动作用 PowerShell try/catch：读不到 wanted-state（含文件不存在/权限错误）也立即
-  ; 自删并 return，绝不进入 sc start；不用命令行工具的错误码区分“没停过”和“读失败”。
-  ; 动作里的双引号必须写成 \$\"（生成 `\"`）：它要穿过外层 `-Command "…"` 的 Windows
-  ; 参数解析，裸双引号会在那里提前闭合参数，PowerShell 收到的脚本就断了（编码发生在之后）。
-  ; 断言会拒绝任何未转义的引号。
-  ; wanted-state 的路径不能在 NSIS 里拼进动作文本：`$code = '…'` 是 PowerShell 单引号串，
-  ; 路径里一旦有 `'`（例如 D:\Program'Data）就会提前闭合。改为在动作里用环境变量
-  ; $env:ProgramData 现取——安装器与 daemon 的 service_root 读的也是这个变量，
-  ; 重定向后三处仍然一致；动作文本里不再出现任何路径字符。
-  StrCpy $R7 'try { $$wanted = Get-Content -LiteralPath ($$env:ProgramData + \$\"\P-Pass\wanted-state\$\") -Raw -ErrorAction Stop; if ($$wanted -match \$\"stopped\$\") { Unregister-ScheduledTask -TaskName \$\"${PPASS_RECOVERY_TASK}\$\" -Confirm:$$false -ErrorAction Stop; return } } catch { Unregister-ScheduledTask -TaskName \$\"${PPASS_RECOVERY_TASK}\$\" -Confirm:$$false; return }; & sc.exe start ${PPASS_SERVICE}; $$q = (& sc.exe query ${PPASS_SERVICE} 2>$$null); $$running = ($$LASTEXITCODE -eq 0) -and ($$q | Select-String -Quiet \$\"RUNNING\$\"); if ($$running) { Unregister-ScheduledTask -TaskName \$\"${PPASS_RECOVERY_TASK}\$\" -Confirm:$$false }'
-  ; 任务动作统一 UTF-16LE Base64 编码，避免 NSIS→PowerShell→cmd 三层引号改变语义。
-  ; -ErrorAction Stop：登记失败必须让 powershell 以非零退出，调用方才写得出 service=0。
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$code = $\'$R7$\'; $$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($$code)); $$arg = $\'-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $\' + $$encoded; $$start = (Get-Date).AddMinutes(1); $$t = New-ScheduledTaskTrigger -Once -At $$start -RepetitionInterval (New-TimeSpan -Minutes 1); $$t.EndBoundary = $$start.AddMinutes(10).ToString($\'s$\'); $$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances $\'IgnoreNew$\' -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 1); $$p = New-ScheduledTaskPrincipal -UserId $\'SYSTEM$\' -LogonType $\'ServiceAccount$\' -RunLevel $\'Highest$\'; $$a = New-ScheduledTaskAction -Execute $\'powershell.exe$\' -Argument $$arg; Register-ScheduledTask -TaskName $\'${PPASS_RECOVERY_TASK}$\' -Trigger $$t -Settings $$s -Principal $$p -Action $$a -Force -ErrorAction Stop"'
+  ; 原生做法：动作脚本写成 .ps1 文件、任务定义写成 XML、用 schtasks /Create /XML 注册。
+  ; 之前把整条 PowerShell 命令塞进 `-Command "…"`，要穿过 NSIS→Windows 命令行→PowerShell
+  ; 三层解析，真机上表现为「退出码 0 但什么都没建出来」。写文件没有这一层。
+  StrCpy $R7 'try { $$wanted = Get-Content -LiteralPath ($$env:ProgramData + "\P-Pass\wanted-state") -Raw -ErrorAction Stop; if ($$wanted -match "stopped") { Unregister-ScheduledTask -TaskName "${PPASS_RECOVERY_TASK}" -Confirm:$$false -ErrorAction Stop; return } } catch { Unregister-ScheduledTask -TaskName "${PPASS_RECOVERY_TASK}" -Confirm:$$false; return }; & sc.exe start ${PPASS_SERVICE}; $$q = (& sc.exe query ${PPASS_SERVICE} 2>$$null); $$running = ($$LASTEXITCODE -eq 0) -and ($$q | Select-String -Quiet "RUNNING"); if ($$running) { Unregister-ScheduledTask -TaskName "${PPASS_RECOVERY_TASK}" -Confirm:$$false }'
+  FileOpen $3 "$INSTDIR\update-recovery.ps1" w
+  FileWrite $3 "$R7$\r$\n"
+  FileClose $3
+  ; 触发时间与结束边界：都用 PowerShell 取本机时间，命令短、无嵌套引号。
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "(Get-Date).AddMinutes(1).ToString($\'s$\')"'
   Pop $0
   Pop $1
-  ; 无论成败都把注册命令的输出落盘：退出码 0 也可能什么都没做，只有输出能说明。
-  DetailPrint "update-recovery task registration exit=$0"
+  StrCpy $R1 $1 -2
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "(Get-Date).AddMinutes(11).ToString($\'s$\')"'
+  Pop $0
+  Pop $1
+  StrCpy $R2 $1 -2
+  FileOpen $3 "$TEMP\ppass-recovery-task.xml" w
+  FileWrite $3 '<?xml version="1.0" encoding="UTF-8"?>$\r$\n'
+  FileWrite $3 '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">$\r$\n'
+  FileWrite $3 '  <Triggers><TimeTrigger><StartBoundary>$R1</StartBoundary><EndBoundary>$R2</EndBoundary>$\r$\n'
+  FileWrite $3 '    <Repetition><Interval>PT1M</Interval></Repetition></TimeTrigger></Triggers>$\r$\n'
+  FileWrite $3 '  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>$\r$\n'
+  FileWrite $3 '  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>$\r$\n'
+  FileWrite $3 '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>$\r$\n'
+  FileWrite $3 '    <StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT2M</ExecutionTimeLimit>$\r$\n'
+  FileWrite $3 '    <DeleteExpiredTaskAfter>PT1M</DeleteExpiredTaskAfter></Settings>$\r$\n'
+  FileWrite $3 '  <Actions Context="Author"><Exec><Command>powershell.exe</Command>$\r$\n'
+  FileWrite $3 '    <Arguments>-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\update-recovery.ps1"</Arguments></Exec></Actions>$\r$\n'
+  FileWrite $3 '</Task>$\r$\n'
+  FileClose $3
+  nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /Create /TN "${PPASS_RECOVERY_TASK}" /XML "$TEMP\ppass-recovery-task.xml" /F'
+  Pop $0
+  Pop $1
   FileOpen $3 "$TEMP\ppass-update-recovery-task.log" w
-  FileWrite $3 "register_exit=$0$\r$\n"
+  FileWrite $3 "create_exit=$0$\r$\n"
   FileWrite $3 "$1$\r$\n"
   FileClose $3
-  ; 成功判据是「任务真的存在」，不是注册命令的退出码：退出码 0 也可能什么都没建出来。
+  ; 成功判据是「任务真的存在」，不是命令退出码。
   nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /Query /TN "${PPASS_RECOVERY_TASK}"'
   Pop $0
   Pop $1
