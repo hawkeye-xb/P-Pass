@@ -423,6 +423,12 @@
       pairRequests = synced.rows;
       if (synced.added.length > 0) {
         showPairModal = false;
+        // 弹窗同时只留一个：确认弹窗打开时把还开着的大图查看器关掉。两个遮罩
+        // 同 z-50，查看器后渲染仍盖在上面，被 inert 后用户看到的是一层点不动
+        // 的查看器，可操作的确认弹窗反而在底下（CodeRabbit）。两个 open 翻转
+        // 落在同一轮更新里：背景 inert 与焦点的交接由 dialog 组件按栈接管
+        //（谁标谁摘、焦点归最上层），这里不用关心顺序（#1132 独立评审阻断）。
+        photoViewer = null;
         showConfirmModal = true;
       }
       // DEV-03 + #1577：主列表要渲染「已配对」与「已断开」两组，而「已断开」的
@@ -1465,6 +1471,21 @@
     return groups.filter((g) => g.items.length > 0);
   });
 
+  // #1132 D6：缩略图与大图的可访问名。照片在库里没有名字，用「查看大图 +
+  // 拍摄时间 + 全墙序号」——序号保证同名分钟连拍也各不相同（审计发现 40
+  // 个按钮都叫"查看大图"）。hash → 序号只建一次，渲染不再 O(n²)。
+  const photoIndex = $derived(new Map(photos.map((p, i) => [p.hash, i + 1])));
+  function photoName(item) {
+    if (!item) return "";
+    const n = photoIndex.get(item.hash);
+    const at = typeof item.taken_at === "number" && item.taken_at > 0 ? exactTime(item.taken_at * 1000) : null;
+    return (
+      t("ui.photo_view_large") +
+      (at ? ` · ${at}` : "") +
+      (n ? ` · ${n}` : "")
+    );
+  }
+
   // 大图：原图内存展示（asset.original）；>12MiB/视频/失败 → 1024 缩略图
   // 降级。关闭即清引用——「不长期落盘」由不写任何临时文件天然满足。
   // MOB-47: 视频资产不走 base64（会把整段视频拉进内存），改走 asset
@@ -1602,7 +1623,7 @@
        DESK-36 (#456)：用户自己点了停止（user_stopped）不算中途退出——
        留在主界面给「启动服务」，判定见 serviceGate.js。 -->
   <div class="titlebar-drag-region wizard-titlebar-drag-region" aria-hidden="true"></div>
-  <main class="wizard-shell">
+  <main class="wizard-shell" tabindex="-1">
     <header>
       <h1>P-Pass</h1>
     </header>
@@ -1641,12 +1662,17 @@
       </nav>
       <!-- 顶部徽章只表示服务状态（UX-04），落位侧栏底部胶囊；<1080px
            收起态缩成纯色点（设计稿：服务状态缩成底部绿点）。 -->
-      <!-- 有阻断时胶囊说的是阻断本身、用它的含义色（红 = 要用户动手，琥珀 = 等待，中性 = 用户自己停的）；绿色只在一切正常时出现。 -->
+      <!-- 有阻断时胶囊说的是阻断本身、用它的含义色（红 = 要用户动手，琥珀 = 等待，中性 = 用户自己停的）；绿色只在一切正常时出现。
+           #1132 D8：收起态（<1080px）文字 display:none，只剩一个圆点，title 挂在
+           不可聚焦的 div 上谁也读不到——给它 role="status" 与 aria-label，读屏与
+           状态变化播报都有名称；展开态 aria-label 与可见文字同源（serviceStateLabelKey）。 -->
       <div
         class="service-pill"
         class:ok={!blocker}
         class:bad={blocker?.tone === "act"}
         class:wait={blocker?.tone === "waiting"}
+        role="status"
+        aria-label={t(blocker ? blocker.pillKey : serviceStateLabelKey(serviceState))}
         title={t(blocker ? blocker.pillKey : serviceStateLabelKey(serviceState))}
         data-testid="service-pill"
       >
@@ -1655,7 +1681,12 @@
       </div>
     </aside>
 
-    <main class="content" data-page={page}>
+    <!-- tabindex=-1：弹窗触发元素被移除（关掉后焦点回不来）时，Dialog 组件把
+         焦点兜底到这里——可编程聚焦、不进 Tab 序，向导壳同理。 -->
+    <main class="content" data-page={page} tabindex="-1">
+      <!-- #1132 D11：主界面缺 h1（axe `page-has-heading-one`）；不放可见大标题，
+           视觉由各页的 h2 页题承担，这里补一个读屏可见的 sr-only h1。 -->
+      <h1 class="sr-only">P-Pass</h1>
 
       {#if updateFailure}
         <!-- #1063：安装器写下的「上次更新失败」标记。旧版本继续可用；服务已由
@@ -1853,7 +1884,7 @@
                        this one data call failed. Say it here, never turn the
                        service badge red for it. -->
                   <p class="m-0 mb-[10px] text-[13px] leading-[1.6] text-act" data-testid="devices-error">
-                    {devicesError.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(devicesError)}</span>
+                    {devicesError.text}<span class="mt-[2px] block text-[12px]">{errCodeLine(devicesError)}</span>
                   </p>
                 {/if}
                 {#if pairedCount === 0}
@@ -1949,7 +1980,7 @@
           <Card size="flush" class="min-h-0 flex-1 overflow-y-auto">
             {#if devicesError}
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-act" data-testid="devices-error">
-                {devicesError.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(devicesError)}</span>
+                {devicesError.text}<span class="mt-[2px] block text-[12px]">{errCodeLine(devicesError)}</span>
               </p>
             {/if}
             {#if devices.length === 0}
@@ -1975,16 +2006,25 @@
                   <ul>
                     {#each group.items as d}
                       {@const row = deviceRow(d, nowMs)}
-                    <li class="flex items-center gap-[14px] border-b border-divider px-[22px] py-[18px] last:border-b-0">
+                    <!-- #1132 D9：固定宽度的列在窄窗 / 200% 缩放下会把按钮裁出
+                         可视区、名称与 ID 重叠——允许换行（flex-wrap），装不下
+                         的列落到下一行，任何宽度都不裁切（1.4.10 重排）。 -->
+                    <li class="flex flex-wrap items-center gap-x-[14px] gap-y-[6px] border-b border-divider px-[22px] py-[18px] last:border-b-0">
                       <!-- T-091: 哨兵行 ACT 色 + 「需要看看」；T-092: 连接态点色
                            （direct=safe 绿，relay=wait 琥珀）——语义色仅此四种 -->
                       <span class="h-[9px] w-[9px] flex-none rounded-full {DOT_BG[row.dot]}"></span>
                       <span class="flex flex-1 flex-col items-start gap-[2px] min-w-0">
                         {#if renameTarget?.nodeId === d.node_id}
                           <!-- NAME-01: 改名输入框——回车保存 / Esc 取消 /
-                               失焦保存（空名与未改动不提交）。 -->
+                               失焦保存（空名与未改动不提交）。
+                               #1132 D2：给输入框可访问名称（axe `label`
+                               critical 的根因）；去掉原来吞掉焦点的
+                               outline 类，让全局 :focus-visible 墨色轮廓
+                               露出来——此前焦点只靠换边框色，看不见
+                               （审计原发现）。 -->
                           <input
-                            class="max-w-[260px] flex-none self-start rounded-sm border-[1.5px] border-border-strong bg-paper px-[6px] py-[2px] font-sans text-[16px] font-semibold text-ink focus:border-safe focus:outline-none"
+                            aria-label={t("ui.rename")}
+                            class="max-w-[260px] flex-none self-start rounded-sm border-[1.5px] border-border-strong bg-paper px-[6px] py-[2px] font-sans text-[16px] font-semibold text-ink focus:border-safe"
                             value={renameValue}
                             oninput={(e) => (renameValue = e.currentTarget.value)}
                             onkeydown={(e) => {
@@ -2038,9 +2078,12 @@
                         title={t("ui.device_open_folder")}
                         onclick={() => openDeviceFolder(d.node_id)}
                       ><FolderOpenIcon size={16} /></Button>
+                      <!-- #1132 D10：整列按钮都叫「移除」，读屏无法分辨移除哪台
+                           ——可访问名带上设备名（可见文案不变）。 -->
                       <Button
                         variant="link"
                         class="h-auto min-h-0 rounded-sm border-0 border-none px-[4px] py-[8px] text-[14px] font-semibold text-act no-underline hover:bg-act-bg hover:underline hover:underline-offset-[3px]"
+                        aria-label={`${t("ui.remove")} ${displayName(d)}`}
                         onclick={() => revoke(d.node_id, d.name)}
                       >{t("ui.remove")}</Button>
                     </li>
@@ -2101,13 +2144,15 @@
               <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.photos_loading")}</p>
             {:else}
               {#each photoGroups as g (g.key)}
-                <h4 class="mt-[14px] mb-[8px] text-[13px] font-semibold text-ink-60 first:mt-0">{g.label}</h4>
+                <!-- #1132 D11：分组标题 h4 → h3（页面里是 h2 → h4 跳级）。 -->
+                <h3 class="mt-[14px] mb-[8px] text-[13px] font-semibold text-ink-60 first:mt-0">{g.label}</h3>
                 <div class="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-[6px]">
                   {#each g.items as item (item.hash)}
+                    <!-- #1132 D6：可访问名带拍摄时间与序号，不再 40 个都叫「查看大图」。 -->
                     <button
                       class="relative aspect-square cursor-zoom-in overflow-hidden rounded-sm border-0 border-none bg-border p-0 hover:outline-2 hover:outline-ink hover:outline-offset-2"
                       onclick={() => (photoViewer = item)}
-                      aria-label={t("ui.photo_view_large")}
+                      aria-label={photoName(item)}
                     >
                       <PhotoThumb hash={item.hash} serviceEpoch={thumbServiceEpoch} />
                       {#if item.media_type === "video"}
@@ -2139,14 +2184,17 @@
           </div>
           <!-- AUDIT-01: 活动记录页展示审计事件流 v2——配对请求/允许/拒绝、
                设备吊销/断开/改名、外部删除、Flow 用户操作与终态，全部带
-               时间倒序。ingest.* 逐文件行过滤不展示（全路径噪音）。 -->
-          <Card size="flush" class="min-h-0 flex-1 overflow-y-auto text-[16px]">
+               时间倒序。ingest.* 逐文件行过滤不展示（全路径噪音）。
+               #1132 D3：这一卡是滚动区但行本身都不可聚焦——键盘无法滚动
+               （axe `scrollable-region-focusable`）；滚动容器自己可聚焦
+               （tabindex=0）并给 region 名称，别页的滚动卡里有按钮，不缺。 -->
+          <Card size="flush" class="min-h-0 flex-1 overflow-y-auto text-[16px]" role="region" aria-label={t("ui.nav_log")} tabindex="0">
             {#if auditError}
               <!-- AUDIT-07（#499）：audit.list 失败必须说出来。原先失败被静默
                    吞掉，这一页只是变空——和「确实还没有任何记录」长得一模一样，
                    用户会以为备份从没发生过。 -->
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-act" data-testid="audit-error"
-                >{auditError.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(auditError)}</span></p
+                >{auditError.text}<span class="mt-[2px] block text-[12px]">{errCodeLine(auditError)}</span></p
               >
             {:else if visibleAudit.length === 0}
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.log_empty")}</p>
@@ -2203,7 +2251,14 @@
                   <span>{t("ui.disk_space")}</span>
                   <span class="text-[14px] font-normal text-ink-40">{t("ui.disk_free_of_total", { free: diskFree, total: diskTotal })}</span>
                 </div>
-                <div class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"><div class="h-full rounded-full bg-ink" style="width:{diskPct}%"></div></div>
+                <div
+                  class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"
+                  role="progressbar"
+                  aria-label={t("ui.disk_space")}
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow={diskPct}
+                ><div class="h-full rounded-full bg-ink" style="width:{diskPct}%"></div></div>
               {/if}
               {#if status?.relocate_leftover}
                 <!-- F6：原位置删不掉的残留，显示到用户删掉为止（daemon 每次 status 核一次目录还在不在）。 -->
@@ -2237,9 +2292,13 @@
                   </Button>
                 </div>
                 <!-- UPD-06 (#616)：状态机的显式状态行——过程可见、失败可重试，
-                     不再只靠一闪而过的 toast（旧实现连按钮都不禁用）。 -->
-                {#if updatePhase !== "idle"}
-                  <div class="border-b border-divider px-[22px] py-[14px] text-[13px] leading-[1.6] text-ink-40">
+                     不再只靠一闪而过的 toast（旧实现连按钮都不禁用）。
+                     #1132 D4：状态行用 role="status"（隐式 aria-live=polite）
+                     播报变化；失败用 role="alert"；进度条补 progressbar 语义。
+                     区域常驻（ARIA22：live region 要先挂载、后写内容——点「检查
+                     更新」时区域和首条消息同时插入，读屏可能不播报首条）；
+                     空闲时内容为空、不带边框与内边距，零高度不占版面。 -->
+                <div role="status" data-testid="update-status" class={updatePhase === "idle" ? "text-[13px] leading-[1.6] text-ink-40" : "border-b border-divider px-[22px] py-[14px] text-[13px] leading-[1.6] text-ink-40"}>
                     {#if updatePhase === "checking"}
                       <span>{t("ui.update_checking")}</span>
                     {:else if updatePhase === "up-to-date"}
@@ -2249,7 +2308,14 @@
                     {:else if updatePhase === "downloading"}
                       <span>{t("ui.update_downloading")}{updateProgress === null ? "" : ` ${updateProgress}%`}</span>
                       {#if updateProgress !== null}
-                        <div class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline">
+                        <div
+                          class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"
+                          role="progressbar"
+                          aria-label={t("ui.update_downloading")}
+                          aria-valuemin="0"
+                          aria-valuemax="100"
+                          aria-valuenow={updateProgress}
+                        >
                           <div class="h-full rounded-full bg-ink" style="width:{updateProgress}%"></div>
                         </div>
                       {/if}
@@ -2258,13 +2324,12 @@
                     {:else if updatePhase === "installed" || updatePhase === "relaunching"}
                       <span>{t("ui.update_installed_state")}</span>
                     {:else if updatePhase === "failed"}
-                      <span class="text-act">{updateError?.text}{#if updateError}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(updateError)}</span>{/if}</span>
+                      <span role="alert" class="text-act">{updateError?.text}{#if updateError}<span class="mt-[2px] block text-[12px]">{errCodeLine(updateError)}</span>{/if}</span>
                       <Button variant="secondary" class="ml-[10px]" onclick={() => checkForUpdate(true)}>
                         {t("ui.update_retry")}
                       </Button>
                     {/if}
                   </div>
-                {/if}
                 <!-- UPD-06 (#616)：**壳旧** ⇒ 换壳。磁盘上已经是新版、运行中的壳还是旧的
                      ——这一行是「更新装完没换壳」的唯一出路（旧实现这里给的是方向相反的
                      「重启后台服务」，按了永远不收敛）。 -->
@@ -2324,8 +2389,9 @@
         </section>
       {/if}
     </main>
-    <!-- T4 (H-10b): 配对状态机模态——二维码弹窗 + 允许/拒绝弹窗。 -->
-    <Dialog open={showPairModal} onClose={closePairModal}>
+    <!-- T4 (H-10b): 配对状态机模态——二维码弹窗 + 允许/拒绝弹窗。
+         #1132 D1：弹窗要读得出名称（axe `aria-dialog-name`）。 -->
+    <Dialog open={showPairModal} onClose={closePairModal} ariaLabel={t("ui.pair_qr_title")}>
       <!-- 设计稿 v2：弹窗标题「配对二维码 · 放大版」——亮码用途一目了然 -->
       <h3>{t("ui.pair_qr_title")}</h3>
       {#if qrDataUrl && qrState === "expired"}
@@ -2377,7 +2443,12 @@
     <!-- UX-08: 待确认加入列表。一块 = 一次申请（lib/pairRequests.js）。关掉（Esc / 右上角 /
          点遮罩）只是收起，不等于拒绝：请求留在首页「待处理」，可以再打开。
          样式参照 macOS 提示框：单台时内容直接放在弹窗里，不套卡片；多台用分隔线分开。 -->
-    <Dialog open={showConfirmModal && pairRequests.length > 0} onClose={closeConfirmModal} closeLabel={t("ui.close")}>
+    <Dialog
+      open={showConfirmModal && pairRequests.length > 0}
+      onClose={closeConfirmModal}
+      closeLabel={t("ui.close")}
+      ariaLabel={pendingDialogText(pairRequests.map((r) => r.item)).title}
+    >
       <!-- DEV-04: 老设备重连 ≠ 陌生设备加入。判据是 node_id（daemon 查设备档案，档案永不
            删除），所以改过名的设备照样认得出来，且用桌面上那个名字称呼它。措辞在 lib/pending.js。 -->
       {@const many = pairRequests.length > 1}
@@ -2396,7 +2467,7 @@
             {#if many}<p class="pending-name">{item.name}</p>{/if}
             {#if sub}<p class="pending-meta">{sub}</p>{/if}
             {#if req.phase === "failed"}
-              <p class="pending-error" role="alert">{t("ui.err_pair_code_wrong")}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(errMessage("ui.err_pair_code_wrong"))}</span></p>
+              <p class="pending-error" role="alert">{t("ui.err_pair_code_wrong")}<span class="mt-[2px] block text-[12px]">{errCodeLine(errMessage("ui.err_pair_code_wrong"))}</span></p>
               <div class="pending-actions" data-testid="pending-actions">
                 <Button onclick={() => showQrAgain(req.id)}>{t("ui.pair_show_qr_again")}</Button>
               </div>
@@ -2438,7 +2509,12 @@
     </Dialog>
     <!-- DESK-03: 大图查看——原图内存展示（不落盘），关闭即弃；
          「在 Finder 中显示」揭示 originals 里的原文件。 -->
-    <Dialog open={!!photoViewer} onClose={() => (photoViewer = null)} class="w-[min(88vw,880px)]">
+    <Dialog
+      open={!!photoViewer}
+      onClose={() => (photoViewer = null)}
+      class="w-[min(88vw,880px)]"
+      ariaLabel={photoName(photoViewer) || t("ui.photo_view_large")}
+    >
       <div class="photo-viewer-wrap">
             {#if viewerVideoSrc}
               <!-- MOB-47: 视频走原生 <video>（磁盘 streaming），平台默认控件
@@ -2460,7 +2536,7 @@
               <img
                 class="photo-viewer-img"
                 src={viewerSrc}
-                alt=""
+                alt={photoName(photoViewer)}
                 data-img-hash={photoViewer?.hash}
                 onerror={onViewerImgError}
               />
@@ -2736,8 +2812,9 @@
     right: 14px;
     bottom: 8px;
     font-size: 11px;
+    /* #1132 D7：去掉 0.8 透明度——11px 小字在纸底上只剩 3.58:1（1.4.3 要
+       4.5:1）；ink-40 不透明是 5.44:1。 */
     color: var(--pp-ink-40);
-    opacity: 0.8;
     user-select: none;
     display: flex;
     align-items: center;

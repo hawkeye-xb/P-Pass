@@ -85,16 +85,27 @@ export function createWizardFlow({
 
   async function chooseFolder() {
     // #1150：系统对话框由壳弹，选定的目录留在壳里；这里只拿到展示用的字符串。
-    const dir = await invoke("pick_library_dir", {
-      title: t("ui.wizard_choose_folder_title"),
-      fromDefault: true,
-    });
-    if (dir) set({ libraryDir: dir });
+    // #1132：失败要落到红条说原因（此前是 unhandled rejection，用户毫无反馈；
+    // 与 toStep2 / finishSetup 同一处理）。
+    try {
+      const dir = await invoke("pick_library_dir", {
+        title: t("ui.wizard_choose_folder_title"),
+        fromDefault: true,
+      });
+      // 成功同时清掉上一次失败落下的红条——不然重试成功后向导还挂着失败警告。
+      if (dir) set({ libraryDir: dir, error: "" });
+    } catch (e) {
+      set({ error: errMessage(e, "ui.wizard_save_failed") });
+    }
   }
 
   async function useDefault() {
-    await invoke("use_default_library_dir");
-    set({ libraryDir: defaultDir });
+    try {
+      await invoke("use_default_library_dir");
+      set({ libraryDir: defaultDir, error: "" });
+    } catch (e) {
+      set({ error: errMessage(e, "ui.wizard_save_failed") });
+    }
   }
 
   /** 第 1 → 2 步：只记住选择（目录在第 3 步「完成」时才写）。 */

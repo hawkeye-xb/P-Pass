@@ -27,6 +27,14 @@
   });
   Object.assign(view, flow.snapshot());
 
+  // #1132 D5：切步后焦点落进新步骤的标题（原来掉 BODY），当前步 aria-current；
+  // 与 Wizard.svelte 同一套处理（行为只有 wizardFlow 一份，DOM 归各自视图）。
+  let stepTitle = $state(null);
+  $effect(() => {
+    view.step;
+    stepTitle?.focus();
+  });
+
   // #1167：第 3 步「会申请什么」按常驻形态如实说——per-machine 安装是 Windows 系统服务，
   // 老的每用户安装是计划任务登录项。形态没问到（读失败）就不显示这一行：宁可不说，不说错。
   let hosting = $state(null);
@@ -38,21 +46,23 @@
 <div class="mt-4 flex flex-col gap-[22px] rounded-xl border border-border bg-paper px-8 py-7">
   <div class="flex gap-2">
     {#each stepBar(view.step) as s}
-      <span class="text-[13px] font-semibold {s.state === 'current' ? 'text-ink' : s.state === 'done' ? 'text-safe' : 'text-ink-40'}">
+      <span aria-current={s.state === "current" ? "step" : undefined}
+        class="text-[13px] font-semibold {s.state === 'current' ? 'text-ink' : s.state === 'done' ? 'text-safe' : 'text-ink-40'}">
         {s.n}. {s.label}
       </span>
     {/each}
   </div>
 
+  <!-- #1132 D4：错误要用 role="alert" 播报。 -->
   {#if view.error}
-    <p class="m-0 rounded-md bg-act-bg px-[14px] py-[10px] text-[15px] text-act">
-      {view.error.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(view.error)}</span>
+    <p role="alert" class="m-0 rounded-md bg-act-bg px-[14px] py-[10px] text-[15px] text-act">
+      {view.error.text}<span class="mt-[2px] block text-[12px]">{errCodeLine(view.error)}</span>
     </p>
   {/if}
 
   {#if view.step === 1}
     <div class="flex flex-col gap-4">
-      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_library_title")}</h2>
+      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_library_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_library_body_win")}</p>
       <div class="flex items-center gap-[10px]">
         <code class="flex-1 rounded-xl bg-linen px-4 py-[13px] font-mono text-[14px] text-ink-60 break-all">{view.libraryDir}</code>
@@ -73,7 +83,7 @@
     </div>
   {:else if view.step === 2}
     <div class="flex flex-col gap-4">
-      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_sleep_title")}</h2>
+      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_sleep_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_sleep_body")}</p>
       <!-- DAE-11 (#804)：不再「一键关闭自动睡眠」（要 UAC、永久改用户的电源设置、
            只设了插电）。改由 daemon 运行且插电时向系统声明别因空闲而睡——不用授权，
@@ -89,7 +99,7 @@
     </div>
   {:else if view.step === 3}
     <div class="flex flex-col gap-4">
-      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_service_title")}</h2>
+      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_service_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_service_body")}</p>
       <!-- B1：不再写「如果被拦」（拦截说明在官网下载页）；只剩「会申请什么」一行，形态没问到就整块不显示。 -->
       {#if hosting}
