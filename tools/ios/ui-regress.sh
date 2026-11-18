@@ -59,15 +59,19 @@ def first_start(lo):
     return None
 start = None
 base = []
+# 「快照拉不回来」（文件不在 / 读不出）和「快照存在但是空的」是两件事：前者退回按时间找，
+# 后者才说明开跑前设备上本来就没有日志（整份都算本例的）。混在一起会把上一例的通过行当成本例的（误放行）。
+baseline_read_ok = False
 if baseline_path:
     try:
         base = [l for l in open(baseline_path, encoding="utf-8", errors="replace").read().splitlines() if l.strip()]
+        baseline_read_ok = True
     except OSError:
-        base = []
+        baseline_read_ok = False
 boundary = None
-if baseline_path:
+if baseline_path and baseline_read_ok:
     if not base:
-        boundary = 0  # 开跑前设备上还没有日志：整份都是本例的
+        boundary = 0  # 快照在、但是空的：开跑前设备上还没有日志，整份都是本例的
     else:
         idx = next((k for k in range(len(lines) - 1, -1, -1) if lines[k] == base[-1]), None)
         if idx is not None: boundary = idx + 1

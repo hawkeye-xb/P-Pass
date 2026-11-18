@@ -231,10 +231,10 @@ final class FolderPickerDrive: XCTestCase {
         var granted = false
         let deadline = Date().addingTimeInterval(6)
         while Date() < deadline {
+            // 点完要确认框真的没了：坐标兜底没点中时框还在，这时按 Home 等于没授权。
             if let tapped = UIReg.tapAlertButton(SystemButton.photosFull, roots: [springboard, app]) {
                 UIReg.say("SYSTEM_ALERT photos tapped=\(tapped.label) (press-home)")
-                granted = true
-                break
+                if UIReg.alertGone(tapped, springboard: springboard, app: app) { granted = true; break }
             }
             sleep(1)
         }

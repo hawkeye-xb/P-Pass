@@ -25,6 +25,22 @@ enum UIReg {
         fflush(stdout)
     }
 
+    /// 点完之后那个弹窗是不是真没了（坐标兜底没点中时它还在）。弹窗可能挂在两棵树里，两边都查不到才算消失。
+    static func alertGone(_ tap: SystemAlertTap, springboard: XCUIApplication, app: XCUIApplication,
+                          timeout: TimeInterval = 3) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let stillUp = tap.alertIdentifier.isEmpty
+                ? (springboard.alerts.count > 0 || app.alerts.count > 0)
+                : (springboard.alerts.matching(identifier: tap.alertIdentifier).firstMatch.exists
+                    || app.alerts.matching(identifier: tap.alertIdentifier).firstMatch.exists)
+            if !stillUp { return true }
+            usleep(200_000)
+        }
+        say("PHOTO_ALERT_STILL_UP label=\(tap.alertLabel)")
+        return false
+    }
+
     /// 按按钮表点当前画面上系统弹窗的按钮（按 roots 顺序找 `alerts`）；返回点到的文字。
     /// 非 `UIRegressCase` 的驱动（FolderPickerDrive）也走这一份：按钮表、staged alert 里 label 出现两份、
     /// 点不了时按坐标点，这些细节只在这里维护一次。
@@ -275,18 +291,7 @@ class UIRegressCase: XCTestCase {
 
     /// 点完之后那个弹窗是不是真没了（坐标兜底没点中时它还在）。
     private func alertGone(_ tap: SystemAlertTap, timeout: TimeInterval = 3) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            // 弹窗可能挂在两棵树里，两棵都要查：只有两边都查不到才算消失。
-            let stillUp = tap.alertIdentifier.isEmpty
-                ? (springboard.alerts.count > 0 || app.alerts.count > 0)
-                : (springboard.alerts.matching(identifier: tap.alertIdentifier).firstMatch.exists
-                    || app.alerts.matching(identifier: tap.alertIdentifier).firstMatch.exists)
-            if !stillUp { return true }
-            usleep(200_000)
-        }
-        UIReg.say("PHOTO_ALERT_STILL_UP label=\(tap.alertLabel)")
-        return false
+        UIReg.alertGone(tap, springboard: springboard, app: app, timeout: timeout)
     }
 
     /// 等系统弹窗并点指定选项；超时把弹窗现状打出来再失败（不猜、不点别的）。
