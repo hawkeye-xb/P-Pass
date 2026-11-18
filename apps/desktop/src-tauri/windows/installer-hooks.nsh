@@ -14,6 +14,10 @@
 ${Using:StrFunc} StrStr
 
 !define PPASS_SERVICE "P-Pass"
+; #1817：安装失败后的一次性限时恢复任务（Task Scheduler）。名字必须与 SCM 服务名
+; （${PPASS_SERVICE}）不同：两套登记互不相干，复用一个名字会让 PREINSTALL/PREUNINSTALL
+; 的清理互相误删。
+!define PPASS_RECOVERY_TASK "P-PassUpdateRecovery"
 ; ProgramData 的位置在运行时读环境变量 %ProgramData%（缺省 C:\ProgramData），和 daemon 的
 ; `windows_programdata::service_root` 同一个口径。NSIS **没有** $PROGRAMDATA 常量：以前写成
 ; "$PROGRAMDATA\P-Pass" 时 makensis 只报 warning 6000 并把它当字面文字，安装器的 icacls 全部
@@ -127,6 +131,9 @@ Var PPassDataDir
   ppass_pre_wait_stopped_done:
   ; 旧版本（#957 计划任务）不做迁移，只清残留；失败无害。
   nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "${PPASS_SERVICE}" /F'
+  Pop $0
+  ; #1817：清掉上次失败留下的限时恢复任务（任务本身 10 分钟有界且会自删，这里是兜底）。
+  nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "${PPASS_RECOVERY_TASK}" /F'
   Pop $0
   nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM p-pass-desktop.exe'
   Pop $0
@@ -249,6 +256,9 @@ Var PPassDataDir
   Pop $0
   nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "${PPASS_SERVICE}" /F'
   Pop $0
+  ; #1817：限时恢复任务一并清掉。
+  nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "${PPASS_RECOVERY_TASK}" /F'
+  Pop $0
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "P-Pass Desktop"
   nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM p-pass-desktop.exe'
   Pop $0
@@ -263,12 +273,48 @@ Var PPassDataDir
 !macro NSIS_HOOK_POSTUNINSTALL
 !macroend
 
+; #1817（owner 技术定案 2026-11-17）：限时恢复任务 P-PassUpdateRecovery。
+;
+; 一次性 `sc start` 在 ppf-daemon.exe 还被占用时（杀软扫描、残留进程）必然失败，而
+; `sc failure … restart` 只覆盖崩溃、不覆盖 start 失败（#1817 实测：Event 7000 之后
+; 60 秒无 Event 7032）。所以失败恢复不在安装器里干等，交给 Windows 标准 Task
+; Scheduler 注册限时任务：
+;   - 触发：1 分钟首触发、每 1 分钟重试；RepetitionDuration=10 分钟有界；
+;   - 每次 ExecutionTimeLimit=2 分钟；MultipleInstances=IgnoreNew 防重叠；
+;   - DeleteExpiredTaskAfter=1 分钟：耗尽的任务连触发器一起过期后自删；
+;   - Principal：SYSTEM + RunLevel Highest（不需要任何用户登录着）。
+; 恢复没成（服务一直起不来）任务也在 10 分钟后随触发器过期、再由 DeleteExpiredTaskAfter
+; 删掉——不形成永久自启。
+;
+; 任务动作（cmd 单行）的顺序即安全：
+;   1. 先查 wanted-state——findstr 命中 stopped ⇒ 进括号组：先删任务、exit /b 0。
+;      `exit /b` 在非批处理上下文里退出整个 CMD.EXE（NSIS 手册之外的 Windows 文档
+;      口径），后面的 sc start 落不到 ⇒ 用户停过的机器绝不会在这里被拉起。千万不能
+;      写成 `findstr … || (…) & sc start …` 这种把拉起放进无条件尾巴的形状；
+;   2. 没停过 ⇒ sc start；sc query 里出现真实 RUNNING 才删任务（起不来就让下一轮
+;      再试，10 分钟后任务过期自删）。
+Function PPassRegisterUpdateRecoveryTask
+  ; 动作里的 ProgramData 路径在注册时展开（不写死 C:\，与 PPassResolveDataDir 同口径）。
+  ; PS 层的字符串一律用单引号（NSIS 里用 $\ 加引号字符转义）：动作值里有 cmd 层的
+  ; 双引号，放进 PS 双引号串还得再转义一层；单引号串里双引号是字面量，只此一层。
+  ; PS 的 $ 变量在 NSIS 里写成 $$，不让 NSIS 当成自己的变量展开。
+  ; 动作用 PowerShell try/catch：读不到 wanted-state（含文件不存在/权限错误）也立即
+  ; 自删并 return，绝不进入 sc start；不用 findstr 的错误码区分“没停过”和“读失败”。
+  StrCpy $R7 'try { $$wanted = Get-Content -LiteralPath "${PPASS_DATA}\wanted-state" -Raw -ErrorAction Stop; if ($$wanted -match "stopped") { Unregister-ScheduledTask -TaskName "${PPASS_RECOVERY_TASK}" -Confirm:$$false -ErrorAction Stop; return } } catch { Unregister-ScheduledTask -TaskName "${PPASS_RECOVERY_TASK}" -Confirm:$$false; return }; & sc.exe start ${PPASS_SERVICE}; & sc.exe query ${PPASS_SERVICE} | Select-String -Quiet "RUNNING"; if ($$LASTEXITCODE -eq 0) { Unregister-ScheduledTask -TaskName "${PPASS_RECOVERY_TASK}" -Confirm:$$false }'
+  ; 任务动作统一 UTF-16LE Base64 编码，避免 NSIS→PowerShell→cmd 三层引号改变语义。
+  ; -ErrorAction Stop：登记失败必须让 powershell 以非零退出，调用方才写得出 service=0。
+  nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$code = $\'$R7$\'; $$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($$code)); $$arg = $\'-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $\' + $$encoded; $$t = New-ScheduledTaskTrigger -Once -At ([DateTime]::Now.AddMinutes(1)) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Minutes 10); $$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances $\'IgnoreNew$\' -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 1); $$p = New-ScheduledTaskPrincipal -UserId $\'SYSTEM$\' -LogonType $\'ServiceAccount$\' -RunLevel $\'Highest$\'; $$a = New-ScheduledTaskAction -Execute $\'powershell.exe$\' -Argument $$arg; Register-ScheduledTask -TaskName $\'${PPASS_RECOVERY_TASK}$\' -Trigger $$t -Settings $$s -Principal $$p -Action $$a -Force -ErrorAction Stop"'
+  Pop $0
+FunctionEnd
+
 ; #1063：安装失败 / 文件没换成时共用的恢复路径。
 ;
 ;   1. 用户主动停过服务（wanted-state = stopped）⇒ 不恢复，保持停止；
-;      否则服务存在就起它，带退避重试直到真实 RUNNING（#1817）；
+;      否则服务存在就起它：一次 `sc start` + 约 5 秒 RUNNING 轮询（#1817 起
+;      安装器内不再长重试）；仍未 RUNNING 就登记限时恢复任务（见上）；
 ;   2. 写 `update-failed` 标记，下次 App 启动读它显示「上次更新失败」横幅；
-;      service=1 只在服务真实 RUNNING 时写，起不来如实写 service=0，不谎报恢复；
+;      service=1 只在服务真实 RUNNING 或限时恢复任务登记成功时写——后者只表示
+;      「已安排恢复」，壳按实际状态显示 pending，不谎报已恢复；登记失败如实写 0；
 ;   3. 静默安装（应用内更新）不弹窗，提示留给下次启动横幅。
 ;
 ; #1167：两个标记都**不**放 $LOCALAPPDATA——安装器是提权进程，换一个管理员来装，
@@ -301,35 +347,43 @@ Function UpdateFailureRecover
       ; 服务会永久失去崩溃自动重启（SCM 配置是持久的，不是本次进程的状态）。
       nsExec::ExecToLog '"$SYSDIR\sc.exe" failure "${PPASS_SERVICE}" reset= 86400 actions= restart/5000/restart/5000'
       Pop $0
-      ; #1817：一次性 sc start 在占用句柄未释放时必然失败且无人重试（sc failure 的 restart 只覆盖崩溃、
-      ; 不覆盖 start 失败）。改成退避重试 + sc query 轮询，覆盖「杀软/残留进程占用 ppf-daemon.exe」的
-      ; 释放窗口；只有真实 RUNNING 才写 service=1，启动仍失败就如实写 service=0。
-      StrCpy $R1 0
-      ppass_recover_retry:
-        nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${PPASS_SERVICE}"'
+      ; #1817（owner 技术定案 2026-11-17）：只做一次 sc start + 约 5 秒 RUNNING 轮询，
+      ; 不再在安装器里长退避重试——占用 ppf-daemon.exe 的句柄（杀软扫描、残留进程）
+      ; 什么时候释放未知，安装器内干等只会拖长安装；起不来交给限时恢复任务。
+      nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${PPASS_SERVICE}"'
+      Pop $0
+      ; 等它真的到 RUNNING（最多约 5 秒：10 × 500ms）
+      StrCpy $R2 0
+      ppass_recover_wait:
+        nsExec::ExecToStack '"$SYSDIR\sc.exe" query "${PPASS_SERVICE}"'
         Pop $0
-        ; 等它真的到 RUNNING（每次最多约 5 秒：10 × 500ms）
-        StrCpy $R2 0
-        ppass_recover_wait:
-          nsExec::ExecToStack '"$SYSDIR\sc.exe" query "${PPASS_SERVICE}"'
-          Pop $0
-          Pop $1
-          ${StrStr} $R7 "$1" "RUNNING"
-          ${If} $R7 != ""
-            StrCpy $R9 1
-            Goto ppass_recover_done
-          ${EndIf}
-          IntOp $R2 $R2 + 1
-          ${If} $R2 >= 10
-            Goto ppass_recover_wait_done
-          ${EndIf}
-          Sleep 500
-          Goto ppass_recover_wait
-        ppass_recover_wait_done:
-        IntOp $R1 $R1 + 1
-        ${If} $R1 < 12
-          Goto ppass_recover_retry
+        Pop $1
+        ${StrStr} $R7 "$1" "RUNNING"
+        ${If} $R7 != ""
+          StrCpy $R9 1
+          Goto ppass_recover_done
         ${EndIf}
+        IntOp $R2 $R2 + 1
+        ${If} $R2 >= 10
+          Goto ppass_recover_wait_done
+        ${EndIf}
+        Sleep 500
+        Goto ppass_recover_wait
+      ppass_recover_wait_done:
+      ; 还没 RUNNING（wanted-state 已核对不是 stopped）：登记限时恢复任务。
+      ; SYSTEM 身份的任务动作要能读到 wanted-state，而目录 DACL 只给服务 SID 与
+      ; Administrators（windows_programdata::ProgramDataDir::verify 的白名单，不许加
+      ; SYSTEM），所以只给这一个文件补 SYSTEM 只读——这个文件本来就授了交互用户读写，
+      ; 只读的 SYSTEM 是更窄的暴露面。登记失败 service 如实写 0，不谎报已安排。
+      ${If} $R9 != 1
+        nsExec::ExecToLog '"$SYSDIR\icacls.exe" "${PPASS_DATA}\wanted-state" /grant "*S-1-5-18:(R)"'
+        Pop $0
+        Call PPassRegisterUpdateRecoveryTask
+        Pop $0
+        ${If} $0 == 0
+          StrCpy $R9 1
+        ${EndIf}
+      ${EndIf}
       ppass_recover_done:
     ${EndIf}
   ${EndIf}
@@ -354,7 +408,9 @@ Function UpdateFailureRecover
   failed_dialog:
   ${IfNot} ${Silent}
     ${If} $R9 == 1
-      MessageBox MB_ICONEXCLAMATION|MB_OK "P-Pass update failed. The background service has been restored; reopen P-Pass to retry, or download the latest version from the website.$\r$\n$\r$\n更新失败，后台服务已恢复。请重新打开 P-Pass 重试，或从官网下载最新版本。"
+      ; service=1 也可能是「限时恢复任务已安排」而非此刻已在跑，所以说「将自动恢复」，
+      ; 不说「已恢复」；壳下次启动按真实状态显示 pending（owner 技术定案 2026-11-17）。
+      MessageBox MB_ICONEXCLAMATION|MB_OK "P-Pass update failed. The background service will be restored automatically; reopen P-Pass to retry, or download the latest version from the website.$\r$\n$\r$\n更新失败，后台服务将自动恢复。请重新打开 P-Pass 重试，或从官网下载最新版本。"
     ${Else}
       MessageBox MB_ICONEXCLAMATION|MB_OK "P-Pass update failed and the background service could not be restored; reopen P-Pass or start the P-Pass service manually to retry.$\r$\n$\r$\n更新失败，后台服务未能自动恢复。请重新打开 P-Pass 或手动启动 P-Pass 服务后重试。"
     ${EndIf}

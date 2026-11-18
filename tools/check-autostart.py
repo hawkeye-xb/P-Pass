@@ -12,7 +12,7 @@ tools/autostart-registry.txt 里登记：
 
 只能证明「有人登记过、符号还在」，证明不了守卫语义——语义靠登记时的 review 和 contract 测试。
 扫描目标：Android startForegroundService / WorkManager 入队与周期任务 / BOOT_COMPLETED / AlarmManager；
-macOS launchctl bootstrap|kickstart；Windows StartService / schtasks /Create|/Run；iOS BGTaskScheduler.submit；
+macOS launchctl bootstrap|kickstart；Windows StartService / schtasks /Create|/Run / Register-ScheduledTask；iOS BGTaskScheduler.submit；
 桌面 install_autostart / kickstart_shell_agent。自测：tools/test-check-autostart.sh。
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ PATTERNS = re.compile(
     r"startForegroundService\(|\bstartService\(|PeriodicWorkRequest|enqueueUnique(Periodic)?Work\(|"
     r"\bworkManager\.enqueue|\.enqueue\(\s*\w*[Rr]equest|AlarmManager|setRepeating|setExactAndAllowWhileIdle|"
     r"android\.intent\.action\.BOOT_COMPLETED|Intent\.ACTION_BOOT_COMPLETED|"
-    r"\[\s*\"(bootstrap|kickstart)\"|\bStartServiceW\(|schtasks[^\n]*/(Create|Run)\b|"
+    r"\[\s*\"(bootstrap|kickstart)\"|\bStartServiceW\(|schtasks[^\n]*/(Create|Run)\b|\bRegister-ScheduledTask\b|"
     r"BGTaskScheduler\.shared\.submit|SMAppService|\binstall_autostart\(|\bkickstart_shell_agent\("
 )
 EXT = (".kt", ".java", ".rs", ".swift", ".nsh", ".xml", ".plist")
