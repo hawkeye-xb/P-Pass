@@ -794,6 +794,12 @@ impl BlobsProvider {
         // before opening it: the in-memory `stored` map is empty after a
         // restart, and a surviving hash would make the next import of the same
         // content look like `AlreadyInStore` and fall back to a full copy.
+        //
+        // A second live provider on the same root would be broken by this
+        // rename. Each phone runs one provider in one process (a second one on
+        // the same root already blocks on the store's exclusive open, MOB-91),
+        // and the adoption plan relies on that: multi-instance protection stays
+        // with the store, not with a new registry here.
         retire_provider_store(&root)?;
         let dispatch: Arc<Mutex<Option<StopAwareBlobsProtocol>>> = Arc::default();
         let allowed_peer: AllowedPeer = Arc::default();
@@ -826,13 +832,16 @@ impl BlobsProvider {
             }
             // #434: no endpoint yet — the first serve binds it.
             Ok::<_, TransportError>(store)
-        })?;
+        });
         // The new store is open; the retired directories (this run's included)
         // are unreachable now, so delete them all. Best-effort: a leftover
-        // directory is swept on the next start.
+        // directory is swept on the next start. Also on a failed open — the
+        // rename did not free any space, so a full disk would otherwise keep
+        // the provider from ever starting again.
         if let Some(parent) = root.parent() {
             sweep_retired_provider_stores(parent);
         }
+        let store = store?;
         Ok(Self {
             runtime,
             store,

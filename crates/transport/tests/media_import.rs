@@ -498,9 +498,13 @@ mod reference {
     /// new provider must retire that store and reference the same path again —
     /// never copy the file into the transfer cache.
     ///
-    /// Reverse-proof: without the start-up retirement the store still holds
-    /// the hash, the import falls into `AlreadyInStore`, and the fallback adds
-    /// a full `.data` payload (`again.by_reference == false`).
+    /// Reverse-proof, recorded as it actually behaves: without the start-up
+    /// retirement the old store stays in place and a second provider in the
+    /// same process cannot even open it (the first one still holds the
+    /// exclusive store, MOB-91), so this test hangs on the restart instead of
+    /// reaching `by_reference=false`. The copy red itself (`by_reference=false`
+    /// plus a full `.data` payload) is pinned by the unit test
+    /// `amnesia_without_a_live_reference_fails_without_a_copy`.
     ///
     /// The long GC interval is deliberate: the previous process's untagged
     /// blob must survive until the second provider starts, or periodic GC

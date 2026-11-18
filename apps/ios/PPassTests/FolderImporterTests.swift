@@ -64,7 +64,8 @@ final class FolderImporterTests: XCTestCase {
         XCTAssertTrue(present, "内容进了 provider store")
         XCTAssertEqual(hash.count, 64, "BLAKE3 hex")
         // provider 侧对引用导入记的是 External 路径（serve 时按它读源文件）；
-        // by_reference=false 且 fallback 非 small/already_in_store 的意外回退已在实现里抛错——这里锁大文件必走引用。
+        // by_reference=false 且 fallback 非 small/shared_reference 的意外回退已在实现里抛错
+        //（already_in_store 现在也在抛错之列）——这里锁大文件必走引用。
         let stillThere = try native.ffi.hasBlob(hash: hash)
         XCTAssertTrue(stillThere, "引用导入的内容在 store 里")
     }
