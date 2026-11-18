@@ -151,11 +151,34 @@ mod seatbelt {
         c
     }
 
+    /// 预检期限：仅调试构建可用 `PPF_PREFLIGHT_TIMEOUT_SECS` 注入（测试覆盖「超时」分支、
+    /// 以及给结论归类用例放宽时限），release 固定 5s。非法值（0 / 非数字）忽略。
+    #[cfg(debug_assertions)]
+    fn preflight_timeout() -> Duration {
+        if let Some(v) = std::env::var_os("PPF_PREFLIGHT_TIMEOUT_SECS") {
+            if let Ok(n) = v.to_string_lossy().parse::<u64>() {
+                if n > 0 {
+                    return Duration::from_secs(n);
+                }
+            }
+        }
+        Duration::from_secs(5)
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn preflight_timeout() -> Duration {
+        Duration::from_secs(5)
+    }
+
     /// 逐个 worker 预检：用生产策略、空 stdin 真跑一遍，证明「沙箱 + 这个 worker 加载得起来」。
-    /// 判据只区分「没跑起来」与「跑起来了」：被信号杀（dyld 缺库 / 被沙箱拦会 abort）、
-    /// sandbox-exec 自身报错（65 / 71）、sandbox-exec 缺失，都算没跑起来 → `Err`，调用方记为
-    /// 系统性失败（重试，不写 thumb_state=2，也绝不退成无隔离）；worker 自己以任何码退出、
-    /// 或超过 5s 仍在跑，都算起来了（解码对错是文件级失败）。只缓存成功：瞬时失败可重试。
+    /// 结论三态（docs/decisions/2026-11-18-sandbox-preflight-unknown-state.md）：
+    /// - `Ok(())`：worker 正常退出，证明能跑 → 进成功缓存，之后同 worker 不再预检；
+    ///   worker 自己以任何码退出都算（解码对错是文件级失败）；
+    /// - `Err`（`ErrorKind::TimedOut`）：期限内没等到退出（超时被杀）——**没有结论，不进缓存**，
+    ///   调用方重试；「太慢」不等于「被拒绝」（#1312：不许把未知折叠成成功）；
+    /// - `Err`（其它）：沙箱明确拒绝——被信号杀（dyld 缺库 / 被沙箱拦会 abort）、sandbox-exec
+    ///   自身报错（65 / 71）、sandbox-exec 缺失 → 本机系统性失败（重试，不写 thumb_state=2，
+    ///   也绝不退成无隔离）。
     fn preflight(exe: &Path, dir: &Path) -> io::Result<()> {
         use std::os::unix::process::ExitStatusExt as _;
         use std::process::Stdio;
@@ -180,7 +203,7 @@ mod seatbelt {
             if let Some(st) = child.try_wait()? {
                 break Some(st);
             }
-            if start.elapsed() > Duration::from_secs(5) {
+            if start.elapsed() > preflight_timeout() {
                 // SAFETY: 自己拉起、尚未回收的子进程组。
                 unsafe {
                     libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
@@ -190,13 +213,23 @@ mod seatbelt {
             }
             std::thread::sleep(Duration::from_millis(5));
         };
-        if let Some(st) = status {
-            if st.signal().is_some() || matches!(st.code(), Some(65 | 71)) {
-                return Err(io::Error::other(format!(
-                    "seatbelt preflight failed for {} ({st})",
-                    exe.display()
-                )));
-            }
+        let Some(st) = status else {
+            // 超时：没有拿到结论。「没证明能跑」就不能宣称能跑——不写成功缓存；
+            // 用 TimedOut 与「明确拒绝」区分，让调用方重试而不是判本机系统性失败。
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "seatbelt preflight timed out for {} after {:?}",
+                    exe.display(),
+                    preflight_timeout()
+                ),
+            ));
+        };
+        if st.signal().is_some() || matches!(st.code(), Some(65 | 71)) {
+            return Err(io::Error::other(format!(
+                "seatbelt preflight failed for {} ({st})",
+                exe.display()
+            )));
         }
         if let Ok(mut g) = OK.lock() {
             g.push(exe.to_path_buf());
