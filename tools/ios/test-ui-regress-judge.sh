@@ -42,6 +42,7 @@ expect PASS DecisionScopeFull "$T/ok.log" "$NOW" "本例进程的通过行"
 expect FAIL DecisionScopeFull "$T/ok.log" "$((NOW + 600))" "本例没有启动行"
 
 # 顺序反了 ⇒ FAIL（设置页挑照片：第一次 picked 在决定页、早于 marked onboarded，不能当设置页那次）。
+# #1840：设置页那次还得真登记进队列——只有 chosen 没有 registered 不算过。
 cat >"$T/order.log" <<EOF
 $(iso "$NOW") process start: pid=300 version=0.11.0(1) appState=active
 $(iso "$NOW") picked: 1 chosen
@@ -49,6 +50,8 @@ $(iso "$NOW") onboarding: marked onboarded via=pick
 EOF
 expect FAIL SettingsPick "$T/order.log" "$NOW" "决定页那次 picked 不算设置页的"
 printf '%s picked: 1 chosen\n' "$(iso "$NOW")" >>"$T/order.log"
+expect FAIL SettingsPick "$T/order.log" "$NOW" "选了但没登记上不算过"
+printf '%s picked: 1 registered\n' "$(iso "$NOW")" >>"$T/order.log"
 expect PASS SettingsPick "$T/order.log" "$NOW" "设置页再选一次"
 
 # 未知用例、日志拉不回 ⇒ FAIL。
