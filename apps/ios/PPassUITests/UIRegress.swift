@@ -238,6 +238,24 @@ class UIRegressCase: XCTestCase {
         tapButton(SystemButton.pickerAdd, what: "picker-add")
     }
 
+    /// #1840：选第一段视频并确认。选择器里连视频格子都看不到就是失败——这是「视频可选」的真机判据。
+    /// PHPicker 的视频格子 label 以「视频, 」开头（英文「Video, 」）。
+    func pickOneVideo() {
+        let pickerReady = Date().addingTimeInterval(30)
+        var cell: XCUIElement?
+        while Date() < pickerReady, cell == nil {
+            let found = app.images.matching(
+                NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@", "视频, ", "Video, ")
+            ).firstMatch
+            if found.exists { cell = found } else { usleep(500_000) }
+        }
+        guard let cell else { dump("picker"); XCTFail("30 秒内没在选择器里看到视频"); return }
+        UIReg.say("PICKER_SHOWN")
+        tapPickerCell(cell)
+        UIReg.say("PICKER_SELECTED 1")
+        tapButton(SystemButton.pickerAdd, what: "picker-add")
+    }
+
     /// 第 index 个可选格子（0 = 第一张）。限制访问那一页要选一张「还没被挑过」的，避免重复导入后 n=0。
     func pickerCell(at index: Int) -> XCUIElement? {
         let grid = app.images.matching(identifier: "PXGGridLayout-Info").element(boundBy: index)

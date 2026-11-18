@@ -117,6 +117,17 @@ final class RegressionTests: UIRegressCase {
         settle(5)
     }
 
+    /// #1840：单次入口能选到视频（产品口径 2026-11-17：只允许图片与视频）。
+    func testSettingsPickVideo() {
+        launchFreshAndPair(resetPhotos: false)
+        reachSettingsViaPick()
+        let row = app.buttons["pickPhotosRow"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "设置页没有「挑几张传」")
+        tapWhenVisible(row)
+        pickOneVideo()
+        settle(5)
+    }
+
     // MARK: 设置页「通知」开关触发系统授权（iOS 只问一次：两例之间宿主卸载重装）
 
     func testNotifyAllow() {

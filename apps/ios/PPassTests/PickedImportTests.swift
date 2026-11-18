@@ -4,6 +4,15 @@ import XCTest
 @testable import PPass
 
 final class PickedImportTests: XCTestCase {
+    /// #1840（产品口径 2026-11-17）：单次入口只允许图片与视频，不允许文件夹。
+    /// 视频被选中后走哪条链路由 `testPhotoPickerPayloadAcceptsVideo` 覆盖，这里钉住选择器本身不把视频挡在外面。
+    /// 反证：把 `PhotoPickerSheet.configuration()` 的 filter 改回 `.images`，本条红。
+    func testPickerDoesNotLimitSelectionToImages() {
+        let config = PhotoPickerSheet.configuration()
+        XCTAssertNotEqual(config.filter, .images, "只选图片会把视频挡在外面")
+        XCTAssertNotEqual(config.filter, .videos, "只选视频会把图片挡在外面")
+    }
+
     func testPhotoPickerPayloadAcceptsVideo() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

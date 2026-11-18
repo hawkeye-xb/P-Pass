@@ -795,8 +795,9 @@ fun PPassApp() {
     val launchDecisionPick: (Pairing) -> Unit = { pairing ->
         decisionPickPairing = pairing
         runCatching {
+            // #1840：单次入口只收图片与视频（产品口径 2026-11-17）。
             decisionPickLauncher.launch(
-                androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
             )
         }.onFailure {
             PLog.w("PPassFlow", "onboarding: picker failed to open", it)
@@ -1577,8 +1578,9 @@ fun PPassApp() {
                         // 无权限直接进列表 = MediaStore 空查询 = 全白。
                         onOpenBucketPicker = { enterBucketPicker(s.pairing, firstTime = false) },
                         onPickPhotos = {
+                            // #1840：单次入口只收图片与视频（产品口径 2026-11-17）。
                             pickPhotosLauncher.launch(
-                                androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                                androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
                             )
                         },
                         pickedBatch = pickedBatch,
