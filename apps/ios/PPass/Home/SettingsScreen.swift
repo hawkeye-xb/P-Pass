@@ -10,6 +10,8 @@ struct SettingsScreen: View {
     @State private var showDetails = false
     @State private var cancelSnapshot: RemainingSnapshot?
     @State private var asking = false
+    /// #1789「从文件选择」：系统文件选择器的弹层（只发起选择，登记走 pickedChosen 的既有链路）。
+    @State private var showFilePicker = false
 
     enum Route: Hashable { case bucket, storage, diagnostics, more }
 
@@ -70,6 +72,11 @@ struct SettingsScreen: View {
             .listStyle(.insetGrouped)
             .ppList()
             .ppCardSpacing()
+            // #1789「从文件选择」：系统文件选择器；只返回选中的 URL，不登记目录授权（#1785 组件、本卡挂载）。
+            // 选完走 pickedChosen 的既有链路（登记 → 引擎前台逐张传），取消（空结果）不建任务。
+            .sheet(isPresented: $showFilePicker) {
+                SingleTransferFilePicker { items in app.pickedChosen(items) }
+            }
             .toolbar(.hidden, for: .navigationBar) // 同 Android：无页标题
             // 居中警告框（同「断开连接」：iOS 26 上 confirmationDialog 是贴着按钮的气泡）。关闭按钮叫「返回」不叫「取消」：
             // 要确认的动作本身就叫取消（Android #418 同）。
@@ -111,14 +118,21 @@ struct SettingsScreen: View {
         }
     }
 
-    /// #1272 B：规则关着，「自动备份」「挑几张传」排最上面两行；规则开着，「挑几张传」降级为普通行放在通知下面。
-    /// 末尾一行「更多 ›」进二级页（存储电脑、断开连接、版本、检查更新）。
+    /// #1784：设置按「自动备份 / 单次传输 / 传输条件与通知 / 更多」固定分组，组序由
+    /// SingleTransferStatusTests 锁死；条件行只在原组内显隐，分组不移动。真有问题时上方
+    /// 的红卡与告示自然出现（「需要注意」），不在这里重复。组内不贴 section 标签——
+    /// 组的第一行（自动备份开关 / 从相册选择 / 仅 Wi-Fi / 更多）就是这组的名字。
     @ViewBuilder private var settingsSection: some View {
+        // ── #1789 固定分组 1/4「自动备份」：开关、范围与它的条件行（取消剩余 / 已跳过 / 源已删除账目）。
         Section {
             ruleRow
-            if !app.autoRule { pickRow }
             // 范围入口常开：关闭自动备份或拒绝照片权限时，也能管理已有目录授权。
             row(L.s("backup_scope"), value: scopeValue, route: .bucket)
+            if app.autoRule {
+                // 「App 关着也传」（原「后台备份」）：只在自动备份开着时出现。
+                Toggle(L.s("auto_backup_pause"), isOn: Binding(get: { app.autoBackup }, set: { app.setAutoBackup($0) }))
+                    .font(Self.labelFont).tint(PPColor.safe)
+            }
             if let n = app.cancelRemainingCount {
                 Button {
                     Task {
@@ -147,11 +161,31 @@ struct SettingsScreen: View {
                     Text(L.p("missing_source_archive_value", Int(app.facts.missingSourceAcknowledged))).font(Self.valueFont).foregroundStyle(PPColor.ink40)
                 }
             }
-            if app.autoRule {
-                // 「App 关着也传」（原「后台备份」）：只在自动备份开着时出现。
-                Toggle(L.s("auto_backup_pause"), isOn: Binding(get: { app.autoBackup }, set: { app.setAutoBackup($0) }))
-                    .font(Self.labelFont).tint(PPColor.safe)
+        }
+        .ppTinted(PPUI.Surface.settingsCard)
+
+        // ── #1789 固定分组 2/4「单次传输」：固定两行「从相册选择」「从文件选择」，
+        // 两行只发起选择，不显示进度、结果或最近一批——状态只在英雄区出现（#1784）。
+        Section {
+            Button { app.pickerRequested = true } label: {
+                HStack(spacing: 12) {
+                    Text(L.s("pick_from_photos_label")).font(Self.labelFont).foregroundStyle(PPColor.ink)
+                    Spacer(minLength: 8)
+                }
             }
+            .accessibilityIdentifier("pickPhotosRow")
+            Button { showFilePicker = true } label: {
+                HStack(spacing: 12) {
+                    Text(L.s("pick_from_files_label")).font(Self.labelFont).foregroundStyle(PPColor.ink)
+                    Spacer(minLength: 8)
+                }
+            }
+            .accessibilityIdentifier("pickFilesRow")
+        }
+        .ppTinted(PPUI.Surface.settingsCard)
+
+        // ── #1789 固定分组 3/4「传输条件与通知」：仅 Wi-Fi 与失败通知两个开关。
+        Section {
             Toggle(L.s("setting_wifi_only"), isOn: Binding(get: { app.wifiOnly }, set: { app.setWifiOnly($0) }))
                 .font(Self.labelFont).tint(PPColor.safe)
             VStack(alignment: .leading, spacing: 2) {
@@ -163,10 +197,15 @@ struct SettingsScreen: View {
                     Text(L.s("rule_notify_denied_hint")).font(Self.hintFont).foregroundStyle(PPColor.ink40)
                 }
             }
-            if app.autoRule { pickRow }
+        }
+        .ppTinted(PPUI.Surface.settingsCard)
+
+        // ── #1789 固定分组 4/4「更多」：点进去仍是原来的二级页（存储电脑、断开连接、版本、检查更新）。
+        Section {
             row(L.s("more_label"), value: "", route: .more)
         }
         .ppTinted(PPUI.Surface.settingsCard)
+        // ── #1789 固定分组结束
     }
 
     /// 「更多」二级页：存储电脑详情（含断开连接）、版本（含检查更新）。
@@ -197,34 +236,29 @@ struct SettingsScreen: View {
         }
     }
 
-    /// #1272「挑几张传」：常驻一行，点开系统照片选择器；右侧是这一批的进度 / 结果句。
-    private var pickRow: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Button { app.pickerRequested = true } label: {
-                HStack(spacing: 12) {
-                    Text(L.s("pick_photos_label")).font(Self.labelFont).foregroundStyle(PPColor.ink)
-                    Spacer(minLength: 8)
-                    if let line = HomeProjection.pickedLine(app.pickedBatch) {
-                        Text(line).font(Self.valueFont).foregroundStyle(PPColor.ink40).lineLimit(2).multilineTextAlignment(.trailing)
-                    }
-                }
-            }
-            .accessibilityIdentifier("pickPhotosRow")
-        }
-    }
-
     // 设置行字号：tokens.json mobile-ui.type（iOS 覆盖为系统文字样式，见 platforms.ios）。
     private static let labelFont = PPFont.sans(PPUI.TextSize.rowLabel)
     private static let valueFont = PPFont.sans(PPUI.TextSize.rowValue, relativeTo: .subheadline)
     private static let hintFont = PPFont.sans(PPUI.TextSize.rowHint, relativeTo: .footnote)
 
-    /// 「备份哪些照片」：只数已选且现存的（Android #541 / #836 同口径），0 或从未保存 → 「未选相册」；
-    /// 有相册时带上时间档：「3 个相册 · 10月29日起的照片 / 含以前的照片」（#1263，同 Android `backup_scope_with_time`）。
+    /// 「备份范围」行值（#1789，对位 Android 同一行）：相册与素材文件夹用「 + 」连在一行，文件夹不再单独占设置行；
+    /// 旧版已登记目录（从未保存过范围）也按真实来源显示，不再误报「未选定自动备份范围」。
+    /// 「3 个相册 + 素材文件夹 2 · 含以前的照片」；读不到说「读不到」，什么都没有说「未选定自动备份范围」。
+    /// 静态纯函数：SettingsFeedbackTests 直接跑它判红。
+    static func scopeValueText(unreadable: Bool, albumCount: Int?, folderCount: Int, since: BackupSince?,
+                               now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
+        if unreadable { return L.s("backup_scope_unreadable") }
+        let albums = albumCount.flatMap { $0 > 0 ? L.p("backup_scope_n", $0) : nil }
+        let folders = folderCount > 0 ? "\(L.s("folder_settings_title")) \(folderCount)" : nil
+        let sources = [albums, folders].compactMap { $0 }.joined(separator: " + ")
+        guard !sources.isEmpty else { return L.s("backup_scope_none") }
+        guard let since else { return sources }
+        return L.f("backup_scope_with_time", sources, timeLabel(since, now: now, calendar: calendar, locale: locale))
+    }
+
     private var scopeValue: String {
-        if app.scopeUnreadable { return L.s("backup_scope_unreadable") }
-        let n = app.selectedAlbumCount ?? 0
-        guard n > 0 else { return L.s("backup_scope_none") }
-        return L.f("backup_scope_with_time", L.p("backup_scope_n", n), Self.timeLabel(app.since ?? .all, now: Date()))
+        Self.scopeValueText(unreadable: app.scopeUnreadable, albumCount: app.selectedAlbumCount,
+                            folderCount: app.selectedFolderCount, since: app.since, now: Date())
     }
 
     /// 设置行时间档的说法，一律写日期（10-29 文案定稿，同 Android `scopeValueLabel`）：某天起 →「M月d日起的照片」；

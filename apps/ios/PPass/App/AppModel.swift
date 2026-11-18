@@ -221,8 +221,10 @@ final class AppModel: ObservableObject {
                            isTransferring: uiState.isRunning)
     }
 
-    /// #1353：「自动备份已停止」状态卡带「去设置」——纯相册范围、照片权限不全。开关关着是正常状态，不给。
+    /// #1353：「自动备份已停止」状态卡带「去设置」——纯相册范围、照片权限不全。
     /// #1811 两态口径：有可用目录来源（folder-only / 混合）时备份没停，同样不给「去设置」。
+    /// #1789 接线（#1788 同判据）：空范围缺的是**来源**不是权限，去设置授权也不会添加来源——
+    /// 「已停止」与「去设置」都只给真的选了相册的范围（`SourceAvailability.showsGlobalPhotoBlock` 带 `hasSelectedAlbum`）。
     /// 开关本身不动；回到前台 `refresh` 重读真实权限，变成全部就不再是这张卡（对位 Android `blockedHeroOffersSettings`）。
     /// `hasUsableFolder` 默认 false = 旧的纯相册口径；生产路径读实例版（`sourceAvailability.showsGlobalPhotoBlock`）。
     nonisolated static func blockedHeroOffersSettings(autoRule: Bool, access: MediaAccess, hasUsableFolder: Bool = false) -> Bool {
@@ -529,6 +531,16 @@ final class AppModel: ObservableObject {
     var selectedAlbumCount: Int? {
         let albumScope = scope?.filter { !$0.hasPrefix("folder:") }
         return ScopePolicy.selectedExistingCount(selected: albumScope, existing: existingAlbums)
+    }
+
+    /// #1789：备份范围行值里的「素材文件夹 N」（对位 Android `selectedFolderCount`）：新版按勾选存值里的目录数；
+    /// known 里有目录、勾选里没有 = 明确取消过，不算；旧版没有勾选存值按当前登记数读现状
+    /// （与 `SourceAvailability.hasUsableFolder` 同一份判据，非零 ⇔ 有可用目录来源）。
+    var selectedFolderCount: Int {
+        let folderIds = scope?.filter { $0.hasPrefix("folder:") } ?? []
+        if !folderIds.isEmpty { return folderIds.count }
+        let unified = knownScopeIds.union(scope ?? []).contains { $0.hasPrefix("folder:") }
+        return unified ? 0 : folderCount
     }
 
     /// 范围从未保存、保存了空集、或所有已选来源都不在范围内。旧版目录按当前登记状态保持有效。

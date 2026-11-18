@@ -7,6 +7,7 @@ I18nDriftTests
 ManualPairInputTests
 OnboardingNavigationTests
 PeerClosedPairingLossTests
+SingleTransferStatusTests
 UIResourceTests
 VersionStampTests
 VideoOriginalGateTests

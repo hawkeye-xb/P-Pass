@@ -16,10 +16,6 @@
 "bucket_request_access_action" = "Allow Access";
 "bucket_no_selection" = "No sources selected.";
 
-/* Home status card (#1811): folders are still backing up; only the photos side is incomplete, with one Adjust scope exit. */
-"hero_mixed_album_incomplete" = "Backing up folders · Photos access incomplete";
-"hero_adjust_scope_action" = "Adjust scope";
-
 /* Simulator and devices without a camera. */
 "scan_camera_unavailable" = "Camera unavailable. Enter the pairing code to connect.";
 
@@ -93,6 +89,9 @@
 
 /* 照片页引导卡：iOS 没有「App 关闭也能备份」，靠后台 App 刷新（产品负责人 11-04）。 */
 "photos_guide_background" = "Back up in the background";
+
+/* #1789 folder noun in the backup-scope row value (Android's strings_android_only folder_settings_title never reaches the generated copy, so iOS carries its own). */
+"folder_settings_title" = "Media folders";
 
 /* Folder sources and authorization actions on the unified backup scope screen. */
 "folder_sources_add" = "Add a Folder";

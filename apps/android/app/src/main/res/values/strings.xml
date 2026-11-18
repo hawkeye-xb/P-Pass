@@ -279,12 +279,17 @@
     <string name="identity_unavailable_retry">Try again</string>
     <string name="identity_unavailable_reset">Reset and pair again</string>
     <string name="identity_unavailable_reset_hint">After a reset, this phone counts as a new device and must pair again.</string>
-    <string name="pick_photos_label">Pick photos to send</string>
+    <!-- #1789：单次传输组固定两行（#1784 定案：两行只发起选择，进度/结果只在英雄区）。 -->
+    <string name="pick_from_photos_label">Choose from Photos</string>
+    <string name="pick_from_files_label">Choose from Files</string>
     <!-- #1798 单次入口的文件选择（SAF）：与相册入口共用同一条 Picked 队列。 -->
     <string name="pick_files_label">Pick files to send</string>
     <string name="picked_progress">Sending %1$d/%2$d</string>
     <string name="picked_result_delivered">Delivered %1$d</string>
     <string name="picked_result_failed">%1$d couldn\'t be sent. Please pick them again.</string>
+    <!-- #1789：混合范围（目录 + 相册）照片权限未完整——文件夹还在传，只说相册侧；出口只有「调整范围」。 -->
+    <string name="hero_mixed_album_incomplete">Backing up folders · Photos access incomplete</string>
+    <string name="hero_adjust_scope_action">Adjust scope</string>
     <string name="auto_backup_rule_label">Auto backup</string>
     <string name="auto_backup_off_hero">Auto backup is off. You can also pick a few photos to send for now.</string>
     <string name="auto_backup_rule_denied_hint">Photo access wasn\'t allowed, so auto backup stays off. You can allow it in system settings, or pick a few photos to send.</string>

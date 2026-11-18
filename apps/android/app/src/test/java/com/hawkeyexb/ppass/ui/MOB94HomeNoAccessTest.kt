@@ -42,13 +42,44 @@ class MOB94HomeNoAccessTest {
     fun the_hero_card_is_gated_on_full_access_not_on_partial_alone() {
         val source = homeScreen()
 
+        // #1789 接线（#1788 交付判定、本卡消费）：blocked 分支必须同时要求「不是 FULL」与「没有可用来源」——
+        // 漏掉后者会把 folder-only 也压成「自动备份已停止」，正是验收 5 要挡的「全局权限卡顶替真实进度」。
         assertTrue(
-            "hero 卡的判据必须是「不是 FULL」——只看 partial 会把全拒放进正常分支，那正是本卡的 bug",
-            source.contains("} else if (mediaAccess != MediaAccess.FULL) {"),
+            "blocked 分支判据必须是「不是 FULL 且没有可用来源」——只看 access 会把 folder-only 的真实进度顶掉",
+            source.contains("mediaAccess != MediaAccess.FULL && !hasUsableSource"),
         )
         assertFalse(
             "不许再留布尔 partialAccess 参数——两档互斥，布尔并列表示不了",
             source.contains("partialAccess: Boolean"),
+        )
+    }
+
+    /**
+     * #1789（#1784 验收 5，真行为测试）：folder-only 且照片权限非完整时，英雄区仍显示真实进度与等待原因，
+     * 不被全局权限卡顶替。判据本体 [heroRenderOf] / [visibleWaitReasonRes] 是纯函数，JVM 直接测——
+     * 反证：任一处把「不是 FULL 且没有可用来源」改回只看 access，对应断言红。
+     */
+    @Test
+    fun folder_only_keeps_the_real_progress_and_wait_reason_when_photo_access_is_not_full() {
+        val t = com.hawkeyexb.ppass.backup.tripletOf(n = 10, confirmedCount = 3, lastSuccessAt = 1)
+        for (blocked in listOf(MediaAccess.PARTIAL, MediaAccess.NONE)) {
+            org.junit.Assert.assertEquals(
+                "folder-only：$blocked 照常渲染三元组，不出权限引导卡",
+                HeroRender.Triplet,
+                heroRenderOf(blocked, t, hasUsableSource = true),
+            )
+            org.junit.Assert.assertEquals(
+                "纯相册：$blocked 仍然出权限引导卡（不显示假 0/0）",
+                HeroRender.AccessBlocked,
+                heroRenderOf(blocked, t, hasUsableSource = false),
+            )
+        }
+        val wifi = BackupUiState.Waiting(com.hawkeyexb.ppass.backup.flow.WaitReason.WIFI)
+        val res = com.hawkeyexb.ppass.R.string.wifi_deferred_hint
+        org.junit.Assert.assertEquals(
+            "folder-only 等 Wi-Fi：等待原因照常说",
+            res,
+            visibleWaitReasonRes(wifi, MediaAccess.PARTIAL, pairingLost = false, reasonRes = res, hasUsableSource = true),
         )
     }
 

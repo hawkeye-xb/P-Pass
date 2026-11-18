@@ -52,6 +52,14 @@ struct HeroCard: View {
                     Rectangle().fill(PPColor.safe.opacity(0.18)).frame(height: 1)
                         .padding(.top, PPUI.Layout.heroDividerAbove).padding(.bottom, PPUI.Layout.heroDividerBelow)
                     progressRow
+                    // #1784：单次传输状态只在英雄区出现——进行中的「正在传 x/y」与结算结果句。
+                    // 进程被杀没传完的不算失败（验收 4）：iOS 的手选句柄随进程没了，批次标记 interrupted，
+                    // pickedLine 对 interrupted 一律 nil，下面那行「上次挑的 N 张有 M 张没传完」单独说话。
+                    if let line = HomeProjection.pickedLine(app.pickedBatch) {
+                        Text(line).font(PPFont.sans(PPUI.TextSize.statusLine, .medium, relativeTo: .footnote))
+                            .foregroundStyle(PPColor.ink60).padding(.top, 8)
+                            .accessibilityIdentifier("pickedStatus")
+                    }
                     // #1272：上次挑的几张没传完时进程被杀了——只在这里说一句，数字按实际。
                     if let line = HomeProjection.pickedInterruptedLine(app.pickedBatch) {
                         Text(line).font(PPFont.sans(PPUI.TextSize.statusLine, .medium, relativeTo: .footnote))

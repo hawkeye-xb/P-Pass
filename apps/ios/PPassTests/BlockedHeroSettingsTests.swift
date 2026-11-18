@@ -13,6 +13,18 @@ final class BlockedHeroSettingsTests: XCTestCase {
         XCTAssertFalse(AppModel.blockedHeroOffersSettings(autoRule: false, access: .none), "开关关：不出")
     }
 
+    /// #1788 评审定案（同判据同步债，归 #1789 接线时处理）：保存了空范围时缺的是**来源**不是权限，
+    /// 去设置授权也不会添加来源——「自动备份已停止」与「去设置」只给真的选了相册的范围。
+    /// 反证：`showsGlobalPhotoBlock` 去掉 `hasSelectedAlbum` 条件，空范围两条红。
+    func testEmptyScopeDoesNotShowGlobalPhotoBlockOrSettingsExit() {
+        XCTAssertFalse(SourceAvailability(autoRule: true, photoAccess: .partial, hasUsableFolder: false, hasSelectedAlbum: false)
+            .showsGlobalPhotoBlock, "空范围 + 部分授权：缺的是来源，不出「自动备份已停止」")
+        XCTAssertFalse(SourceAvailability(autoRule: true, photoAccess: .none, hasUsableFolder: false, hasSelectedAlbum: false)
+            .showsGlobalPhotoBlock, "空范围 + 全拒：同上")
+        XCTAssertTrue(SourceAvailability(autoRule: true, photoAccess: .partial, hasUsableFolder: false, hasSelectedAlbum: true)
+            .showsGlobalPhotoBlock, "已选相册且没有可用目录：照旧报权限阻断")
+    }
+
     /// 文案对齐 Android：按钮词条来自 Android strings.xml 的同步副本。
     func testButtonTitleIsTheSharedString() {
         XCTAssertEqual(L.s("auto_backup_blocked_action"), Bundle.main.localizedString(forKey: "auto_backup_blocked_action", value: nil, table: nil))
