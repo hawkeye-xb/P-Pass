@@ -151,7 +151,9 @@ async function goto(page) {
   await settle();
 }
 
-const wallCount = () => screen.queryAllByRole("button", { name: "查看大图" }).length;
+// #1132 D6：缩略图按钮的可访问名带上了拍摄时间与序号（不再 40 个都叫
+// 「查看大图」）——这里数的意图是「墙上有几格」，按名前缀匹配。
+const wallCount = () => screen.queryAllByRole("button", { name: /^查看大图/ }).length;
 
 describe("DESK-38：服务恢复后照片墙自动重载", () => {
   beforeEach(() => {
@@ -250,7 +252,7 @@ describe("DESK-38：服务恢复后照片墙自动重载", () => {
     await settle();
     await settle();
     expect(wallCount()).toBe(PHOTOS.length);
-    const first = screen.getAllByRole("button", { name: "查看大图" })[0];
+    const first = screen.getAllByRole("button", { name: /^查看大图/ })[0];
 
     // 大备份期间一次 status 超时 → refresh 记成离线；下一轮成功 → 「恢复」。
     d.up = false;
@@ -298,7 +300,7 @@ describe("DESK-38：服务恢复后照片墙自动重载", () => {
     await settle();
     await settle();
     expect(wallCount()).toBe(PHOTOS.length);
-    const buttons = screen.getAllByRole("button", { name: "查看大图" });
+    const buttons = screen.getAllByRole("button", { name: /^查看大图/ });
 
     // h1 在线时就滚进过视口，拿到了真图。
     const firstObservers = [...observers];

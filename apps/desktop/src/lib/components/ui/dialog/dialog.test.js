@@ -9,7 +9,7 @@
 //    反证：去掉 $effect 清理函数里的 opener.focus() ⇒ 本条红。
 import { cleanup, render } from "@testing-library/svelte";
 import { createRawSnippet } from "svelte";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import Dialog from "./dialog.svelte";
 
 const body = (html) => createRawSnippet(() => ({ render: () => `<div>${html}</div>` }));
@@ -62,6 +62,62 @@ describe("dialog 焦点管理", () => {
     expect(document.activeElement).toBe(a);
     tab(true);
     expect(document.activeElement).toBe(b);
+  });
+
+  // #1132 D1（WAI-ARIA APG Dialog 模式）：模态打开期间背景不可聚焦——
+  // 靠 HTML 标准 inert（Tab/点按/读屏都到不了），关闭后解除。
+  // 反证：去掉 $effect 里的背景 inert 分支 ⇒ 本条红（背景不再带 inert 属性）。
+  it("打开时背景被 inert，关闭后解除；弹窗自身不 inert", async () => {
+    const o = opener();
+    const { rerender } = render(Dialog, {
+      open: true,
+      children: body('<button id="a">甲</button>'),
+    });
+    await Promise.resolve();
+    // 背景里的触发按钮带 inert；弹窗面板与内部控件不带。
+    expect(o.getAttribute("inert")).toBe("");
+    const panel = document.querySelector('[role="dialog"]');
+    expect(panel.getAttribute("inert")).toBe(null);
+    expect(document.getElementById("a").closest('[role="dialog"]')).toBe(panel);
+    // 关闭：解除背景 inert，焦点回到触发按钮（另一用例已钉）。
+    await rerender({ open: false });
+    expect(o.getAttribute("inert")).toBe(null);
+  });
+
+  // #1132 D1：不能关闭的弹窗（没传 onClose）——Esc 不关闭，焦点仍被限制在弹窗内。
+  // 反证：把 Esc 分支改成无 onClose 也调用 onClose/关面板 ⇒ 本条红（面板消失）。
+  it("没有 onClose 的弹窗：Esc 不关闭，焦点留在弹窗内", async () => {
+    opener();
+    render(Dialog, {
+      open: true,
+      children: body('<button id="a">甲</button><button id="b">乙</button>'),
+    });
+    await Promise.resolve();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await Promise.resolve();
+    // 面板还在（没有 onClose 可关），焦点没有被 Esc 弹出弹窗。
+    expect(document.querySelector('[role="dialog"]')).toBeTruthy();
+    expect(["a", "b"]).toContain(document.activeElement?.id);
+  });
+
+  // #1132 D1（验收 1）：传了 onClose 的弹窗，Esc 触发关闭。
+  // 反证：去掉 onKeydown 里 Escape 分支 ⇒ 本条红（onClose 不被调用）。
+  it("传了 onClose 的弹窗：Esc 触发关闭", async () => {
+    opener();
+    const onClose = vi.fn();
+    render(Dialog, {
+      open: true,
+      onClose,
+      children: body('<button id="a">甲</button>'),
+    });
+    await Promise.resolve();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await Promise.resolve();
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("关闭后焦点回到打开前的元素；元素已不在 DOM 就跳过", async () => {

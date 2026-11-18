@@ -28,6 +28,15 @@
   });
   Object.assign(view, flow.snapshot());
 
+  // #1132 D5：切步后焦点落进新步骤的标题（原来是 BODY——键盘用户要重新
+  // Tab 整页才能找到自己在哪）。标题带 tabindex="-1"，挂载即聚焦。
+  // 反证：去掉 $effect 或 tabindex ⇒ a11y.test.js「D5 macOS 向导」红。
+  let stepTitle = $state(null);
+  $effect(() => {
+    view.step;
+    stepTitle?.focus();
+  });
+
   // 2026-08-17：一键关闭自动睡眠——独立的 busy/error 状态，不复用向导
   // 全局 busy（那个会连累"继续"按钮跟着置灰，这里只是个局部小动作）。
   let sleepFixBusy = $state(false);
@@ -58,23 +67,27 @@
      没必要在向导里重复一份配对 UI；第 3 步「完成」直接 onDone() 进
      主界面，用户落地总览页自然看得到那张卡片。 -->
 <div class="mt-4 flex flex-col gap-[22px] rounded-xl border border-border bg-paper px-8 py-7">
+  <!-- #1132 D5：步骤条当前步加 aria-current="step"，不再只靠颜色区分
+       （1.4.1 用颜色之外还要有别的呈现）。 -->
   <div class="flex gap-2">
     {#each stepBar(view.step) as s}
-      <span class="text-[13px] font-semibold {s.state === 'current' ? 'text-ink' : s.state === 'done' ? 'text-safe' : 'text-ink-40'}">
+      <span aria-current={s.state === "current" ? "step" : undefined}
+        class="text-[13px] font-semibold {s.state === 'current' ? 'text-ink' : s.state === 'done' ? 'text-safe' : 'text-ink-40'}">
         {s.n}. {s.label}
       </span>
     {/each}
   </div>
 
+  <!-- #1132 D4：错误要用 role="alert" 播报（4.1.3），不能只换底色。 -->
   {#if view.error}
-    <p class="m-0 rounded-md bg-act-bg px-[14px] py-[10px] text-[15px] text-act">
+    <p role="alert" class="m-0 rounded-md bg-act-bg px-[14px] py-[10px] text-[15px] text-act">
       {view.error.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(view.error)}</span>
     </p>
   {/if}
 
   {#if view.step === 1}
     <div class="flex flex-col gap-4">
-      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_library_title")}</h2>
+      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_library_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_library_body_mac")}</p>
       <!-- DESK-05: 路径始终有值（默认填充 defaultDir / 预填已配置库）——
            不再要求先点按钮才能继续。路径 ≠ 默认时旁挂「回到默认」链接，
@@ -96,7 +109,7 @@
     </div>
   {:else if view.step === 2}
     <div class="flex flex-col gap-4">
-      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_sleep_title")}</h2>
+      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_sleep_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_sleep_body")}</p>
       {#if power?.kind === "never"}
         <div class="flex items-center gap-3 rounded-xl border border-border px-[18px] py-[14px]">
@@ -128,7 +141,7 @@
           <!-- B3：点「关闭自动睡眠」会弹系统管理员授权框，先说清要输入登录密码（本视图只在 macOS）。 -->
           <p class="m-0 text-[13px] leading-[1.5] text-ink-60">{t("ui.wizard_sleep_fix_needs_password")}</p>
           {#if sleepFixError}
-            <p class="m-0 text-[13px] text-act">
+            <p role="alert" class="m-0 text-[13px] text-act">
               {sleepFixError.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(sleepFixError)}</span>
             </p>
           {/if}
@@ -146,7 +159,7 @@
          开机自启通知 + 本地网络授权弹窗）/不会做什么（B1 起不再写「如果被拦」，拦截说明在官网下载页），点「完成」才真正启动 daemon（含 autostart
          注册，finishSetup）。 -->
     <div class="flex flex-col gap-4">
-      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_service_title")}</h2>
+      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_service_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_service_body")}</p>
       <!-- 设计稿 v2："标签(120px)+说明"的表格式布局（#481 起四行），不是
            各自独立的卡片——分隔线贴边，跟其它页面的 list-card 同款。 -->

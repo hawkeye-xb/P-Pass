@@ -14,7 +14,10 @@
 	   控件文字；15px 是 v3 设计稿与 DESK-08 像素验收过的实际值，不是
 	   随手写小的漏网之鱼。 */
 	export const buttonVariants = tv({
-		base: "inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap font-sans transition-colors outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+		/* #1132 D12：焦点环用 ring 全量（ink on paper 17.2:1）。原先是环色
+		   压 50% 透明，叠纸底只剩 3.40:1——刚过 3:1 没余量，审计
+		   （#1127 D12）要求给足对比度。 */
+		base: "inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap font-sans transition-colors outline-none select-none focus-visible:ring-3 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
 		variants: {
 			variant: {
 				/* 主按钮：ink 底纸字，全站唯一强调色的行动点。高度/圆角/
