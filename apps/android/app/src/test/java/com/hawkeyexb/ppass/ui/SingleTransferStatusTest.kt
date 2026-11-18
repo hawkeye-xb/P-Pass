@@ -91,16 +91,24 @@ class SingleTransferStatusTest {
         assertTrue("组序：自动备份 → 单次传输 → 传输条件与通知 → 更多", one < two && two < three && three < four)
     }
 
-    /** #1784：单次传输下固定为「从相册选择」「从文件选择」，两行只发起选择，不显示进度、结果或最近一批。 */
+    /** #1784：单次传输下固定为「从相册选择」「从文件选择」，两行只发起选择，不显示进度、结果或最近一批。
+     *  评审 Cy：逐行核对标签与动作的配对——把两行的 onClick 互换，「组里存在两个标签 + 两个动作」的写法仍会通过。 */
     @Test
     fun the_two_single_transfer_entries_only_initiate_selection() {
         val group = group(homeScreen(), "2/4")
         assertTrue(group != null)
         group.let { g ->
-            assertTrue("「从相册选择」在单次传输组里", g!!.contains("R.string.pick_from_photos_label"))
-            assertTrue("「从文件选择」在单次传输组里", g.contains("R.string.pick_from_files_label"))
-            assertTrue("相册入口发起选择", g.contains("onClick = onPickPhotos"))
-            assertTrue("文件入口发起选择", g.contains("onClick = onPickFiles"))
+            // 按 CellRow 切开：每行入口的标签与 onClick 必须一一配对。
+            val rows = g!!.split("CellRow(").drop(1)
+            assertTrue("单次传输组固定两行入口", rows.size == 2)
+            assertTrue(
+                "「从相册选择」必须配发起相册选择（onPickPhotos）",
+                rows.any { it.contains("R.string.pick_from_photos_label") && it.contains("onClick = onPickPhotos") },
+            )
+            assertTrue(
+                "「从文件选择」必须配发起文件选择（onPickFiles）",
+                rows.any { it.contains("R.string.pick_from_files_label") && it.contains("onClick = onPickFiles") },
+            )
             assertFalse("入口行不显示进度 / 结果 / 最近一批", g.contains("pickedBatch"))
             assertFalse("入口行不带状态句", g.contains("picked_progress"))
         }
@@ -122,15 +130,28 @@ class SingleTransferStatusTest {
         assertTrue("英雄区消费单次传输投影", source.contains("SingleTransferStatus.heroLine(pickedBatch)"))
     }
 
-    /** #1784：已结束记录随下一次选择清理——两个单次入口的登记前先清已结算行。 */
+    /** #1784：已结束记录随下一次选择清理（评审 B1：各自回调内断言顺序，不靠全文包含；
+     *  评审 AP：清理在**登记成功之后**——登记失败时不得动原状态，所以顺序是 enqueue → clearSettled）。 */
     @Test
     fun picking_again_clears_the_settled_records_first() {
         val main = mainActivity()
         val photoPick = main.substringAfter("pickPhotosLauncher", "").substringBefore("decisionPickLauncher")
-        assertTrue("相册入口登记前清理已结束记录", photoPick.contains("clearSettled()"))
-        val filePick = main.substringAfter("filePickLauncher", "")
-        assertTrue("文件入口存在", filePick.contains("SingleTransferFilePicker.intent()"))
-        assertTrue("文件入口登记前清理已结束记录", filePick.contains("clearSettled()"))
+        assertTrue("相册入口登记后清理已结束记录", photoPick.contains("clearSettled()"))
+        val clearInPhoto = photoPick.indexOf("store.clearSettled()")
+        val enqueueInPhoto = photoPick.indexOf("PickedUploads.enqueue(context, uris)")
+        assertTrue("相册入口必须先登记新一批（成功后）、再清理已结算行", clearInPhoto > enqueueInPhoto && enqueueInPhoto >= 0)
+        // 文件入口的回调块截到轮询 LaunchedEffect 为止，不把后面无关回调里的 clearSettled 也算进来。
+        val filePick = main.substringAfter("filePickLauncher", "").substringBefore("androidx.compose.runtime.LaunchedEffect")
+        assertTrue(
+            "文件入口解析复用 SingleTransferFilePicker（评审：SAF 多选/单选边界只写一处）",
+            filePick.contains("SingleTransferFilePicker.urisFromResult"),
+        )
+        assertTrue("文件入口登记后清理已结束记录", filePick.contains("clearSettled()"))
+        val clearInFile = filePick.indexOf("store.clearSettled()")
+        val enqueueInFile = filePick.indexOf("PickedUploads.enqueue(context, uris)")
+        assertTrue("文件入口必须先登记新一批（成功后）、再清理已结算行", clearInFile > enqueueInFile && enqueueInFile >= 0)
+        // 入口存在：HomeScreen 的「从文件选择」行确实从 SingleTransferFilePicker 拿 intent。
+        assertTrue("文件入口存在", main.contains("filePickLauncher.launch(com.hawkeyexb.ppass.ui.SingleTransferFilePicker.intent())"))
     }
 
     /** #1784：条件行只在原组内显隐、尊重系统减少动态效果——状态变化直接呈现，不加过渡动画。 */

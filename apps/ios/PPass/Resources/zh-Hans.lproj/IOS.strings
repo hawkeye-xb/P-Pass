@@ -92,8 +92,8 @@
 /* 照片页引导卡：iOS 没有「App 关闭也能备份」，靠后台 App 刷新（产品负责人 11-04）。 */
 "photos_guide_background" = "App 在后台也能备份";
 
-/* #1789「备份范围」行值里的文件夹名词（Android strings_android_only 的 folder_settings_title 不进生成副本，iOS 独有）。 */
-"folder_settings_title" = "素材文件夹";
+/* #1789「备份范围」行值里的文件夹名词（评审：Swift 源码不许引用 Android 独有 key——folder_settings_title 只在 strings_android_only.xml，iOS 用自己的 key）。 */
+"folder_scope_noun" = "素材文件夹";
 
 /* 统一备份范围页里的文件夹来源与授权动作。 */
 "folder_sources_add" = "添加文件夹";

@@ -411,6 +411,19 @@ final class AppModel: ObservableObject {
         // #1119：配对被清掉（被拒即清理）→ 回欢迎页。界面不在欢迎页（含选相册 / 首次备份）而配对没了，就是这一种。
         let next = Self.phase(phase, whenPairing: pairing)
         if next != phase { AppLog.log("pairing cleared while in \(phase); back to onboarding"); tab = .photos; phase = next }
+        rereadSavedScope()
+        wifiOnly = backend.engine.wifiOnly()
+        autoBackup = backend.engine.autoBackup()
+        backgroundCardDismissed = backend.engine.backgroundCardDismissed()
+        notifyOnFailure = backend.engine.notifyOnFailure()
+        // 系统「后台 App 刷新」的真实状态：回到前台（sceneBecameActive → refresh）时重读，用户在系统设置里改了回来就生效。
+        backgroundRefresh = backend.engine.backgroundRefresh()
+        backgroundNotice = Self.backgroundNotice(backgroundRefresh, backgroundRequested: autoBackup)
+        folderCount = backend.engine.folderSourceCount()
+    }
+
+    /// 已保存范围三件套（勾选 / 时间档 / known）+ 读不出标记。只读盘，不写任何值——范围页里未保存的勾选不受影响。
+    private func rereadSavedScope() {
         do {
             scope = try backend.media.savedScope()
             since = try backend.media.savedSince()
@@ -422,19 +435,14 @@ final class AppModel: ObservableObject {
             since = nil
             scopeUnreadable = true
         }
-        wifiOnly = backend.engine.wifiOnly()
-        autoBackup = backend.engine.autoBackup()
-        backgroundCardDismissed = backend.engine.backgroundCardDismissed()
-        notifyOnFailure = backend.engine.notifyOnFailure()
-        // 系统「后台 App 刷新」的真实状态：回到前台（sceneBecameActive → refresh）时重读，用户在系统设置里改了回来就生效。
-        backgroundRefresh = backend.engine.backgroundRefresh()
-        backgroundNotice = Self.backgroundNotice(backgroundRefresh, backgroundRequested: autoBackup)
-        folderCount = backend.engine.folderSourceCount()
     }
 
     /// #1763：二级页的添加 / 移除 / 重新授权动作之后重读登记数（设置行值跟着变）。
+    /// #1789（评审 CV）：移除文件夹源会把 folder: 项从**磁盘已保存范围**里一起删掉（LiveBackend.removeFolderSource），
+    /// 这里必须连同已保存范围一起重读——只读登记数会让「素材文件夹 N」继续按旧 scope 勾选显示移除前的个数。
     func refreshFolderCount() {
         folderCount = backend.engine.folderSourceCount()
+        rereadSavedScope()
     }
 
     /// 「取消剩余 N 张」行的 N（Android cancelRemainingRowCount）：只在已暂停 / 等待中、配对没失效、确有剩余时出现。

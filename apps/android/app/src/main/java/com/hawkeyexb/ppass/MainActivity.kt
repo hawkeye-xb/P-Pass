@@ -309,9 +309,16 @@ fun PPassApp() {
     ) { uris ->
         if (uris.isNotEmpty()) {
             scope.launch(Dispatchers.IO) {
-                // #1789（#1784）：已结束记录随下一次选择清理——登记新一批之前先清掉已结算的行。
-                com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).clearSettled()
-                val count = com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris)
+                // #1789（#1784）：已结束记录随下一次选择清理。评审 AP：清理放在**登记成功之后**——
+                // 先清再登记时，若登记失败，未结束批次里已结算的行已被删掉且无法恢复；登记成功后再清，
+                // 新批已在队列里顶替旧状态，失败时原状态原样保留。
+                // 与文件入口同一种写法，登记失败不把异常抛出协程外。
+                val count = runCatching {
+                    val store = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context)
+                    val registered = com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris)
+                    if (registered > 0) store.clearSettled()
+                    registered
+                }.onFailure { PLog.w("PPassFlow", "picked: enqueue failed", it) }.getOrDefault(0)
                 if (count > 0) {
                     pickedBatch = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch()
                     com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
@@ -325,21 +332,18 @@ fun PPassApp() {
     val filePickLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
+        // 评审：解析复用 [SingleTransferFilePicker.urisFromResult]——SAF 多选装 clipData、单选落 data 的边界只写一处。
         val uris = if (result.resultCode == android.app.Activity.RESULT_OK) {
-            val intent = result.data
-            val clip = intent?.clipData
-            when {
-                clip == null -> listOfNotNull(intent?.data)
-                else -> buildList {
-                    for (index in 0 until clip.itemCount) clip.getItemAt(index)?.uri?.let(::add)
-                }.ifEmpty { listOfNotNull(intent?.data) }
-            }
+            com.hawkeyexb.ppass.ui.SingleTransferFilePicker.urisFromResult(result.data)
         } else emptyList()
         if (uris.isNotEmpty()) {
             scope.launch(Dispatchers.IO) {
+                // 评审 AP：清理同样放在登记成功之后（相册入口同一理由）。
                 val count = runCatching {
-                    com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).clearSettled()
-                    com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris)
+                    val store = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context)
+                    val registered = com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris)
+                    if (registered > 0) store.clearSettled()
+                    registered
                 }.onFailure { PLog.w("PPassFlow", "picked: file enqueue failed", it) }.getOrDefault(0)
                 if (count > 0) {
                     pickedBatch = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch()

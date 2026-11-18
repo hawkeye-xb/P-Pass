@@ -962,9 +962,9 @@ final class SettingsFeedbackTests: XCTestCase {
     /// 反证：`scopeValueText` 删掉 folders 段（回到只数相册），前两条红；删掉空兜底，第三条红。
     func test_scope_value_lists_albums_and_folders_in_one_row() {
         let both = SettingsScreen.scopeValueText(unreadable: false, albumCount: 3, folderCount: 2, since: .all, now: Date())
-        XCTAssertEqual(both, L.f("backup_scope_with_time", "\(L.p("backup_scope_n", 3)) + \(L.s("folder_settings_title")) 2", L.s("scope_value_all")))
+        XCTAssertEqual(both, L.f("backup_scope_with_time", "\(L.p("backup_scope_n", 3)) + \(L.s("folder_scope_noun")) 2", L.s("scope_value_all")))
         let foldersOnly = SettingsScreen.scopeValueText(unreadable: false, albumCount: nil, folderCount: 2, since: nil, now: Date())
-        XCTAssertEqual(foldersOnly, "\(L.s("folder_settings_title")) 2", "旧版目录也在同一行，不再说「未选相册」")
+        XCTAssertEqual(foldersOnly, "\(L.s("folder_scope_noun")) 2", "旧版目录也在同一行，不再说「未选相册」")
         XCTAssertEqual(SettingsScreen.scopeValueText(unreadable: false, albumCount: nil, folderCount: 0, since: nil, now: Date()), L.s("backup_scope_none"))
         XCTAssertEqual(SettingsScreen.scopeValueText(unreadable: true, albumCount: 3, folderCount: 2, since: .all, now: Date()), L.s("backup_scope_unreadable"))
     }
@@ -994,7 +994,8 @@ final class SettingsFeedbackTests: XCTestCase {
 
     /// #1789 接线（#1788 同判据）：保存了空范围时缺的是**来源**不是权限——「自动备份已停止」与「去设置」都不出；
     /// 真的选了相册、没有可用目录：照旧报权限阻断。
-    /// 反证：`SourceAvailability.showsGlobalPhotoBlock` 去掉 `hasSelectedAlbum` 条件，空范围两条红。
+    /// 反证：`SourceAvailability.showsGlobalPhotoBlock` 去掉 `hasSelectedAlbum` 条件，空范围两条红；
+    /// `HomeProjection.heroRender` 去掉 `hasSelectedAlbum` 条件，英雄区渲染两条红（评审 Co）。
     func test_empty_scope_does_not_report_auto_backup_blocked() async {
         let (app, engine, media) = make()
         media.disk = []
@@ -1002,10 +1003,45 @@ final class SettingsFeedbackTests: XCTestCase {
         app.refresh()
         XCTAssertFalse(app.autoRuleBlocked, "空范围缺的是来源，不是权限")
         XCTAssertFalse(app.blockedHeroOffersSettings)
+        // 评审 Co：英雄区实际用的渲染判据——输入与 HeroCard 完全同一组，空范围不出「自动备份已停止」。
+        XCTAssertNotEqual(
+            HomeProjection.heroRender(app.access, app.triplet, countsReadable: app.facts.countsReadable,
+                                      scopeSaved: !app.noAlbums, hasUsableSource: app.backupAvailability.hasUsableSource,
+                                      hasSelectedAlbum: app.sourceAvailability.hasSelectedAlbum,
+                                      mixedAlbumIncomplete: app.showsMixedAlbumIncomplete),
+            .accessBlocked,
+            "空范围时英雄区不出「自动备份已停止」（HeroCard 同一输入）",
+        )
         media.disk = ["a"]
         app.refresh()
         XCTAssertTrue(app.autoRuleBlocked, "已选相册且没有可用目录：照旧报权限阻断")
         XCTAssertTrue(app.blockedHeroOffersSettings)
+        XCTAssertEqual(
+            HomeProjection.heroRender(app.access, app.triplet, countsReadable: app.facts.countsReadable,
+                                      scopeSaved: !app.noAlbums, hasUsableSource: app.backupAvailability.hasUsableSource,
+                                      hasSelectedAlbum: app.sourceAvailability.hasSelectedAlbum,
+                                      mixedAlbumIncomplete: app.showsMixedAlbumIncomplete),
+            .accessBlocked,
+            "已选相册且没有可用目录：英雄区照旧出权限阻断（对照段）",
+        )
+    }
+
+    /// #1789（评审 CV）：移除文件夹源会把 folder: 项从**磁盘已保存范围**里一起删掉（LiveBackend.removeFolderSource），
+    /// 移除后的刷新（`refreshFolderCount`，BucketScreen 成功回调调用的同一个方法）必须连同已保存范围一起重读——
+    /// 只读登记数会让「素材文件夹 N」继续按旧 scope 勾选显示移除前的个数。
+    /// 反证：`refreshFolderCount` 去掉 `rereadSavedScope()`，本条红（app.scope 还是旧勾选）。
+    func test_removing_the_last_folder_refreshes_the_saved_scope_row() async {
+        let (app, engine, media) = make()
+        engine.folderInfos = [FolderSourceInfo(id: "f1", displayName: "A", available: true)]
+        media.known = ["folder:f1"]
+        media.disk = ["folder:f1"]
+        app.refresh()
+        XCTAssertEqual(app.selectedFolderCount, 1, "前置：范围行显示「素材文件夹 1」")
+        // 模拟真实 removeFolderSource 的磁盘副作用：磁盘范围与登记表一起更新。
+        engine.folderInfos = []
+        media.disk = []
+        app.refreshFolderCount()
+        XCTAssertEqual(app.selectedFolderCount, 0, "移除后范围行不得继续按旧勾选显示「素材文件夹 1」")
     }
 
     /// #1789（验收 2/3）：「从文件选择」与「从相册选择」同一条登记链路——pickedChosen → addPicked；

@@ -19,6 +19,8 @@ final class SingleTransferStatusTests: XCTestCase {
     }
 
     /// #1784：设置按「自动备份 / 单次传输 / 传输条件与通知 / 更多」固定分组，组序固定。
+    /// 评审 Cu：组序用各组的**实际控件**锚定（开关 / 入口行的标识），不只比注释位置——
+    /// 只交换两个 Section 的内容、把注释留在原地，控件顺序一变本条就红。
     func testSettingsGroupsAreFixedAndInOrder() throws {
         let source = try source("apps/ios/PPass/Home/SettingsScreen.swift")
         let one = source.range(of: "// ── #1789 固定分组 1/4")?.lowerBound
@@ -32,18 +34,42 @@ final class SingleTransferStatusTests: XCTestCase {
         if let one, let two, let three, let four {
             XCTAssertTrue(one < two && two < three && three < four, "组序：自动备份 → 单次传输 → 传输条件与通知 → 更多")
         }
+        // 各组的标志性行（组的第一行就是这组的名字）：位置必须落在自己组的标记之后、下一个组标记之前。
+        let anchors: [(String, String, String)] = [
+            ("route: .bucket", "// ── #1789 固定分组 1/4", "// ── #1789 固定分组 2/4"),
+            ("pick_from_photos_label", "// ── #1789 固定分组 2/4", "// ── #1789 固定分组 3/4"),
+            ("setting_wifi_only", "// ── #1789 固定分组 3/4", "// ── #1789 固定分组 4/4"),
+            ("route: .more", "// ── #1789 固定分组 4/4", "// ── #1789 固定分组结束"),
+        ]
+        for (anchor, marker, next) in anchors {
+            let position = source.range(of: anchor)?.lowerBound
+            XCTAssertNotNil(position, "缺组标志性行：\(anchor)")
+            let start = source.range(of: marker)?.lowerBound
+            let end = source.range(of: next)?.lowerBound
+            if let position, let start, let end {
+                XCTAssertTrue(position > start && position < end, "行 \(anchor) 必须落在「\(marker)」组内")
+            }
+        }
     }
 
     /// #1784：单次传输下固定为「从相册选择」「从文件选择」，两行只发起选择，不显示进度、结果或最近一批。
+    /// 评审 Cy：逐个按钮核对标签与动作的配对——把两个按钮的动作互换，按「组里存在两个标签 + 两个动作」判的写法仍会通过。
     func testTheTwoSingleTransferEntriesOnlyInitiateSelection() throws {
         let source = try source("apps/ios/PPass/Home/SettingsScreen.swift")
         let group = self.group(source, "2/4")
         XCTAssertNotNil(group, "缺「单次传输」分组")
         if let group {
-            XCTAssertTrue(group.contains("pick_from_photos_label"), "「从相册选择」在单次传输组里")
-            XCTAssertTrue(group.contains("pick_from_files_label"), "「从文件选择」在单次传输组里")
-            XCTAssertTrue(group.contains("app.pickerRequested = true"), "相册入口发起选择")
-            XCTAssertTrue(group.contains("showFilePicker = true"), "文件入口发起选择")
+            // 按 Button 切开：每个入口块内，标签与动作必须一一配对。
+            let buttons = group.components(separatedBy: "Button {").dropFirst()
+            XCTAssertTrue(buttons.count >= 2, "单次传输组固定两行入口")
+            XCTAssertTrue(
+                buttons.contains { $0.contains("app.pickerRequested = true") && $0.contains("pick_from_photos_label") },
+                "「从相册选择」必须配发起相册选择器（app.pickerRequested = true）",
+            )
+            XCTAssertTrue(
+                buttons.contains { $0.contains("showFilePicker = true") && $0.contains("pick_from_files_label") },
+                "「从文件选择」必须配发起文件选择器（showFilePicker = true）",
+            )
             XCTAssertFalse(group.contains("pickedBatch"), "入口行不显示进度 / 结果 / 最近一批")
             XCTAssertFalse(group.contains("picked_progress"), "入口行不带状态句")
         }

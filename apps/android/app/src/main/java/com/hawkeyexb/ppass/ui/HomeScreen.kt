@@ -149,8 +149,11 @@ fun heroRenderOf(
     // #1789 接线（#1788 判定）：有可用来源（folder-only / 混合里的目录）时权限不全不再顶替进度——
     // 目录仍在传，真实数字照常显示（#1784 验收 5，iOS `HomeProjection.heroRender` 同一条）。
     hasUsableSource: Boolean = false,
+    // #1788 评审定案（同判据接线）：空范围缺的是**来源**不是权限——「自动备份已停止」只给真的选了
+    // 相册的范围；空范围落到下面的正常分支，与权限完整时空范围显示的是同一种状态。
+    hasSelectedAlbum: Boolean = true,
 ): HeroRender = when {
-    mediaAccess != MediaAccess.FULL && !hasUsableSource -> HeroRender.AccessBlocked
+    mediaAccess != MediaAccess.FULL && !hasUsableSource && hasSelectedAlbum -> HeroRender.AccessBlocked
     !countsReadable -> HeroRender.CountsUnreadable
     triplet == null -> if (scopeSaved) HeroRender.Unreadable else HeroRender.NoAlbums
     // clamp 后的 m 恒 ≤ n，所以这里必须读 confirmedRaw：真机「23 / 23」那一例
@@ -222,8 +225,11 @@ fun visibleWaitReasonRes(
     wifiOnly: Boolean = true,
     // #1789 接线（#1788 判定）：folder-only 时英雄卡在显示真实进度（挂载点在场），等待原因照常说。
     hasUsableSource: Boolean = false,
+    // #1789（评审 A4）：手选的传输不依赖相册权限——还有未结束的单次项时，ACCESS 不压制等待原因，
+    // 用户看得到文件传输为什么没开始（进程中断留在 pending/transferring 的行同样算 open）。
+    pickedOpen: Boolean = false,
 ): Int? {
-    if (mediaAccess != MediaAccess.FULL && !hasUsableSource) return null
+    if (mediaAccess != MediaAccess.FULL && !hasUsableSource && !pickedOpen) return null
     if (pairingLost) return null
     if (state !is BackupUiState.Waiting) return null
     if (state.reason == WaitReason.WIFI && !wifiOnly) return R.string.backup_waiting_constraints
@@ -441,7 +447,8 @@ fun HomeScreen(
         // 诚实说明「只授权了部分照片——备份需要完整相册权限」+ 去设置。
         // #1789 接线（#1788 判定）：照片权限不全时，只有「没有可用来源」才是真的停了——
         // folder-only 继续出真实进度（#1784 验收 5），混合范围单独说相册侧（iOS HeroCard 同一闸门）。
-        val heroBlocked = autoBackupRuleOn && mediaAccess != MediaAccess.FULL && !hasUsableSource
+        // 空范围缺的是来源不是权限，不算 blocked（[heroRenderOf] 同一判据）。
+        val heroBlocked = autoBackupRuleOn && mediaAccess != MediaAccess.FULL && !hasUsableSource && hasSelectedAlbum
         Surface(
             color = if (heroBlocked) PPColor.ActBg else PPColor.SafeBg,
             shape = RoundedCornerShape(PPSize.RadiusCard),
@@ -463,7 +470,7 @@ fun HomeScreen(
                         border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.4f)),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = PPColor.Act),
                     ) { Text(stringResource(R.string.hero_adjust_scope_action), fontSize = 15.sp, fontWeight = FontWeight.Bold) }
-                } else if (mediaAccess != MediaAccess.FULL && !hasUsableSource) {
+                } else if (mediaAccess != MediaAccess.FULL && !hasUsableSource && hasSelectedAlbum) {
                     Text(stringResource(R.string.auto_backup_blocked_hero), color = PPColor.Ink, fontSize = 15.sp)
                     // #1353：权限被收回（部分 / 全拒）后的唯一出口：去本 App 的系统设置页改回。开关保持开，回来按真实权限现算。
                     // #1788：空范围缺的是**来源**不是权限，去设置授权也不会添加来源，不出（hasSelectedAlbum）。
@@ -480,7 +487,7 @@ fun HomeScreen(
                 } else {
                 val t = triplet
                 val heroRender = heroRenderOf(mediaAccess, t, countsReadable = countsReadable, scopeSaved = scopeSaved,
-                    hasUsableSource = hasUsableSource)
+                    hasUsableSource = hasUsableSource, hasSelectedAlbum = hasSelectedAlbum)
                 if (heroRender == HeroRender.Triplet && t != null && t.n == 0L && t.m == 0L && scopeHasStart) {
                     // #1272 §5：「从某天起」且范围里还没有照片——空状态一句话（拍完回到 P-Pass，前台补捞会把它传上去）。
                     Text(stringResource(R.string.auto_backup_from_today_empty), color = PPColor.Ink, fontSize = 15.sp)
@@ -629,6 +636,7 @@ fun HomeScreen(
                                     reasonRes = waitReasonRes,
                                     wifiOnly = wifiOnly,
                                     hasUsableSource = hasUsableSource,
+                                    pickedOpen = (pickedBatch?.open ?: 0) > 0,
                                 )
                             // #1789：自动备份关着是正常状态——Ready 不说「插电 + Wi-Fi 时自动进行」
                             //（iOS Ready / 闸门不过时同样不出字），等待与进行中照常说话；
@@ -695,9 +703,12 @@ fun HomeScreen(
                     // #418：英雄区原来这里有 MOB-89 的「取消当前轮」降级动作——取消轮已经没有了，
                     // 取消的唯一入口是下方设置卡的「取消剩余 N 张」（带写明 N 的确认框）。
                 }
+                }
                 // ── #1784：单次传输状态只在英雄区出现——进行中的「正在传 x/y」与结算结果句。
                 // 进程被杀没传完的不算失败（验收 4）：Android 的手选行留在 pending/transferring，
                 // 下次打开由引擎按挑选顺序续传——它们仍是 open，出的是进度句不是失败句。
+                // #1789（评审）：手选传输不依赖相册权限——权限卡顶替自动备份时这行照样在场
+                //（iOS HeroCard 同一闸门），否则用户从文件选择发起的传输在 blocked 时完全看不见。
                 SingleTransferStatus.heroLine(pickedBatch)?.let { picked ->
                     Spacer(Modifier.height(8.dp))
                     when (picked) {
@@ -714,7 +725,6 @@ fun HomeScreen(
                             )
                         }
                     }
-                }
                 }
             }
         }

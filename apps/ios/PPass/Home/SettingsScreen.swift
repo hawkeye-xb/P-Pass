@@ -249,7 +249,7 @@ struct SettingsScreen: View {
                                now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
         if unreadable { return L.s("backup_scope_unreadable") }
         let albums = albumCount.flatMap { $0 > 0 ? L.p("backup_scope_n", $0) : nil }
-        let folders = folderCount > 0 ? "\(L.s("folder_settings_title")) \(folderCount)" : nil
+        let folders = folderCount > 0 ? "\(L.s("folder_scope_noun")) \(folderCount)" : nil
         let sources = [albums, folders].compactMap { $0 }.joined(separator: " + ")
         guard !sources.isEmpty else { return L.s("backup_scope_none") }
         guard let since else { return sources }
