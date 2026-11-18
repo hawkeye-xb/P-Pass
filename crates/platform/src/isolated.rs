@@ -80,6 +80,10 @@ impl IsolatedChild {
 }
 
 /// 拉起 `exe`（无参数），stdin/stdout 接管道，stderr 丢弃。
+///
+/// 失败分两类，供调用方区分处置（macOS 预检；docs/decisions/2026-11-18-sandbox-preflight-unknown-state.md）：
+/// `ErrorKind::TimedOut` = 预检期限内没拿到结论（超时，未知），**可重试**——本机可能只是暂时忙；
+/// 其余错误 = 沙箱明确拒绝或环境不可用，属本机系统性失败。两类都不回退成不隔离的拉起。
 pub fn spawn_isolated(exe: &Path, limits: &Limits) -> io::Result<IsolatedChild> {
     sys::spawn(exe, limits)
 }
