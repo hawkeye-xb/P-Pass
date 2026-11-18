@@ -226,19 +226,16 @@ final class FolderPickerDrive: XCTestCase {
         // 系统照片权限弹窗（中英）：弹窗只会出现在启动后一两秒内——轮询 6 秒，点到就处理；
         // 没弹窗（权限已在）立即走 HOME_WAIT，不再陪等 20 秒把「+45s 按Home」拖成「+65s」，
         // 否则短备份在按 Home 前就收场，E3-6 的「传输中退后台」窗口就没了。
-        let photosFull = ["allow full access", "allow access to all photos", "允许完全访问", "允许访问所有照片", "允许访问全部照片"]
+        // 按钮表与点击方式跟 UIRegress 共用一份：弹窗在 SpringBoard 的 staged alert 里，label 还会出现两份。
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         var granted = false
         let deadline = Date().addingTimeInterval(6)
         while Date() < deadline {
-            for label in photosFull {
-                let button = app.buttons[label].firstMatch
-                if button.exists && button.isHittable {
-                    button.tap()
-                    granted = true
-                    break
-                }
+            // 点完要确认框真的没了：坐标兜底没点中时框还在，这时按 Home 等于没授权。
+            if let tapped = UIReg.tapAlertButton(SystemButton.photosFull, roots: [springboard, app]) {
+                UIReg.say("SYSTEM_ALERT photos tapped=\(tapped.label) (press-home)")
+                if UIReg.alertGone(tapped, springboard: springboard, app: app) { granted = true; break }
             }
-            if granted { break }
             sleep(1)
         }
         // UIREG_HOME_WAIT = 启动后按 Home 前的等待秒数；点了权限弹窗就先让授权落两拍再计时。

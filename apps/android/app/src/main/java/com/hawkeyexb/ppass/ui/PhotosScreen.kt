@@ -20,6 +20,7 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -35,6 +36,13 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -665,6 +673,9 @@ private fun MediaViewer(
     HorizontalPager(
         state = pagerState,
         modifier = Modifier.fillMaxSize(),
+        // #1800：预取前后各一页——手指刚滑动时相邻页已经在 composition 里，
+        // 翻页不会先白一帧；缩放仍归 Telephoto，横向手势在未放大时才交给 Pager。
+        beyondViewportPageCount = 1,
     ) { page ->
         val asset = session.assets[page]
         val isMine = localNodeId?.let { asset.sourceDeviceOrNull() == it } == true
@@ -797,11 +808,20 @@ private fun PhotoViewer(
             androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
         ) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(
-                stringResource(R.string.back), fontSize = 17.sp, color = PPColor.Paper,
-                modifier = Modifier.clickable(onClick = onClose).padding(10.dp),
-            )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // #1800：关闭是本页唯一的退出动作，交给 Material3 IconButton——
+            // 48dp 触控区、涟漪、role=Button 与 contentDescription 都由组件给出。
+            IconButton(onClick = onClose) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.back),
+                    tint = PPColor.Paper,
+                )
+            }
             // 设计稿 M9：头部只有尺寸信息，分享挪到底部按钮。
             // IDX-03：尺寸未知（视频 / 探测不到）时整个 Text 不出现——
             // 宁可空着，也不画 `0×0` 那个假数字。
@@ -876,7 +896,9 @@ private fun PhotoViewer(
     }
 }
 
-/** RET-01: 查看页动作按钮（纸底墨字胶囊，与 FilterChip 同族）。 */
+/** RET-01: 查看页动作按钮（纸底墨字胶囊，与 FilterChip 同族）。
+ *  #1800：底层换 Material3 `Button`——点击涟漪、`enabled` 的禁用语义与
+ *  role=Button 都交给组件，只保留品牌配色与胶囊形状；不再手写 clickable。 */
 @Composable
 internal fun ViewerAction(
     label: String,
@@ -886,22 +908,29 @@ internal fun ViewerAction(
     leadingIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
     height: androidx.compose.ui.unit.Dp = 44.dp,
 ) {
-    Row(
-        modifier
-            .height(height)
-            .clip(RoundedCornerShape(999.dp))
-            .background(if (enabled) PPColor.Paper else PPColor.PaperDim.copy(alpha = 0.35f))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 20.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.height(height),
+        shape = RoundedCornerShape(999.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = PPColor.Paper,
+            contentColor = PPColor.Ink,
+            disabledContainerColor = PPColor.PaperDim.copy(alpha = 0.35f),
+            disabledContentColor = PPColor.PaperDim,
+        ),
+        contentPadding = PaddingValues(horizontal = 20.dp),
     ) {
-        val tint = if (enabled) PPColor.Ink else PPColor.PaperDim
         if (leadingIcon != null) {
-            androidx.compose.material3.Icon(leadingIcon, contentDescription = null, tint = tint)
+            Icon(leadingIcon, contentDescription = null)
             Spacer(Modifier.size(6.dp))
         }
-        Text(label, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = tint)
+        Text(
+            label,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = LocalContentColor.current,
+        )
     }
 }
 

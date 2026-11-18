@@ -8,10 +8,10 @@ RULES="$ROOT/tools/ios/ui-regress-rules.tsv"
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
-expect() { # $1 期望 PASS|FAIL $2 用例 $3 日志 $4 开跑 epoch $5 说明
+expect() { # $1 期望 PASS|FAIL $2 用例 $3 日志 $4 开跑 epoch $5 说明 [$6 开跑前的日志快照]
   local got
-  got=$(bash "$J" judge "$RULES" "$2" "$3" "$4" | cut -f1)
-  [ "$got" = "$1" ] || fail "$5：期望 $1，实际 ${got}（$(bash "$J" judge "$RULES" "$2" "$3" "$4" | cut -f2)）"
+  got=$(bash "$J" judge "$RULES" "$2" "$3" "$4" ${6+"$6"} | cut -f1)
+  [ "$got" = "$1" ] || fail "$5：期望 $1，实际 ${got}（$(bash "$J" judge "$RULES" "$2" "$3" "$4" ${6+"$6"} | cut -f2)）"
   echo "ok  $5 → $1"
 }
 iso() { python3 -I -c 'import datetime, sys; print(datetime.datetime.fromtimestamp(int(sys.argv[1])).astimezone().isoformat(timespec="milliseconds"))' "$1"; }
@@ -53,6 +53,63 @@ printf '%s picked: 1 chosen\n' "$(iso "$NOW")" >>"$T/order.log"
 expect FAIL SettingsPick "$T/order.log" "$NOW" "选了但没登记上不算过"
 printf '%s picked: 1 registered\n' "$(iso "$NOW")" >>"$T/order.log"
 expect PASS SettingsPick "$T/order.log" "$NOW" "设置页再选一次"
+
+# 用例跑完后 App 被系统后台任务拉起（同一开跑时刻之后有两条 process start）⇒ 通过行不许被切掉（#1850）。
+cat >"$T/relaunch.log" <<EOF
+$(iso "$NOW") process start: pid=200 version=0.11.0(1) appState=active
+$(iso "$NOW") onboarding: decision shown
+$(iso "$NOW") onboarding: photo access after prompt=full
+$(iso "$((NOW + 4))") process start: pid=300 version=0.11.0(1) appState=active
+$(iso "$((NOW + 4))") launch origin: background (com.hawkeyexb.ppass.refresh)
+EOF
+expect PASS DecisionScopeFull "$T/relaunch.log" "$NOW" "用例结束后后台拉起 App 不切掉通过行"
+
+# 上一例的启动行落在开跑前 5 秒的时钟容差窗口里、本例自己的启动在后面 ⇒ 不许把上一例的行带进切片。
+cat >"$T/tolerance.log" <<EOF
+$(iso "$((NOW - 2))") process start: pid=100 version=0.11.0(1) appState=active
+$(iso "$((NOW - 1))") onboarding: decision shown
+$(iso "$((NOW - 1))") onboarding: photo access after prompt=full
+$(iso "$((NOW + 3))") process start: pid=200 version=0.11.0(1) appState=active
+$(iso "$((NOW + 3))") logs: Logs excluded from backup = true
+EOF
+expect FAIL DecisionScopeFull "$T/tolerance.log" "$NOW" "容差窗口里的上一例启动不许带进来"
+
+# 设备时钟比主机慢：本例的启动行落在开跑时刻之前，之后还有一条后台拉起的启动。
+# 有开跑前的日志快照时以快照为边界，本例自己的启动行不会被后台那条顶掉。
+cat >"$T/skew-base.log" <<EOF
+$(iso "$((NOW - 10))") process start: pid=90 version=0.11.0(1) appState=active
+$(iso "$((NOW - 9))") onboarding: decision shown
+EOF
+cat >"$T/skew.log" <<EOF
+$(iso "$((NOW - 10))") process start: pid=90 version=0.11.0(1) appState=active
+$(iso "$((NOW - 9))") onboarding: decision shown
+$(iso "$((NOW - 3))") process start: pid=100 version=0.11.0(1) appState=active
+$(iso "$((NOW - 1))") onboarding: decision shown
+$(iso "$NOW") onboarding: photo access after prompt=full
+$(iso "$((NOW + 5))") process start: pid=300 version=0.11.0(1) appState=active
+EOF
+expect PASS DecisionScopeFull "$T/skew.log" "$NOW" "有时钟差时按开跑前的日志快照切片" "$T/skew-base.log"
+
+# 快照之前已经有完整通过行、快照之后本例没有 ⇒ 必须 FAIL（边界之前的行不算本例的）。
+cat >"$T/pre.log" <<EOF
+$(iso "$((NOW - 9))") process start: pid=90 version=0.11.0(1) appState=active
+$(iso "$((NOW - 8))") onboarding: decision shown
+$(iso "$((NOW - 8))") onboarding: photo access after prompt=full
+EOF
+cp "$T/pre.log" "$T/pre-base.log"
+printf '%s process start: pid=200 version=0.11.0(1) appState=active\n' "$(iso "$NOW")" >>"$T/pre.log"
+expect FAIL DecisionScopeFull "$T/pre.log" "$NOW" "快照之前的通过行不算本例的" "$T/pre-base.log"
+
+# 快照文件拉不回来（不存在）⇒ 退回按时间找：本例自己的通过行照样算（ok.log），
+# 但上一例的通过行不许带进来——日志前半段是上一例的、后半段只有本例的启动行 ⇒ 必须 FAIL。
+expect PASS DecisionScopeFull "$T/ok.log" "$NOW" "快照拉不回来时退回按时间找（本例通过）" "$T/no-such-baseline.log"
+cat >"$T/nobase.log" <<EOF
+$(iso "$((NOW - 9))") process start: pid=90 version=0.11.0(1) appState=active
+$(iso "$((NOW - 8))") onboarding: decision shown
+$(iso "$((NOW - 8))") onboarding: photo access after prompt=full
+$(iso "$NOW") process start: pid=200 version=0.11.0(1) appState=active
+EOF
+expect FAIL DecisionScopeFull "$T/nobase.log" "$NOW" "快照拉不回来时上一例的通过行不算本例的" "$T/no-such-baseline.log"
 
 # 未知用例、日志拉不回 ⇒ FAIL。
 expect FAIL NoSuchCase "$T/ok.log" "$NOW" "判定表里没有的用例"
