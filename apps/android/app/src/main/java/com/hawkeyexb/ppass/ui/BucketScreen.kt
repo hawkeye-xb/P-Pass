@@ -1,6 +1,8 @@
-// M5（全页面状态稿）：选相册——2 列封面卡片网格，右上角圆形勾选角标，
-// 单个主按钮（取代旧的竖排复选框列表 + "取消/备份N个相册"两按钮）。共用入口：onboarding 配对成功后 与
-// 设置页"备份哪些照片"重选，都是这一个 composable。
+// M5（全页面状态稿）：选相册——2 列封面卡片网格。#1797：相册卡、文件夹卡与
+// 「添加文件夹」改用 #1796 的 Material 3 标准组件（SourceCard / AddSourceCard），
+// 勾选、菜单与触控语义由组件承载，不再自绘角标、点击和描边；同一网格同一尺寸。
+// 单个主按钮（取代旧的竖排复选框列表 + "取消/备份N个相册"两按钮）。共用入口：
+// onboarding 配对成功后 与 设置页"备份哪些照片"重选，都是这一个 composable。
 // #1263：标题「备份哪些照片」；相册之外加一行时间二选一（从今天起 / 全部）；删掉底部汇总句（每个相册有张数，
 // Wi-Fi 条件在设置里）；按钮首次叫「开始备份」，编辑时叫「保存」，其余完全相同。不显示大小（iOS 没有公开接口，两端对齐）。
 package com.hawkeyexb.ppass.ui
@@ -11,29 +13,27 @@ import android.net.Uri
 import android.os.Build
 import android.util.Size
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -47,17 +47,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -66,6 +62,10 @@ import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.backup.MediaScanner
 import com.hawkeyexb.ppass.backup.ScopeTime
 import com.hawkeyexb.ppass.backup.newAlbumIds
+import com.hawkeyexb.ppass.ui.components.AddSourceCard
+import com.hawkeyexb.ppass.ui.components.SourceCard
+import com.hawkeyexb.ppass.ui.components.SourceKind
+import com.hawkeyexb.ppass.ui.components.SourceMenuAction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -131,58 +131,20 @@ private fun BucketCoverImage(bucketId: Long, coverUri: Uri?, modifier: Modifier 
     }
 }
 
-/** 右上角勾选角标——设计稿：选中=墨底白勾，未选中=半透明纸底描边圈。 */
+/** 「新」徽标——TriggerPolicy：编辑模式里刚出现、还没进过已保存范围的相册标「新」。
+ *  它只是封面槽里的内容标记，不是选中控件；选中态由 SourceCard 的标准语义承载。 */
 @Composable
-private fun SelectBadge(selected: Boolean, modifier: Modifier = Modifier) {
-    Box(
-        modifier
-            .size(22.dp)
-            .clip(CircleShape)
-            .background(if (selected) PPColor.Ink else PPColor.PaperDim)
-            .then(
-                if (selected) Modifier
-                else Modifier.border(1.5.dp, PPColor.BorderStrong, CircleShape)
-            ),
-        contentAlignment = Alignment.Center,
+private fun NewBadge(modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(6.dp),
+        color = PPColor.Paper,
     ) {
-        if (selected) {
-            Text("✓", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = PPColor.Paper)
-        }
-    }
-}
-
-@Composable
-private fun SourceTypeGlyph(folder: Boolean) {
-    val color = PPColor.Ink40
-    Canvas(Modifier.size(16.dp)) {
-        val stroke = Stroke(width = 1.4.dp.toPx())
-        fun line(path: Path, x1: Float, y1: Float, x2: Float, y2: Float) {
-            path.moveTo(x1.dp.toPx(), y1.dp.toPx())
-            path.lineTo(x2.dp.toPx(), y2.dp.toPx())
-        }
-        if (folder) {
-            val outline = Path()
-            line(outline, 1f, 4f, 6f, 4f)
-            line(outline, 6f, 4f, 8f, 6f)
-            line(outline, 8f, 6f, 15f, 6f)
-            line(outline, 15f, 6f, 15f, 14f)
-            line(outline, 15f, 14f, 1f, 14f)
-            line(outline, 1f, 14f, 1f, 4f)
-            drawPath(outline, color, style = stroke)
-        } else {
-            val back = Path()
-            line(back, 4f, 1f, 15f, 1f)
-            line(back, 15f, 1f, 15f, 12f)
-            line(back, 15f, 12f, 4f, 12f)
-            line(back, 4f, 12f, 4f, 1f)
-            val front = Path()
-            line(front, 1f, 4f, 12f, 4f)
-            line(front, 12f, 4f, 12f, 15f)
-            line(front, 12f, 15f, 1f, 15f)
-            line(front, 1f, 15f, 1f, 4f)
-            drawPath(back, color, style = stroke)
-            drawPath(front, color, style = stroke)
-        }
+        Text(
+            stringResource(R.string.bucket_new),
+            fontSize = 11.sp, fontWeight = FontWeight.Bold, color = PPColor.Waiting,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
     }
 }
 
@@ -224,79 +186,42 @@ private fun AlbumNoAccessNotice(canPrompt: Boolean, onRequest: () -> Unit, onOpe
     }
 }
 
+/**
+ * #1797：相册与文件夹共用的标准来源卡。勾选/点击/菜单语义由 SourceCard 承载，
+ * 封面复用 BucketCoverImage；「新」徽标叠在封面槽内。卡片尺寸（封面高度、内容区）
+ * 由 SourceCard 统一给出，相册、文件夹与「添加文件夹」天然同网格同尺寸。
+ */
 @Composable
-private fun BucketCard(
-    bucket: MediaScanner.Bucket,
+private fun BucketSourceCard(
+    title: String,
+    bucketId: Long,
+    coverUri: Uri?,
+    count: Int,
+    kind: SourceKind,
+    kindLabel: String,
     selected: Boolean,
-    isNew: Boolean,
-    isFolder: Boolean,
-    actionLabel: String? = null,
-    onAction: (() -> Unit)? = null,
-    secondaryActionLabel: String? = null,
-    onSecondaryAction: (() -> Unit)? = null,
-    onToggle: () -> Unit,
+    isNew: Boolean = false,
+    menuActions: List<SourceMenuAction> = emptyList(),
+    onClick: () -> Unit,
 ) {
-    Column(
-        Modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(PPColor.Paper)
-            .border(
-                2.dp,
-                if (selected) PPColor.Ink else PPColor.Border,
-                RoundedCornerShape(16.dp),
-            )
-            .clickable(onClick = onToggle),
-    ) {
-        Box {
-            BucketCoverImage(
-                bucket.id, bucket.coverUri,
-                modifier = Modifier.fillMaxWidth().aspectRatio(1.6f),
-            )
-            SelectBadge(selected, Modifier.align(Alignment.TopEnd).padding(8.dp))
-        }
-        Column(Modifier.height(72.dp).padding(12.dp, 9.dp, 12.dp, 11.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                SourceTypeGlyph(isFolder)
-                Text(
-                    bucket.name ?: stringResource(R.string.bucket_unnamed),
-                    fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold,
-                    color = PPColor.Ink,
-                    modifier = Modifier.weight(1f).padding(start = 6.dp),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (isNew) {
-                    Text(
-                        stringResource(R.string.bucket_new),
-                        fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                        color = PPColor.Waiting,
-                        modifier = Modifier.padding(start = 6.dp),
-                    )
-                }
+    SourceCard(
+        title = title,
+        countLabel = stringResource(R.string.bucket_count, count),
+        kind = kind,
+        kindLabel = kindLabel,
+        selected = selected,
+        selectedDescription = stringResource(R.string.source_selected),
+        unselectedDescription = stringResource(R.string.source_unselected),
+        onClick = onClick,
+        cover = {
+            BucketCoverImage(bucketId, coverUri, modifier = Modifier.fillMaxSize())
+            if (isNew) {
+                NewBadge(Modifier.align(Alignment.TopStart).padding(8.dp))
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    stringResource(R.string.bucket_count, bucket.count),
-                    fontSize = 12.5.sp, color = PPColor.Ink40,
-                    modifier = Modifier.weight(1f),
-                )
-                if (actionLabel != null && onAction != null) {
-                    Text(
-                        actionLabel,
-                        fontSize = 12.sp, color = PPColor.Act,
-                        modifier = Modifier.clickable(onClick = onAction).padding(start = 8.dp),
-                    )
-                }
-                if (secondaryActionLabel != null && onSecondaryAction != null) {
-                    Text(
-                        secondaryActionLabel,
-                        fontSize = 12.sp, color = PPColor.Act,
-                        modifier = Modifier.clickable(onClick = onSecondaryAction).padding(start = 8.dp),
-                    )
-                }
-            }
-        }
-    }
+        },
+        menuActions = menuActions,
+        menuContentDescription = stringResource(R.string.source_more_actions),
+    )
 }
 
 /**
@@ -374,10 +299,14 @@ fun BucketScreen(
         ) {
         Column(Modifier.fillMaxSize().padding(24.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "‹", fontSize = 24.sp, color = PPColor.Ink,
-                    modifier = Modifier.clickable(onClick = onCancel).padding(4.dp, 0.dp, 10.dp, 0.dp),
-                )
+                // #1797：返回交给 Material3 IconButton——触控区、涟漪、role 与描述由组件给出，与 FolderScreen 同款。
+                IconButton(onClick = onCancel) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = stringResource(R.string.back),
+                        tint = PPColor.Ink,
+                    )
+                }
                 Text(stringResource(R.string.backup_scope), fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink)
             }
             Spacer(Modifier.height(12.dp))
@@ -414,30 +343,38 @@ fun BucketScreen(
                     }
                     if (offersAlbums) {
                         items(buckets, key = { "album:${it.id}" }) { b ->
-                            BucketCard(
-                                bucket = b,
+                            BucketSourceCard(
+                                title = b.name ?: stringResource(R.string.bucket_unnamed),
+                                bucketId = b.id,
+                                coverUri = b.coverUri,
+                                count = b.count,
+                                kind = SourceKind.ALBUM,
+                                kindLabel = stringResource(R.string.source_kind_album),
                                 selected = b.id in checked,
                                 isNew = b.id in newIds,
-                                isFolder = false,
-                                onToggle = { checked = if (b.id in checked) checked - b.id else checked + b.id },
+                                onClick = {
+                                    checked = if (b.id in checked) checked - b.id else checked + b.id
+                                },
                             )
                         }
                     }
                     items(folderBuckets, key = { "folder:${it.key}" }) { folder ->
-                        BucketCard(
-                            bucket = folder.bucket,
+                        // #1797：重新授权与移除收进标准菜单；移除仍先过确认弹窗（语义不变）。
+                        BucketSourceCard(
+                            title = folder.bucket.name ?: stringResource(R.string.bucket_unnamed),
+                            bucketId = folder.bucket.id,
+                            coverUri = folder.bucket.coverUri,
+                            count = folder.bucket.count,
+                            kind = SourceKind.FOLDER,
+                            kindLabel = stringResource(R.string.source_kind_folder),
                             selected = folder.key in checkedFolders,
-                            isNew = false,
-                            isFolder = true,
-                            actionLabel = stringResource(
-                                if (folder.needsPermission) R.string.folder_reauthorize else R.string.folder_remove,
-                            ),
-                            onAction = {
-                                if (folder.needsPermission) onReauthorizeFolder(folder.key) else removing = folder
+                            menuActions = buildList {
+                                if (folder.needsPermission) {
+                                    add(SourceMenuAction(stringResource(R.string.folder_reauthorize)) { onReauthorizeFolder(folder.key) })
+                                }
+                                add(SourceMenuAction(stringResource(R.string.folder_remove)) { removing = folder })
                             },
-                            secondaryActionLabel = if (folder.needsPermission) stringResource(R.string.folder_remove) else null,
-                            onSecondaryAction = if (folder.needsPermission) { { removing = folder } } else null,
-                            onToggle = {
+                            onClick = {
                                 checkedFolders = if (folder.key in checkedFolders) {
                                     checkedFolders - folder.key
                                 } else {
@@ -447,28 +384,11 @@ fun BucketScreen(
                         )
                     }
                     item(key = "add-folder") {
-                        Column(
-                            Modifier
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(PPColor.ActBg)
-                                .border(2.dp, PPColor.Border, RoundedCornerShape(16.dp))
-                                .clickable(enabled = !saving, onClick = onAddFolder),
-                        ) {
-                            Box(
-                                Modifier.fillMaxWidth().aspectRatio(1.6f),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text("+", fontSize = 32.sp, fontWeight = FontWeight.Light, color = PPColor.Ink40)
-                            }
-                            Column(Modifier.height(72.dp).padding(12.dp, 9.dp, 12.dp, 11.dp)) {
-                                Text(
-                                    stringResource(R.string.folder_add),
-                                    fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = PPColor.Ink,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
+                        AddSourceCard(
+                            label = stringResource(R.string.folder_add),
+                            actionContentDescription = stringResource(R.string.folder_add),
+                            onClick = { if (!saving) onAddFolder() },
+                        )
                     }
                 }
             }

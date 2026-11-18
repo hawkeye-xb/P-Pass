@@ -1,11 +1,10 @@
 // #1762「素材文件夹」最小二级页：添加（系统目录选择器）/ 查看（名称 + 授权状态）/ 移除 / 重新授权。
-// 正式 UX 设计后置（issue #1762：先做真实功能闭环）；这里的结构照设置卡现有行与存储电脑详情页的既有样式拼。
+// #1797：返回与授权动作、添加动作改用 Material 3 标准组件（IconButton / TextButton / Card），
+// 不再自绘 clickable 文本；授权状态展示与移除确认弹窗保持不变。
 package com.hawkeyexb.ppass.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,7 +19,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -57,10 +62,14 @@ fun FolderScreen(
             .verticalScroll(rememberScrollState()),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "‹", fontSize = 24.sp, color = PPColor.Ink,
-                modifier = Modifier.clickable(onClick = onBack).padding(4.dp, 0.dp, 12.dp, 0.dp),
-            )
+            // #1797：返回交给 Material3 IconButton——触控区、涟漪、role 与 contentDescription 由组件给出。
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.back),
+                    tint = PPColor.Ink,
+                )
+            }
             Text(
                 stringResource(R.string.folder_settings_title),
                 fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
@@ -101,34 +110,36 @@ fun FolderScreen(
                     Spacer(Modifier.height(10.dp))
                     Row {
                         if (folder.needsPermission) {
-                            Text(
-                                stringResource(R.string.folder_reauthorize),
-                                fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
-                                modifier = Modifier.clickable { onReauthorize(folder) }.padding(vertical = 6.dp),
-                            )
+                            TextButton(onClick = { onReauthorize(folder) }) {
+                                Text(
+                                    stringResource(R.string.folder_reauthorize),
+                                    fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
+                                )
+                            }
                             Spacer(Modifier.width(24.dp))
                         }
-                        Text(
-                            stringResource(R.string.folder_remove),
-                            fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
-                            modifier = Modifier.clickable { removing = folder }.padding(vertical = 6.dp),
-                        )
+                        TextButton(onClick = { removing = folder }) {
+                            Text(
+                                stringResource(R.string.folder_remove),
+                                fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
+                            )
+                        }
                     }
                 }
             }
             Spacer(Modifier.height(12.dp))
         }
-        Surface(
-            color = PPColor.ActBg,
+        Card(
+            onClick = onAdd,
             shape = RoundedCornerShape(PPSize.RadiusCard),
+            colors = CardDefaults.cardColors(containerColor = PPColor.ActBg, contentColor = PPColor.Ink),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Column(Modifier.clickable(onClick = onAdd).padding(18.dp)) {
-                Text(
-                    stringResource(R.string.folder_add),
-                    fontSize = 17.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
-                )
-            }
+            Text(
+                stringResource(R.string.folder_add),
+                fontSize = 17.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+                modifier = Modifier.padding(18.dp),
+            )
         }
         Spacer(Modifier.height(12.dp))
         Text(

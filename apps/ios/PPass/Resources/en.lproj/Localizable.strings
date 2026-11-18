@@ -194,3 +194,8 @@
 "auto_backup_rule_none_hint" = "No access to photos.";
 "auto_backup_from_today_empty" = "Photos you take today will be sent to your computer automatically. Go take one.";
 "more_label" = "More";
+"source_kind_album" = "Album";
+"source_kind_folder" = "Folder";
+"source_selected" = "Selected";
+"source_unselected" = "Not selected";
+"source_more_actions" = "More actions";

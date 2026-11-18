@@ -38,7 +38,7 @@ class BucketScreenI18nTest {
 
         assertTrue(
             "BucketCard must localize a null bucket name",
-            source.contains("bucket.name ?: stringResource(R.string.bucket_unnamed)"),
+            source.contains("b.name ?: stringResource(R.string.bucket_unnamed)"),
         )
     }
 
@@ -46,6 +46,46 @@ class BucketScreenI18nTest {
     fun unnamed_bucket_has_english_and_chinese_translations() {
         assertEquals("Unnamed", stringValue("values", "bucket_unnamed"))
         assertEquals("未命名", stringValue("values-zh", "bucket_unnamed"))
+    }
+
+    /**
+     * #1797：同名来源要有类型标识——相册与文件夹的类型词两种语言都要有，且互不相同，
+     * 由 SourceCard 用标准图标与读屏描述区分。
+     */
+    @Test
+    fun source_type_labels_are_localized_and_distinct() {
+        assertEquals("Album", stringValue("values", "source_kind_album"))
+        assertEquals("Folder", stringValue("values", "source_kind_folder"))
+        assertEquals("相册", stringValue("values-zh", "source_kind_album"))
+        assertEquals("文件夹", stringValue("values-zh", "source_kind_folder"))
+        assertFalse(
+            "同一名字的相册与文件夹必须能靠类型词区分",
+            stringValue("values", "source_kind_album") == stringValue("values", "source_kind_folder"),
+        )
+    }
+
+    /** #1797：来源卡的选中/未选中状态交给标准读屏语义，两种语言都要有。 */
+    @Test
+    fun selection_state_copy_is_localized() {
+        assertEquals("Selected", stringValue("values", "source_selected"))
+        assertEquals("已选择", stringValue("values-zh", "source_selected"))
+        assertEquals("Not selected", stringValue("values", "source_unselected"))
+        assertEquals("未选择", stringValue("values-zh", "source_unselected"))
+    }
+
+    /** #1797：文件夹卡的菜单按钮描述要本地化（组件默认是写死的中文，不许沿用）。 */
+    @Test
+    fun menu_copy_is_localized_and_wired_to_the_folder_menu() {
+        assertEquals("More actions", stringValue("values", "source_more_actions"))
+        assertEquals("更多操作", stringValue("values-zh", "source_more_actions"))
+        val source = File(
+            repoRoot(),
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/BucketScreen.kt",
+        ).readText()
+        assertTrue(
+            "文件夹菜单按钮要接本地化描述",
+            source.contains("menuContentDescription = stringResource(R.string.source_more_actions)"),
+        )
     }
 
     /** #1788：范围页相册提示的动作分流——系统还肯弹框（rationale=true）就申请；不再弹框（被锁）改「去设置」。 */
