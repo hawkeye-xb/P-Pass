@@ -58,6 +58,17 @@ class UIRegressCase: XCTestCase {
     /// 没匹配上的系统弹窗每个会话只记一次（按钮表要按真机实际标签补）。
     private static var loggedAlertLabels = Set<String>()
 
+    /// 本用例要的照片权限答案。iOS 26+ 的照片框是 SpringBoard 的 staged alert
+    /// （identifier `kTCCServicePhotos-staged-alert`），**出现时机不受测试控制**：实测重装后 App 启动约 3 秒就弹，
+    /// 早于「点选择备份范围」那一步；配对阶段的清场如果只认「允许 / 无线数据」，框会留在屏幕上，
+    /// 之后点 App 的按钮时被 XCUITest 当成 interruption 处理、点击被吞掉（#1844）。所以配对等待和每次点 App 之前
+    /// 都按这个答案把照片框点掉。
+    var photoAnswer: [String] = SystemButton.photosFull
+    /// 清场时已经点掉的照片框按钮；`answerSystemAlert("photos")` 据此知道框已经答过。
+    private(set) var photoAnswered: String?
+    /// 「限制访问」之后那一页选照片是否已经选过（选过就不再选第二次，避免重复导入后 n=0）。
+    private var limitedSheetAnswered = false
+
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
@@ -81,7 +92,9 @@ class UIRegressCase: XCTestCase {
     // MARK: 启动与配对
 
     /// 清掉 App 的存储根与身份（DEBUG 门控键 PPASS_E2E_RESET），落在手动配对页、配对串已填好并自动提交。
-    func launchFreshAndPair(resetPhotos: Bool) {
+    /// [photoAnswer]：本用例要的照片权限答案，照片框在启动阶段就弹时按它点（见 `photoAnswer`）。
+    func launchFreshAndPair(resetPhotos: Bool, photoAnswer: [String] = SystemButton.photosFull) {
+        self.photoAnswer = photoAnswer
         XCTAssertFalse(UIReg.pairLink.isEmpty, "没有配对串（UIREG_PAIR_LINK）")
         if resetPhotos {
             app.resetAuthorizationStatus(for: .photos)
@@ -104,7 +117,7 @@ class UIRegressCase: XCTestCase {
         var retried = false
         let deadline = Date().addingTimeInterval(150)
         while Date() < deadline {
-            if let tapped = tapAlertButton(SystemButton.allow + SystemButton.cellularData, roots: [springboard, app]) { UIReg.say("SYSTEM_ALERT tapped=\(tapped) (pairing)") }
+            answerAnySystemAlert("pairing")
             if code.exists {
                 let value = code.label.filter(\.isNumber)
                 if value.count == 6, value != reported {
@@ -133,10 +146,9 @@ class UIRegressCase: XCTestCase {
         var idle = 0
         let end = Date().addingTimeInterval(maxSeconds)
         while Date() < end, idle < 6 {
-            if let tapped = tapAlertButton(SystemButton.allow + SystemButton.cellularData, roots: [springboard, app]) {
+            if answerAnySystemAlert(what) != nil {
                 n += 1
                 idle = 0
-                UIReg.say("SYSTEM_ALERT tapped=\(tapped) (\(what))")
             } else {
                 idle += 1
             }
@@ -183,38 +195,103 @@ class UIRegressCase: XCTestCase {
                 let buttons = alert.buttons
                 let count = buttons.count
                 var labels: [String] = []
+                // 先把 label 记下来：点完弹窗就消失，之后再读元素的 label 会重新查一次、查不到就判用例失败。
+                var matched: [(label: String, element: XCUIElement)] = []
                 for j in 0..<count {
                     let b = buttons.element(boundBy: j)
                     if b.exists {
-                        labels.append(b.label)
-                        if SystemButton.matches(b.label, choices) {
-                            let label = b.label
-                            b.tap()
-                            return label
-                        }
+                        let label = b.label
+                        labels.append(label)
+                        if SystemButton.matches(label, choices) { matched.append((label, b)) }
                     }
+                }
+                if !matched.isEmpty {
+                    // staged alert 里同一个 label 会出现两份，优先点真能点的那个；都不能点时按第一个的坐标点。
+                    let target = matched.first(where: { $0.element.isHittable }) ?? matched[0]
+                    if target.element.isHittable {
+                        target.element.tap()
+                    } else {
+                        target.element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                    }
+                    return target.label
                 }
                 if !Self.loggedAlertLabels.contains(alert.label) {
                     Self.loggedAlertLabels.insert(alert.label)
                     UIReg.say("ALERT_UNMATCHED label=\(alert.label) buttons=\(labels)")
+                    print("--- alert detail ---\n\(alert.debugDescription)")
                 }
             }
         }
         return nil
     }
 
+    /// 点掉当前画面上任何一种已知系统弹窗（允许 / 无线数据 / 本用例要的照片答案）；返回点到的按钮文字。
+    /// 点到照片框时记下答案；「限制访问」之后系统会给一页选照片，当场选好，不留到后面挡界面。
+    @discardableResult
+    func answerAnySystemAlert(_ what: String) -> String? {
+        let choices = SystemButton.allow + SystemButton.cellularData + photoAnswer
+        guard let tapped = tapAlertButton(choices, roots: [springboard, app]) else { return nil }
+        let isPhoto = SystemButton.matches(tapped, photoAnswer)
+        if isPhoto, photoAnswered == nil { photoAnswered = tapped }
+        UIReg.say("SYSTEM_ALERT \(isPhoto ? "photos " : "")tapped=\(tapped) (\(what))")
+        if isPhoto, SystemButton.matches(tapped, SystemButton.photosLimited) { completeLimitedSheetIfNeeded() }
+        return tapped
+    }
+
+    /// 「限制访问」之后那一页：选第 2 张（第 1 张常已被前面的「先挑几张试试」导入过）、点完成。只选一次。
+    private func completeLimitedSheetIfNeeded() {
+        guard !limitedSheetAnswered else { return }
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            if let cell = pickerCell(at: 1) ?? pickerCell(at: 0) ?? firstPickerCell() {
+                tapPickerCell(cell)
+                UIReg.say("LIMITED_SELECTED 1 (early)")
+                tapButton(SystemButton.limitedDone, what: "limited-done-early")
+                limitedSheetAnswered = true
+                return
+            }
+            usleep(500_000)
+        }
+        UIReg.say("LIMITED_SHEET_MISSING")
+    }
+
     /// 等系统弹窗并点指定选项；超时把弹窗现状打出来再失败（不猜、不点别的）。
-    func answerSystemAlert(_ choices: [String], what: String, timeout: TimeInterval = 20) {
+    /// 照片框如果在清场时已经按同一答案点过，这里直接算答过（判定仍看 App 日志，不静默通过）；
+    /// 答过的答案和这里要的不一致照样红。返回「这次是不是现场点的」。
+    @discardableResult
+    func answerSystemAlert(_ choices: [String], what: String, timeout: TimeInterval = 20) -> Bool {
+        if what == "photos", let answered = photoAnswered {
+            guard SystemButton.matches(answered, choices) else {
+                dump("alert:\(what)")
+                XCTFail("「\(what)」在清场时已经答成「\(answered)」，和用例要的 \(choices) 对不上")
+                return false
+            }
+            UIReg.say("SYSTEM_ALERT \(what) already-answered=\(answered)")
+            return false
+        }
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if let tapped = tapAlertButton(choices, roots: [springboard, app]) {
                 UIReg.say("SYSTEM_ALERT \(what) tapped=\(tapped)")
-                return
+                if what == "photos", SystemButton.matches(tapped, SystemButton.photosLimited) { completeLimitedSheetIfNeeded() }
+                return true
             }
             usleep(300_000)
         }
         dump("alert:\(what)")
         XCTFail("\(Int(timeout)) 秒内没等到「\(what)」系统弹窗里的按钮 \(choices)")
+        return false
+    }
+
+    /// 有弹窗才清：清场本身要等 6 轮空闲（约 1.8 秒），不每次白等。
+    func clearSystemAlertsIfAny(_ what: String, maxSeconds: TimeInterval = 4) {
+        if springboard.alerts.count > 0 || app.alerts.count > 0 { clearSystemAlerts(what, maxSeconds: maxSeconds) }
+    }
+
+    /// 点 App 里的元素前先把系统弹窗清干净：staged 照片框会吞掉点击，被吞掉的那一下会让整个流程卡住（#1844）。
+    func tapApp(_ what: String, _ element: XCUIElement) {
+        clearSystemAlertsIfAny("before:\(what)")
+        element.tap()
     }
 
     // MARK: 系统照片选择器（PHPicker，进程外，界面元素经宿主 App 的无障碍树可见）
@@ -315,6 +392,7 @@ class UIRegressCase: XCTestCase {
     // MARK: 设置页
 
     func openSettingsTab() {
+        clearSystemAlertsIfAny("before:settings-tab")
         for label in UIReg.labels("UIREG_SETTINGS_TAB", fallback: ["设置", "Settings"]) {
             let b = app.tabBars.buttons[label]
             if b.waitForExistence(timeout: 2) { b.tap(); UIReg.say("SETTINGS_OPEN"); return }
@@ -330,7 +408,7 @@ class UIRegressCase: XCTestCase {
 
     /// 决定页选「先挑几张试试」选 1 张 → 进照片页 → 设置页。用于要先到主界面的用例。
     func reachSettingsViaPick() {
-        app.buttons["decisionPickPhotos"].tap()
+        tapApp("decisionPickPhotos", app.buttons["decisionPickPhotos"])
         pickOnePhoto()
         let tab = app.tabBars.firstMatch
         XCTAssertTrue(tab.waitForExistence(timeout: 30), "挑完照片 30 秒内没进照片页")
@@ -353,6 +431,7 @@ class UIRegressCase: XCTestCase {
     }
 
     func flip(_ s: XCUIElement) {
+        clearSystemAlertsIfAny("before:flip")
         // 设置页是 List，开关可能在屏幕外：先滚到可点（最多 4 屏），按坐标点右侧开关本体。
         var swipes = 0
         while !s.isHittable, swipes < 4 {
@@ -364,6 +443,7 @@ class UIRegressCase: XCTestCase {
 
     /// 列表行可能在屏幕外：滚到可点再点。
     func tapWhenVisible(_ el: XCUIElement) {
+        clearSystemAlertsIfAny("before:tapWhenVisible")
         var swipes = 0
         while !el.isHittable, swipes < 4 {
             app.swipeUp()
@@ -376,10 +456,21 @@ class UIRegressCase: XCTestCase {
 
     // MARK: 诊断
 
+    /// 系统弹窗可能承载的进程（#1844）：SpringBoard 之外逐个探一眼有没有 alerts，把数量打出来。
+    /// 照片权限框实测在 SpringBoard（`kTCCServicePhotos-staged-alert`），PhotosUIApp 只承载 PHPicker。
+    static let otherAlertHosts = ["com.apple.PhotosUIPrivate.PhotosUIApp", "com.apple.CoreAuthUI",
+                                  "com.apple.Preferences", "com.apple.InCallService"]
+
     func dump(_ tag: String) {
         UIReg.say("DUMP_BEGIN \(tag)")
         print("--- app ---\n\(app.debugDescription)")
+        print("--- springboard（完整层级）---\n\(springboard.debugDescription)")
         print("--- springboard alerts ---\n\(springboard.alerts.debugDescription)")
+        for id in Self.otherAlertHosts {
+            // 没在跑的进程不能查 alerts（会报 "Application … is not running" 并让用例失败），先看 state。
+            let root = XCUIApplication(bundleIdentifier: id)
+            UIReg.say("ROOT_PROBE \(id) state=\(root.state.rawValue) alerts=\(root.state == .notRunning ? -1 : root.alerts.count)")
+        }
         UIReg.say("DUMP_END \(tag)")
         let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         shot.name = "dump-\(tag)"
