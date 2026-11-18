@@ -41,7 +41,8 @@ class FolderScreenTest {
     }
 
     /** 移除仍先过确认弹窗，确认后才回调 onRemove；语义与替换前一致。
-     *  反证：移除入口先调 onRemove 再设 removing（弹窗拦不住移除）后，本条红。 */
+     *  反证：移除入口先调 onRemove 再设 removing（弹窗拦不住移除）后，本条红；
+     *  把 onRemove(folder) 从 confirmButton 挪进 dismissButton（取消反而删除）后，本条也红。 */
     @Test
     fun remove_still_goes_through_the_confirm_dialog() {
         val source = folderScreenSource()
@@ -55,7 +56,14 @@ class FolderScreenTest {
             -1,
             source.indexOf("onRemove(folder)", confirmIdx + 1),
         )
-        assertTrue("确认弹窗有取消", source.contains("R.string.folder_cancel"))
+        // 两个按钮的回调分别锚定：确认按钮调用移除，取消按钮不调——挪进 dismissButton 的写法判红。
+        assertTrue("确认弹窗有确认按钮", source.contains("confirmButton = {"))
+        assertTrue("确认弹窗有取消按钮", source.contains("dismissButton = {"))
+        val confirmBlock = source.substringAfter("confirmButton = {").substringBefore("dismissButton = {")
+        val dismissBlock = source.substringAfter("dismissButton = {")
+        assertTrue("确认按钮的回调调用 onRemove(folder)", confirmBlock.contains("onRemove(folder)"))
+        assertFalse("取消按钮的回调不许调用 onRemove(folder)", dismissBlock.contains("onRemove(folder)"))
+        assertTrue("取消按钮用 folder_cancel 文案", dismissBlock.contains("R.string.folder_cancel"))
     }
 
     /** 添加动作用 Material3 Card(onClick) 承载，点击仍直连 onAdd，且文案在卡片内。
