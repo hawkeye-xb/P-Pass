@@ -172,6 +172,7 @@
 "identity_unavailable_reset" = "Reset and pair again";
 "identity_unavailable_reset_hint" = "After a reset, this phone counts as a new device and must pair again.";
 "pick_photos_label" = "Pick photos to send";
+"pick_files_label" = "Pick files to send";
 "picked_progress" = "Sending %1$ld/%2$ld";
 "picked_result_delivered" = "Delivered %1$ld";
 "picked_result_failed" = "%1$ld couldn't be sent. Please pick them again.";

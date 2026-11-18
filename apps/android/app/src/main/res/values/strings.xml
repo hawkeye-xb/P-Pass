@@ -280,6 +280,8 @@
     <string name="identity_unavailable_reset">Reset and pair again</string>
     <string name="identity_unavailable_reset_hint">After a reset, this phone counts as a new device and must pair again.</string>
     <string name="pick_photos_label">Pick photos to send</string>
+    <!-- #1798 单次入口的文件选择（SAF）：与相册入口共用同一条 Picked 队列。 -->
+    <string name="pick_files_label">Pick files to send</string>
     <string name="picked_progress">Sending %1$d/%2$d</string>
     <string name="picked_result_delivered">Delivered %1$d</string>
     <string name="picked_result_failed">%1$d couldn\'t be sent. Please pick them again.</string>
