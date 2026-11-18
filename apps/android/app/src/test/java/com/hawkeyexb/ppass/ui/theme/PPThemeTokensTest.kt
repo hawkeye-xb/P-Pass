@@ -12,6 +12,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Density
 import com.hawkeyexb.ppass.ui.PPColor
+import com.hawkeyexb.ppass.ui.PPFont
 import java.io.File
 import kotlin.math.roundToInt
 import kotlinx.serialization.json.Json
@@ -89,6 +90,51 @@ class PPThemeTokensTest {
     }
 
     @Test
+    fun families_follow_tokens_fonts() {
+        // tokens.json font.serif = Newsreader（标题/结论句）、font.sans = Manrope（正文/界面）；
+        // PPFont 的字体文件就是这两个（res/font/newsreader_*、manrope_*）。
+        val serif = tokens["font"]!!.jsonObject["serif"]!!.jsonObject["value"]!!.jsonPrimitive.content
+        val sans = tokens["font"]!!.jsonObject["sans"]!!.jsonObject["value"]!!.jsonPrimitive.content
+        assertTrue("tokens font.serif 不是 Newsreader：$serif", serif.contains("Newsreader"))
+        assertTrue("tokens font.sans 不是 Manrope：$sans", sans.contains("Manrope"))
+        val base = Typography()
+        // hero-number 是衬线档；其余映射过的槽位都是正文/界面档。
+        assertEquals(PPFont.Serif, PPTypography.displayLarge.fontFamily)
+        val sansSlots = listOf(
+            PPTypography.displayMedium, PPTypography.titleLarge, PPTypography.titleMedium,
+            PPTypography.titleSmall, PPTypography.bodyLarge, PPTypography.bodyMedium,
+            PPTypography.bodySmall, PPTypography.labelLarge, PPTypography.labelMedium,
+            PPTypography.labelSmall,
+        )
+        for (slot in sansSlots) assertEquals(PPFont.Sans, slot.fontFamily)
+        // 衬线档换成 sans（或反排）必须被判红。
+        assertTrue(base.displayLarge.fontFamily != PPTypography.displayLarge.fontFamily)
+    }
+
+    @Test
+    fun line_heights_are_not_invented() {
+        // tokens 只登记字号；行高写死就是自创。所有映射槽位的行高必须还是 M3 的默认值。
+        val base = Typography()
+        val pairs = listOf(
+            "displayLarge" to (base.displayLarge to PPTypography.displayLarge),
+            "displayMedium" to (base.displayMedium to PPTypography.displayMedium),
+            "titleLarge" to (base.titleLarge to PPTypography.titleLarge),
+            "titleMedium" to (base.titleMedium to PPTypography.titleMedium),
+            "titleSmall" to (base.titleSmall to PPTypography.titleSmall),
+            "bodyLarge" to (base.bodyLarge to PPTypography.bodyLarge),
+            "bodyMedium" to (base.bodyMedium to PPTypography.bodyMedium),
+            "bodySmall" to (base.bodySmall to PPTypography.bodySmall),
+            "labelLarge" to (base.labelLarge to PPTypography.labelLarge),
+            "labelMedium" to (base.labelMedium to PPTypography.labelMedium),
+            "labelSmall" to (base.labelSmall to PPTypography.labelSmall),
+        )
+        for ((name, slots) in pairs) {
+            val (default, mapped) = slots
+            assertEquals("PPTypography.$name 的行高是自创值", default.lineHeight.value, mapped.lineHeight.value, 0.01f)
+        }
+    }
+
+    @Test
     fun shapes_come_from_radius_tokens() {
         val allowed = radius.keys.map { tokenRadius(it) }.toSet() + setOf(0f)
         val density = object : Density {
@@ -114,6 +160,11 @@ class PPThemeTokensTest {
         assertTrue("根 MaterialTheme 必须下发 colorScheme", call.contains("colorScheme ="))
         assertTrue("根 MaterialTheme 必须下发 typography = PPTypography", call.contains("typography = PPTypography"))
         assertTrue("根 MaterialTheme 必须下发 shapes = PPShapes", call.contains("shapes = PPShapes"))
+        // 明暗入口：深色必须真的走 PPDarkColorScheme，而不是永远用浅色。
+        assertTrue(
+            "根主题必须按 darkTheme 选 scheme",
+            theme.contains("colorScheme = if (darkTheme) PPDarkColorScheme else PPColorScheme"),
+        )
     }
 
     private fun shapeSlots(shapes: Shapes): Map<String, CornerBasedShape> = mapOf(

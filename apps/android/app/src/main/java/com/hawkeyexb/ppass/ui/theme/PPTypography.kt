@@ -15,8 +15,9 @@ import com.hawkeyexb.ppass.ui.PPFont
 private val base = Typography()
 
 val PPTypography: Typography = base.copy(
-    // mobile-ui.type.hero-number：英雄卡大数字 40，衬线 Regular。
-    displayLarge = base.displayLarge.copy(fontFamily = PPFont.Serif, fontSize = 40.sp, lineHeight = 46.sp),
+    // mobile-ui.type.hero-number：英雄卡大数字 40，衬线 Regular。行高不写死：tokens 只登记字号，
+    // 自拟行高就是自创，沿用 M3 的 64。
+    displayLarge = base.displayLarge.copy(fontFamily = PPFont.Serif, fontSize = 40.sp),
     // mobile-ui.type.pair-code：tokens 注明 Android displayMedium 45。
     displayMedium = base.displayMedium.copy(fontFamily = PPFont.Sans, fontWeight = FontWeight.Bold),
     // mobile-ui.type.pair-name：电脑名 titleLarge 22 粗体。
@@ -31,8 +32,8 @@ val PPTypography: Typography = base.copy(
     bodyMedium = base.bodyMedium.copy(fontFamily = PPFont.Sans),
     // mobile-ui.type.pair-identity：tokens 注明 Android bodySmall 12。
     bodySmall = base.bodySmall.copy(fontFamily = PPFont.Sans),
-    // mobile-ui.type.pair-label：配对页小标签 labelLarge 14。
-    labelLarge = base.labelLarge.copy(fontFamily = PPFont.Sans, fontWeight = FontWeight.Bold),
+    // mobile-ui.type.pair-label：配对页小标签 labelLarge 14（tokens 没写粗体，字重不在这里加）。
+    labelLarge = base.labelLarge.copy(fontFamily = PPFont.Sans),
     // mobile-ui.type.row-value：设置行右侧的值 14。
     labelMedium = base.labelMedium.copy(fontFamily = PPFont.Sans, fontSize = 14.sp),
     // mobile-ui.type.row-hint：开关下的说明 12。
