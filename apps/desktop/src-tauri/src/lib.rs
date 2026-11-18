@@ -4329,6 +4329,247 @@ mod tests {
         }
     }
 
+    /// #1817（owner 技术定案 2026-11-17）：安装失败且一次 `sc start` 起不来时，安装器
+    /// 注册限时恢复任务 P-PassUpdateRecovery（Task Scheduler，SYSTEM/Highest）。安全
+    /// 性质静态锁在 installer-hooks.nsh 上：
+    ///   - 注册只能发生在 wanted-state「用户停过」核对之后、且只在「没停过」分支里；
+    ///   - 任务动作用 PowerShell try/catch：命中 stopped 或读取 wanted-state 失败都先删任务
+    ///     并 return，绝不进入 sc start；不能用“没匹配到”冒充“读成功且用户没停过”；
+    ///   - 有界：1 分钟首触发、每 1 分钟重试、RepetitionDuration 10 分钟、ExecutionTimeLimit
+    ///     2 分钟、IgnoreNew 防重叠、DeleteExpiredTaskAfter 1 分钟让耗尽的任务自删，
+    ///     电池供电也允许恢复，绝不形成永久自启；
+    ///   - SYSTEM 身份的动作要能读到 wanted-state：目录白名单不许动（daemon 会核对），
+    ///     只给这一个文件补 SYSTEM 只读。
+    ///
+    /// 反证：删掉 try/catch 或读取失败 return、去掉任一时限/电池放行、把注册挪到 stopped
+    /// 核对之前，本测试红。
+    #[test]
+    fn update_recovery_task_respects_the_user_stop_choice() {
+        let hooks = include_str!("../windows/installer-hooks.nsh").replace("\r\n", "\n");
+        assert!(
+            hooks.contains(r#"!define PPASS_RECOVERY_TASK "P-PassUpdateRecovery""#),
+            "缺限时恢复任务名常量"
+        );
+
+        // UpdateFailureRecover：wanted-state 先读；注册只在「没停过」分支、起不来之后。
+        let start = hooks
+            .find("Function UpdateFailureRecover")
+            .expect("缺 UpdateFailureRecover");
+        let end = start + hooks[start..].find("\nFunctionEnd").expect("函数没有结束");
+        let recover = &hooks[start..end];
+        let wanted = recover
+            .find(r#"FileOpen $2 "${PPASS_DATA}\wanted-state" r"#)
+            .expect("失败路径没读 wanted-state");
+        let stopped = recover
+            .find(r#"${StrStr} $R7 "$R6" "stopped""#)
+            .expect("没有判 stopped");
+        let not_stopped = recover[stopped..]
+            .find("${If} $R7 == \"\"")
+            .map(|at| stopped + at)
+            .expect("没有「没停过」分支");
+        let call_at = hooks
+            .matches("Call PPassRegisterUpdateRecoveryTask")
+            .count();
+        assert_eq!(call_at, 1, "注册入口只能有这一个（失败路径）");
+        let call = recover
+            .find("Call PPassRegisterUpdateRecoveryTask")
+            .expect("失败路径没有登记限时恢复任务");
+        assert!(
+            wanted < stopped && stopped < not_stopped && not_stopped < call,
+            "注册必须位于 wanted-state「用户停过」核对之后的「没停过」分支里"
+        );
+        let poll = recover
+            .find("ppass_recover_wait")
+            .expect("没有一次 sc start 后的 RUNNING 轮询");
+        assert!(poll < call, "先做一次 sc start + 短轮询，起不来才登记任务");
+        assert!(
+            !recover[poll..].contains("Goto ppass_recover_retry"),
+            "安装器内不许再做长退避重试（恢复交给限时任务，owner 定案）"
+        );
+
+        // SYSTEM 任务要能读 wanted-state：只给这一个文件补 SYSTEM 只读（目录白名单不动）。
+        let grant = recover
+            .find(r#""$SYSDIR\icacls.exe" "${PPASS_DATA}\wanted-state" /grant "*S-1-5-18:(R)""#)
+            .expect("没有给 wanted-state 补 SYSTEM 只读（SYSTEM 任务读不到就查不了用户停没停）");
+        assert!(grant < call, "SYSTEM 授权要在登记任务之前");
+
+        // 注册结果如实进标记：service=1 只在「真实 RUNNING」或「任务登记成功（返回 0）」
+        // 时写；登记失败保持 0，壳按实际状态显示 pending，不谎报已恢复。
+        // 壳侧的 pending 分支（service=1 但 daemon 没在跑 → update_failed_service_pending）
+        // 是既有行为，这里锁住它没有被改掉。
+        assert_eq!(
+            recover.matches("StrCpy $R9 1").count(),
+            2,
+            "$R9=1 只许出现在：真实 RUNNING、任务登记成功"
+        );
+        let after_call = &recover[call..];
+        let if_ok = after_call
+            .find("${If} $R0 == 0")
+            .expect("登记结果没有按显式结果寄存器 $R0 判断");
+        // 函数自己已经把 nsExec 的退出码 Pop 到 $0；调用方再 Pop 会弹出调用方的栈顶，
+        // service 标记就和登记结果脱钩了。反证：加回一行 `Pop $0`，本测试红。
+        assert!(
+            !after_call[..if_ok].contains("Pop $0"),
+            "Call 之后不许再 Pop $0：会覆盖登记结果，service 标记失真"
+        );
+        let set_one = after_call
+            .find("StrCpy $R9 1")
+            .expect("登记成功没写 service=1");
+        assert!(
+            if_ok < set_one,
+            "service=1 只能写在「任务登记成功」分支里（失败如实 service=0）"
+        );
+        let js = include_str!("../../src/lib/updateFailure.js");
+        assert!(
+            js.contains("\"ui.update_failed_service_pending\""),
+            "壳丢了 pending 分支：已安排恢复但 daemon 没跑时只能显示 pending"
+        );
+        assert!(
+            include_str!("../../src/i18n/zh.json").contains("\"ui.update_failed_service_pending\"")
+                && include_str!("../../src/i18n/en.json")
+                    .contains("\"ui.update_failed_service_pending\""),
+            "pending 文案丢了"
+        );
+
+        // 任务登记（PowerShell）本体的参数与界限。NSIS 里 $\' 是字面单引号、$$ 是字面
+        // $：先按 NSIS 转义规则还原出 PowerShell 真正收到的命令再断言。
+        // 改为 Windows 原生做法：动作脚本写 .ps1、任务定义写 XML、schtasks /Create /XML。
+        // 旧做法把整条 PowerShell 命令塞进 -Command，真机上表现为「退出码 0 但任务没建出来」。
+        let ps = hooks.to_string();
+        for needle in [
+            "<StartBoundary>$R1</StartBoundary>",
+            "<EndBoundary>$R2</EndBoundary>",
+            "<Repetition><Interval>PT1M</Interval>",
+            "<UserId>S-1-5-18</UserId>",
+            "<RunLevel>HighestAvailable</RunLevel>",
+            "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+            "<StartWhenAvailable>true</StartWhenAvailable>",
+            "<ExecutionTimeLimit>PT2M</ExecutionTimeLimit>",
+            "<DeleteExpiredTaskAfter>PT1M</DeleteExpiredTaskAfter>",
+            "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>",
+            "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
+            "/Create /TN \"${PPASS_RECOVERY_TASK}\" /XML",
+            "$INSTDIR\\update-recovery.ps1",
+        ] {
+            assert!(ps.contains(needle), "任务定义缺 {needle}");
+        }
+
+        // DeleteExpiredTaskAfter 只在触发器有 EndBoundary 时才生效：XML 里必须有它，
+        // 否则任务永不过期、不会自删，等于留了个永久计划任务。上面 needle 已覆盖。
+
+        // 任务动作（PowerShell）：先读 wanted-state；命中 stopped ⇒ 自删 + return；
+        // 读失败（catch）也自删 + return。两条都必须排在 sc.exe start 之前——用户停过
+        // 的机器绝不会在这里被拉起。真实 RUNNING 才删任务。
+        let action_line = hooks
+            .lines()
+            .find(|l| l.contains("StrCpy $R7"))
+            .expect("任务动作没有先查 wanted-state");
+        // 还原 NSIS 转义：`$\'` → `'`、`$\"` → `"`、`$$` → `$`。动作里的 `\$\"` 还原后是
+        // `\"`，正是穿过 `-Command "…"` 参数解析所需的形态；裸 `"` 一律视为错误。
+        let action = action_line
+            .replace("$\\'", "'")
+            .replace("$\\\"", "\"")
+            .replace("$$", "$");
+        let read = action
+            .find("Get-Content -LiteralPath")
+            .expect("动作没有先读 wanted-state");
+        let stopped = action.find("-match \"stopped\"").expect("缺 stopped 判定");
+        let stop_return = action.find("return").expect("stopped 分支没有 return");
+        let catch = action.find("catch {").expect("读失败没有 catch 分支");
+        let sc_start = action.find("& sc.exe start").expect("缺 sc.exe start");
+        assert!(
+            read < stopped && stopped < stop_return && stop_return < catch && catch < sc_start,
+            "顺序必须是：读 wanted-state → 命中 stopped ⇒ 删任务 + return →（没停过才）sc start；\
+             顺序坏了就是用户停过还拉起"
+        );
+        let catch_delete = action[catch..]
+            .find("Unregister-ScheduledTask")
+            .map(|at| catch + at)
+            .expect("读失败分支没有自删");
+        assert!(
+            catch < catch_delete
+                && catch_delete < sc_start
+                && action[catch..sc_start].contains("return"),
+            "读不到 wanted-state（不存在/权限错误）也必须自删并 return，不能落到 sc start"
+        );
+        assert_eq!(
+            action.matches("Unregister-ScheduledTask").count(),
+            3,
+            "动作里应有三处自删：stopped、读失败、真实 RUNNING 之后"
+        );
+        // 动作现在是写进 .ps1 文件再执行的，不再穿过 `-Command "…"`，所以引号保持原样。
+        let runn = action
+            .find("Select-String -Quiet \"RUNNING\"")
+            .expect("缺 RUNNING 判定");
+        // #1817 评审：`$LASTEXITCODE` 是 sc.exe 的退出码，服务存在但 STOPPED 时也是 0。
+        // 它只能表示「查询成功」，不能拿来判断 RUNNING；删任务必须看 Select-String 的结果。
+        let running_flag = action
+            .find("$running = ($LASTEXITCODE -eq 0) -and")
+            .expect("RUNNING 判定没有把查询成功与匹配结果组合起来");
+        let uses_flag = action
+            .find("if ($running)")
+            .expect("删任务没有用 RUNNING 判定结果");
+        let last_delete = action
+            .rfind("Unregister-ScheduledTask")
+            .expect("缺 RUNNING 后的自删");
+        assert!(
+            sc_start < running_flag
+                && running_flag < runn
+                && runn < uses_flag
+                && uses_flag < last_delete,
+            "只有真实 RUNNING 才删任务：sc start → 判定 RUNNING → if ($running) → 自删"
+        );
+    }
+
+    /// #1817：限时恢复任务在每次安装与卸载都要被显式清掉（任务自身有界且会自删，
+    /// 这里是兜底——不留任何可能变成常驻的东西）。反证：删掉任一处清理，本测试红。
+    #[test]
+    fn installer_removes_the_limited_recovery_task_on_install_and_uninstall() {
+        let hooks = include_str!("../windows/installer-hooks.nsh").replace("\r\n", "\n");
+        for name in ["NSIS_HOOK_PREINSTALL", "NSIS_HOOK_PREUNINSTALL"] {
+            let start = hooks
+                .find(&format!("!macro {name}"))
+                .unwrap_or_else(|| panic!("缺 {name}"));
+            let end = start + hooks[start..].find("!macroend").expect("宏没有结束");
+            let block = &hooks[start..end];
+            let delete = block
+                .find(r#""$SYSDIR\schtasks.exe" /Delete /TN "${PPASS_RECOVERY_TASK}" /F"#)
+                .unwrap_or_else(|| panic!("{name} 没有清理限时恢复任务 P-PassUpdateRecovery"));
+            // 评审：/Delete 只删登记、不中断正在跑的实例；它会在下面 kill 掉服务之后
+            // 把 daemon 再拉起来。必须先 /End。反证：去掉 /End 这一行，本测试红。
+            let stop = block
+                .find(r#""$SYSDIR\schtasks.exe" /End /TN "${PPASS_RECOVERY_TASK}""#)
+                .unwrap_or_else(|| panic!("{name} 清理任务前没有 /End 终止运行中的实例"));
+            assert!(stop < delete, "{name}：必须先 /End 再 /Delete");
+            if name == "NSIS_HOOK_PREINSTALL" {
+                let kill = block.find("taskkill.exe").expect("PREINSTALL 没有结束进程");
+                assert!(delete < kill, "清任务必须在结束进程之前，否则进程会被拉起");
+            }
+        }
+    }
+
+    /// #1817 评审：动作文本里不许出现任何路径字符。`$code = '…'` 是 PowerShell 单引号串，
+    /// 路径里一旦有 `'`（例如 `D:\Program'Data`）就会提前闭合，登记要么失败、要么拼出
+    /// 被截断的脚本。改为在动作里用 `$env:ProgramData` 现取——安装器与 daemon 的
+    /// `service_root()` 读的也是这个变量，重定向后三处仍一致。
+    /// 反证：把路径改回 `${PPASS_DATA}` 或用 GetFolderPath，本测试红。
+    #[test]
+    fn recovery_task_takes_the_data_path_from_the_environment() {
+        let hooks = include_str!("../windows/installer-hooks.nsh").replace("\r\n", "\n");
+        let action = hooks
+            .lines()
+            .find(|l| l.contains("StrCpy $R7"))
+            .expect("缺限时恢复任务的动作");
+        assert!(
+            action.contains(r"$$env:ProgramData"),
+            "wanted-state 必须由动作自己从 $env:ProgramData 取，不能拼路径文本"
+        );
+        assert!(
+            !action.contains("${PPASS_DATA}") && !action.contains("GetFolderPath"),
+            "动作里不许出现路径：单引号串会被路径里的 ' 截断；GetFolderPath 与安装器口径不一致"
+        );
+    }
+
     #[test]
     fn update_failure_commands_are_registered() {
         let src = include_str!("lib.rs").replace("\r\n", "\n");

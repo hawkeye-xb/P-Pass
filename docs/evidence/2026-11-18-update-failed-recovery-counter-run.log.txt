@@ -1,0 +1,38 @@
+# 反证轮 run.log（候选换成修复前旧包 v0.11.4-test.1）
+
+== win/update-failed-recovery  2026-11-18 13:53:40  反证=on
+== setup
+base：P-Pass_0.11.1_x64-setup.exe（sha256 a6e50b970bce92b61612b07c470ac604588add8de776893eb5d3201a0c8f0f50）
+候选：P-Pass_0.11.4-test.1_x64-setup.exe（sha256 6ba983a0ab5569c4d1ad29e7c6892a2dceaaefe44aad66eddcaf70b4d64f84e0）
+起点：inst_exe=0.11.4 daemon_file=0.11.4 svc=Running wanted=running
+== act
+== 装 base 0.11.1 ==
+== 用例1：服务运行中，全占锁（FILE_SHARE_NONE），装候选（应失败 service=1），释放后验证 daemon 是否真恢复 ==
+用例1 释放后 300s 内 daemon 没恢复（真实进程/服务仍停）
+== 用例2：用户停过（wanted-state=stopped），锁文件，装候选（应失败，service=0 不拉起）==
+== 用例3：无占用，正常覆盖安装候选 0.11.4-test.1 ==
+== counter
+
+# 主轮 counter（去掉文件占用）的判据输出——证明故障注入有效，「应失败」判据在该轮变红
+
+  FAIL  用例1 安装失败被识别：update-failed 存在且首行 install-failed
+  FAIL  用例1 service=1（用户没停过，安装器起服务或安排恢复）
+  FAIL  用例1 失败时刻限时恢复任务已登记
+  ok    用例1 释放后 daemon 恢复运行（真实进程在跑）
+  ok    用例1 释放后 IPC 可应答（diag daemon_reachable）
+  FAIL  用例1 版本与安装结果一致（失败=仍是 base 0.11.1）
+  ok    用例1 释放后服务在运行
+  ok    用例1 恢复后限时恢复任务已自删
+  ok    用例2 update-failed 存在且首行 install-failed
+  ok    用例2 service=0（用户停过，安装器不恢复）
+  ok    用例2 wanted-state 仍是 stopped（安装器不把用户选择改回 running）
+  ok    用例2 失败时刻限时恢复任务未登记
+  ok    用例2 采样期间 daemon 一次都没被拉起
+  ok    用例2 采样期内限时恢复任务始终未出现（含 t+70s，跨过任务本该的首触发）
+  ok    用例2 无新增计划任务自启
+  ok    用例2 无 HKCU Run 自启值
+  ok    用例3 正常安装后 daemon 文件版本 = 候选 0.11.4
+  ok    用例3 正常安装后服务在运行
+  ok    用例3 正常安装后 daemon 在运行
+  ok    用例3 正常安装后 IPC 可应答
+  ok    用例3 正常安装后没有 update-failed 标记

@@ -22,6 +22,10 @@ unput apps/android/app/src/main/AndroidManifest.xml
 put crates/platform/src/windows.rs 'unsafe { StartServiceW(h, None) };'
 expect_red "Windows 新增 StartServiceW" "crates/platform/src/windows.rs"
 unput crates/platform/src/windows.rs
+put apps/desktop/src-tauri/windows/installer-hooks.nsh 'Function F
+nsExec::ExecToLog "$PS" -Command "Register-ScheduledTask -TaskName x"'
+expect_red "NSIS 新增 Register-ScheduledTask（未登记）" "installer-hooks.nsh"
+unput apps/desktop/src-tauri/windows/installer-hooks.nsh
 put apps/ios/P/Bg.swift 'try BGTaskScheduler.shared.submit(request)'
 expect_red "iOS 新增 BGTaskScheduler.submit" "apps/ios/P/Bg.swift"
 unput apps/ios/P/Bg.swift; expect_green "还原：全部"

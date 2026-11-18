@@ -3,28 +3,34 @@
 # 验证安装器（installer-hooks.nsh）在「替换 ppf-daemon.exe 失败」时的恢复语义，按卡口径：
 # 用不共享句柄（FILE_SHARE_NONE）占住 ppf-daemon.exe 制造替换失败，释放句柄后验证 daemon 是否真的恢复运行。
 #
-# 恢复机制（真机实测结论，2026-11-17）：
-#   - 安装器 UpdateFailureRecover 的恢复 = 一次性 `sc start`（wanted-state 不是 stopped 时），
-#     并把「尝试过恢复」记成 update-failed 的 service=1（installer-hooks.nsh:281-330 不检查 sc start 结果）。
-#   - `sc failure … restart/5000` 只补回崩溃自动重启（PREINSTALL 清掉的持久配置），**不重试 start 失败**：
-#     实测 Event 7000（sharing violation）后 60s 无 Event 7032，服务不回来。
-#   - 因此 FILE_SHARE_NONE 占住时 sc start 也失败、释放锁后 daemon 不会自动恢复——这正是用例1 要判的产品行为。
+# 恢复机制（#1817 owner 技术定案 2026-11-17）：
+#   - 安装器 UpdateFailureRecover = 一次性 `sc start` + 约 5 秒 RUNNING 轮询；wanted-state
+#     是 stopped 时完全不拉起。仍未 RUNNING 且服务存在、wanted≠stopped ⇒ 用 Task Scheduler
+#     注册限时恢复任务 P-PassUpdateRecovery（SYSTEM/Highest）：1 分钟首触发、每 1 分钟重试、
+#     RepetitionDuration=10 分钟有界、每次 ExecutionTimeLimit=2 分钟、IgnoreNew 防重叠、
+#     DeleteExpiredTaskAfter=1 分钟让耗尽的任务自删。
+#   - 任务动作先查 wanted-state：用户停过 ⇒ 任务自删、绝不 sc start；否则 sc start，
+#     真实 RUNNING 才删任务。`sc failure … restart/5000` 只补回崩溃自动重启（PREINSTALL
+#     清掉的持久配置），仍**不重试 start 失败**（实测 Event 7000 后无 Event 7032）。
+#   - update-failed 的 service=1 表示「已在跑或已安排限时恢复」；壳按真实状态显示 pending。
 #
 # 场景三个用例：
-#   - 服务原本在运行 + 全占（FILE_SHARE_NONE）→ 替换失败被识别（update-failed service=1）；
-#     释放锁后按卡口径验证 daemon 是否真的恢复运行（看真实进程/服务状态，不手动 Start-Service、不认 service=1）。
+#   - 服务原本在运行 + 全占（FILE_SHARE_NONE）→ 替换失败被识别（update-failed service=1）、
+#     限时任务已登记；释放锁后验证 daemon 是否真的恢复运行（看真实进程/服务状态，
+#     不手动 Start-Service、不认 service=1），恢复后限时任务必须已自删。
 #   - 用户已主动停过（wanted-state=stopped）+ 全占（FILE_SHARE_NONE）→ update-failed service=0，
-#     不得拉起 daemon，不得新增/启用自启登记。
+#     不得拉起 daemon，不得新增/启用自启登记，限时恢复任务全程不登记。
 #   - 对照组：不注入文件占用 → 正常覆盖安装成功，daemon 与版本都换成候选。
 #
 # 反证（E2）：去掉文件占用（不锁文件）重跑「服务运行」用例 ⇒ 安装成功、不再写 update-failed ⇒
-# 「应失败」判据（update-failed 存在 / service=1 / 版本仍是 base）变红，证明故障注入有效。
+# 「应失败」判据（update-failed 存在 / service=1 / 版本仍是 base / 限时任务已登记）变红，
+# 证明故障注入有效。
 #
 # 前置：本机是 perMachine 服务模式安装（Program Files + Windows 服务 P-Pass），会话已提权
 # （High integrity，运行安装器 /S 不需要弹 UAC）。三个用例共用一个候选安装包；base 用更旧版本，
 # 让「安装失败版本不变 / 正常安装版本升级」可判。
 # 只动 tools/e3/scenarios/win/** 与 docs/evidence/**，不碰产品代码，不接 Android/iOS。
-DESC="#1735 安装失败后服务恢复：全占→替换失败 service=1→释放后验证 daemon 是否真恢复 / 用户停过 service=0 不拉起 / 对照组正常安装"
+DESC="#1735/#1817 安装失败后服务恢复：全占→替换失败 service=1→限时任务登记→释放后 daemon 真恢复且任务自删 / 用户停过 service=0 不拉起不登记 / 对照组正常安装"
 COUNTER=on
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
@@ -47,6 +53,13 @@ UF_CAND_VER="${E3_WIN_UF_CAND_VER:-0.11.4-test.1}"
 
 svc_state() { win_ps "(Get-Service -Name 'P-Pass' -ErrorAction SilentlyContinue).Status" 2>/dev/null | tr -d '[:space:]'; }
 svc_exists() { win_ps "if (Get-Service -Name 'P-Pass' -ErrorAction SilentlyContinue) { 'yes' } else { 'no' }" 2>/dev/null | tr -d '[:space:]'; }
+# #1817：限时恢复任务（安装失败时登记，SYSTEM/Highest，10 分钟有界）。不存在 ⇒ 空。
+recovery_task_state() { win_ps "(Get-ScheduledTask -TaskName 'P-PassUpdateRecovery' -ErrorAction SilentlyContinue).State" 2>/dev/null | tr -d '[:space:]'; }
+# 清残留（setup/teardown 用）：上一轮跑挂可能留下还没到自删时间的任务，会污染下一轮的
+# 「未登记」判据。只删任务，不动服务。
+recovery_task_cleanup() {
+  win_ps "Unregister-ScheduledTask -TaskName 'P-PassUpdateRecovery' -Confirm:\$false -ErrorAction SilentlyContinue" >/dev/null 2>&1 || true
+}
 inst_exe_version() { win_ps "(Get-Item '$INST_DIR_WIN\\p-pass-desktop.exe' -ErrorAction SilentlyContinue).VersionInfo.ProductVersion" 2>/dev/null | tr -d '[:space:]'; }
 daemon_file_version() { # 磁盘上 ppf-daemon.exe 的版本；文件被独占时读不出（返回空）。
   "$INST_DAEMON" --version --json 2>/dev/null | tr -d '\r' | sed -n 's/.*"version":"\([^"]*\)".*/\1/p'
@@ -140,6 +153,7 @@ record_state() { # record_state <dir> <tag>
   {
     echo "svc_state=$(svc_state)"
     echo "svc_exists=$(svc_exists)"
+    echo "recovery_task=$(recovery_task_state)"
     echo "daemon_pid=$(win_daemon_pid)"
     echo "daemon_file_version=$(daemon_file_version)"
     echo "inst_exe_version=$(inst_exe_version)"
@@ -177,6 +191,13 @@ diag_daemon_reachable() { grep -q '"daemon_reachable":true' "$1/diag-export.json
 capture_daemon_log() { # capture_daemon_log <dir> <tag>
   local d="$1" tag="$2" log="$PD_DIR/logs/daemon.log"
   if [ -f "$log" ]; then tail -c 200000 "$log" >"$d/$tag-daemon.log" 2>/dev/null || true; fi
+  # #1817：安装器登记限时任务失败时会把 PowerShell 报错写到这个文件（静默安装看不到
+  # DetailPrint），收进证据目录，judge 与复盘才有原始报错可看。
+  local tasklog
+  tasklog="$(win_ps 'Write-Output (Join-Path $env:TEMP "ppass-update-recovery-task.log")' 2>/dev/null | tr -d '\r')"
+  if [ -n "$tasklog" ] && [ -f "$(cygpath -u "$tasklog" 2>/dev/null)" ]; then
+    cp "$(cygpath -u "$tasklog")" "$d/$tag-recovery-task.log" 2>/dev/null || true
+  fi
 }
 
 ensure_running() { # 恢复到「服务在运行 + wanted-state=running」的干净起点
@@ -202,6 +223,11 @@ setup() {
   win_is_high_integrity || { echo "本会话不是 High integrity，跑不了真实安装器 /S（需要提权）"; return 77; }
   [ "$(svc_exists)" = yes ] || { echo "没有 Windows 服务 P-Pass（先做 perMachine 安装）"; return 77; }
   [ -f "$INST_DAEMON" ] || { echo "没有 $INST_DAEMON"; return 77; }
+  # 上一轮跑挂留下的限时任务会污染本轮「未登记」判据，先清掉。
+  if [ -n "$(recovery_task_state)" ]; then
+    echo "清掉上一轮残留的限时恢复任务"
+    recovery_task_cleanup
+  fi
   local base cand
   base="$(win_release_file "$UF_BASE_TAG" '*_x64-setup.exe')"
   cand="$(win_release_file "$UF_CAND_TAG" '*_x64-setup.exe')"
@@ -236,10 +262,15 @@ act() {
   record_state "$ca" after-fail
   capture_daemon_log "$ca" after-fail
   # 释放锁，按卡口径验证「daemon 恢复运行」：不手动 Start-Service，只看真实进程/服务状态。
+  # 安装器已退出（install_pkg 等到进程结束）才释放锁；恢复靠限时任务（首触发在登记后
+  # 1 分钟左右），所以观察窗放宽到 300 秒。
   win_unlock_daemon running || { echo "用例1 释放锁失败"; return 1; }
   local i ok=0
-  for i in $(seq 1 30); do [ "$(svc_state)" = Running ] && [ -n "$(win_daemon_pid)" ] && { ok=1; break; }; sleep 1; done
-  [ "$ok" = 1 ] || echo "用例1 释放后 daemon 没恢复（真实进程/服务仍停）"
+  for i in $(seq 1 300); do [ "$(svc_state)" = Running ] && [ -n "$(win_daemon_pid)" ] && { ok=1; break; }; sleep 1; done
+  # 任务动作看到 RUNNING 后才自删，与脚本侧看到 RUNNING 有几秒竞态；给它几秒收尾再采样，
+  # 免得把「自删在路上」记成「没删」。
+  for i in $(seq 1 10); do [ -z "$(recovery_task_state)" ] && break; sleep 1; done
+  [ "$ok" = 1 ] || echo "用例1 释放后 300s 内 daemon 没恢复（真实进程/服务仍停）"
   diag_inst "$ca" || true
   record_state "$ca" after-recover
   capture_daemon_log "$ca" after-recover
@@ -260,11 +291,15 @@ act() {
   # 先释放锁再采样：锁还占着时即使想拉起 daemon 也起不来，采样要能抓到「解锁后仍不该被拉起」。
   # 解锁失败就停下：锁还占着时「没被拉起」是锁挡的，不是 wanted-state=stopped 挡的，会误报通过。
   win_unlock_daemon stopped || { echo "用例2 释放锁失败"; return 1; }
+  # t+70s 落在限时任务本该首触发（登记后约 1 分钟）之后：任务若被登记过，这里应能看到它
+  # 在活动/或至少不该出现 daemon 被拉起。stopped 全程不登记 ⇒ 任务应始终缺席。
   : >"$cb/stopped-samples.txt"
   for i in 5 10 15; do
     sleep 5
-    echo "t+${i}s pid=$(win_daemon_pid) svc=$(svc_state) wanted=$(wanted_state)" >>"$cb/stopped-samples.txt"
+    echo "t+${i}s pid=$(win_daemon_pid) svc=$(svc_state) wanted=$(wanted_state) recovery_task=$(recovery_task_state)" >>"$cb/stopped-samples.txt"
   done
+  sleep 55
+  echo "t+70s pid=$(win_daemon_pid) svc=$(svc_state) wanted=$(wanted_state) recovery_task=$(recovery_task_state)" >>"$cb/stopped-samples.txt"
   ensure_running || echo "用例2 收尾没把服务拉起来"
 
   # ---- 3) 对照组：不注入文件占用，正常覆盖安装 ----
@@ -281,6 +316,8 @@ act() {
 # —— 判据小工具 ——
 
 no_daemon_samples() { [ -s "$1" ] && no_line "$1" 'pid=[0-9]'; }
+# 采样文件里限时恢复任务始终缺席（recovery_task= 后面一直是空）。
+no_recovery_task_samples() { [ -s "$1" ] && no_line "$1" 'recovery_task=.+'; }
 
 judge() {
   local d="$1"
@@ -288,17 +325,21 @@ judge() {
 
   # 用例1：失败被识别（应失败）+ 释放后 daemon 恢复运行（应恢复，看真实进程/服务状态，不认 service=1）。
   check "用例1 安装失败被识别：update-failed 存在且首行 install-failed" grep -qx 'install-failed' "$ca/after-fail-update-failed.txt"
-  check "用例1 service=1（用户没停过，安装器尝试恢复）" grep -qx 'service=1' "$ca/after-fail-update-failed.txt"
+  check "用例1 service=1（用户没停过，安装器起服务或安排恢复）" grep -qx 'service=1' "$ca/after-fail-update-failed.txt"
+  check "用例1 失败时刻限时恢复任务已登记" has_line "$ca/after-fail-state.txt" '^recovery_task=.+'
   check "用例1 释放后 daemon 恢复运行（真实进程在跑）" grep -Eq '^daemon_pid=[0-9]+' "$ca/after-recover-state.txt"
   check "用例1 释放后 IPC 可应答（diag daemon_reachable）" diag_daemon_reachable "$ca"
   check "用例1 版本与安装结果一致（失败=仍是 base ${UF_BASE_VER}）" grep -Fqx "daemon_file_version=$UF_BASE_VER" "$ca/after-recover-state.txt"
   check "用例1 释放后服务在运行" grep -qx 'svc_state=Running' "$ca/after-recover-state.txt"
+  check "用例1 恢复后限时恢复任务已自删" has_line "$ca/after-recover-state.txt" '^recovery_task=$'
 
-  # 用例2：用户停过 → service=0、不拉起、不新增自启
+  # 用例2：用户停过 → service=0、不拉起、不新增自启、限时任务全程不登记
   check "用例2 update-failed 存在且首行 install-failed" grep -qx 'install-failed' "$cb/after-fail-update-failed.txt"
   check "用例2 service=0（用户停过，安装器不恢复）" grep -qx 'service=0' "$cb/after-fail-update-failed.txt"
   check "用例2 wanted-state 仍是 stopped（安装器不把用户选择改回 running）" grep -qx 'wanted_state=stopped' "$cb/after-fail-state.txt"
+  check "用例2 失败时刻限时恢复任务未登记" has_line "$cb/after-fail-state.txt" '^recovery_task=$'
   check "用例2 采样期间 daemon 一次都没被拉起" no_daemon_samples "$cb/stopped-samples.txt"
+  check "用例2 采样期内限时恢复任务始终未出现（含 t+70s，跨过任务本该的首触发）" no_recovery_task_samples "$cb/stopped-samples.txt"
   check "用例2 无新增计划任务自启" grep -qx 'task_state=' "$cb/after-fail-state.txt"
   check "用例2 无 HKCU Run 自启值" grep -qx 'run_value=no' "$cb/after-fail-state.txt"
 
@@ -342,7 +383,9 @@ counter() {
 
 teardown() {
   # 先杀掉任何残留的独占进程，再保证机器回到候选版本 + 服务运行（起点就是候选）。
+  # 限时任务若还在（本轮失败恢复没跑完就停了）也一并清掉，别留着干扰下一轮判据。
   win_kill_lingering_locks
+  recovery_task_cleanup
   local cand
   cand="$(win_release_file "$UF_CAND_TAG" '*_x64-setup.exe')"
   if [ -n "$cand" ] && [ "$(inst_exe_version)" != "$UF_CAND_VER" ]; then
