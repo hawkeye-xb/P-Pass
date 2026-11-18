@@ -4406,6 +4406,12 @@ mod tests {
         let if_ok = after_call
             .find("${If} $0 == 0")
             .expect("登记结果没有按退出码判断");
+        // 函数自己已经把 nsExec 的退出码 Pop 到 $0；调用方再 Pop 会弹出调用方的栈顶，
+        // service 标记就和登记结果脱钩了。反证：加回一行 `Pop $0`，本测试红。
+        assert!(
+            !after_call[..if_ok].contains("Pop $0"),
+            "Call 之后不许再 Pop $0：会覆盖登记结果，service 标记失真"
+        );
         let set_one = after_call
             .find("StrCpy $R9 1")
             .expect("登记成功没写 service=1");

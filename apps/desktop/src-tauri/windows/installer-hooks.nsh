@@ -391,7 +391,6 @@ Function UpdateFailureRecover
         nsExec::ExecToLog '"$SYSDIR\icacls.exe" "${PPASS_DATA}\wanted-state" /grant "*S-1-5-18:(R)"'
         Pop $0
         Call PPassRegisterUpdateRecoveryTask
-        Pop $0
         ${If} $0 == 0
           StrCpy $R9 1
         ${EndIf}
