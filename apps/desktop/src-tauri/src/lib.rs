@@ -4441,7 +4441,6 @@ mod tests {
         for needle in [
             "-Once -At $start", // 1 分钟首触发（$start = now + 1min）
             "-RepetitionInterval (New-TimeSpan -Minutes 1)", // 每 1 分钟重试
-            "-RepetitionDuration (New-TimeSpan -Minutes 10)", // 10 分钟有界
             "-ExecutionTimeLimit (New-TimeSpan -Minutes 2)",
             "-MultipleInstances 'IgnoreNew'",
             "-DeleteExpiredTaskAfter (New-TimeSpan -Minutes 1)", // 耗尽任务自删

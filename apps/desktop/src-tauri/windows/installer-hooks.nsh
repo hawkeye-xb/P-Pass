@@ -287,8 +287,9 @@ Var PPassDataDir
 ; Scheduler 注册限时任务：
 ;   - 触发：1 分钟首触发、每 1 分钟重试；RepetitionDuration=10 分钟有界；
 ;   - 每次 ExecutionTimeLimit=2 分钟；MultipleInstances=IgnoreNew 防重叠；
-;   - DeleteExpiredTaskAfter=1 分钟：耗尽的任务连触发器一起过期后自删。它只在触发器有
-;     EndBoundary 时生效，所以注册时显式把 EndBoundary 设成重复窗口的结束时间；
+;   - 重复窗口由 EndBoundary 控制（不用 -RepetitionDuration：真机上该参数会被截断成
+;     参数绑定错误，任务登记直接失败）。DeleteExpiredTaskAfter=1 分钟只在触发器有
+;     EndBoundary 时生效，所以注册时显式把 EndBoundary 设成首触发 + 10 分钟；
 ;   - Principal：SYSTEM + RunLevel Highest（不需要任何用户登录着）。
 ; 恢复没成（服务一直起不来）任务也在 10 分钟后随触发器过期、再由 DeleteExpiredTaskAfter
 ; 删掉——不形成永久自启。
@@ -321,7 +322,7 @@ Function PPassRegisterUpdateRecoveryTask
   StrCpy $R7 'try { $$wanted = Get-Content -LiteralPath ($$env:ProgramData + \$\"\P-Pass\wanted-state\$\") -Raw -ErrorAction Stop; if ($$wanted -match \$\"stopped\$\") { Unregister-ScheduledTask -TaskName \$\"${PPASS_RECOVERY_TASK}\$\" -Confirm:$$false -ErrorAction Stop; return } } catch { Unregister-ScheduledTask -TaskName \$\"${PPASS_RECOVERY_TASK}\$\" -Confirm:$$false; return }; & sc.exe start ${PPASS_SERVICE}; $$q = (& sc.exe query ${PPASS_SERVICE} 2>$$null); $$running = ($$LASTEXITCODE -eq 0) -and ($$q | Select-String -Quiet \$\"RUNNING\$\"); if ($$running) { Unregister-ScheduledTask -TaskName \$\"${PPASS_RECOVERY_TASK}\$\" -Confirm:$$false }'
   ; 任务动作统一 UTF-16LE Base64 编码，避免 NSIS→PowerShell→cmd 三层引号改变语义。
   ; -ErrorAction Stop：登记失败必须让 powershell 以非零退出，调用方才写得出 service=0。
-  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$code = $\'$R7$\'; $$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($$code)); $$arg = $\'-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $\' + $$encoded; $$start = (Get-Date).AddMinutes(1); $$t = New-ScheduledTaskTrigger -Once -At $$start -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Minutes 10); $$t.EndBoundary = $$start.AddMinutes(10).ToString($\'s$\'); $$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances $\'IgnoreNew$\' -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 1); $$p = New-ScheduledTaskPrincipal -UserId $\'SYSTEM$\' -LogonType $\'ServiceAccount$\' -RunLevel $\'Highest$\'; $$a = New-ScheduledTaskAction -Execute $\'powershell.exe$\' -Argument $$arg; Register-ScheduledTask -TaskName $\'${PPASS_RECOVERY_TASK}$\' -Trigger $$t -Settings $$s -Principal $$p -Action $$a -Force -ErrorAction Stop"'
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$code = $\'$R7$\'; $$encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($$code)); $$arg = $\'-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $\' + $$encoded; $$start = (Get-Date).AddMinutes(1); $$t = New-ScheduledTaskTrigger -Once -At $$start -RepetitionInterval (New-TimeSpan -Minutes 1); $$t.EndBoundary = $$start.AddMinutes(10).ToString($\'s$\'); $$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances $\'IgnoreNew$\' -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 1); $$p = New-ScheduledTaskPrincipal -UserId $\'SYSTEM$\' -LogonType $\'ServiceAccount$\' -RunLevel $\'Highest$\'; $$a = New-ScheduledTaskAction -Execute $\'powershell.exe$\' -Argument $$arg; Register-ScheduledTask -TaskName $\'${PPASS_RECOVERY_TASK}$\' -Trigger $$t -Settings $$s -Principal $$p -Action $$a -Force -ErrorAction Stop"'
   Pop $0
   Pop $1
   ; 登记失败时把 PowerShell 的报错打进安装日志，E3 才有得查。
