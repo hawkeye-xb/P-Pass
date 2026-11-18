@@ -162,4 +162,17 @@ class SingleTransferStatusTest {
             assertFalse("英雄区与设置组直接呈现状态，不使用 $api（尊重系统减少动态效果）", source.contains(api))
         }
     }
+
+    /**
+     * #1799：设置组里可点的行给标准 button 语义（role = Role.Button，TalkBack 报「按钮」）；
+     * 账目行（onClick = null）保持不可点——MOB-100：有雪佛龙却点不动比没有更坏，这条防线不许松。
+     * 行高例外（UI-13：不套 ListItem 的量出理由）原样保留。
+     * 反证：可点行退回无 role 的 clickable，第一条红。
+     */
+    @Test
+    fun clickable_rows_carry_button_semantics_and_accounts_stay_inert() {
+        val row = homeScreen().substringAfter("private fun CellRow(").substringBefore("\n}\n")
+        assertTrue("可点行必须带 role = Role.Button", row.contains("role = Role.Button"))
+        assertTrue("账目行仍然不画「›」也不可点（onClick == null 分支保留）", row.contains("if (onClick != null)"))
+    }
 }

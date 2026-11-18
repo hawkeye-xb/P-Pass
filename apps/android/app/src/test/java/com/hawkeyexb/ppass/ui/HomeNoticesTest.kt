@@ -2,10 +2,12 @@
 package com.hawkeyexb.ppass.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class HomeNoticesTest {
 
@@ -101,5 +103,24 @@ class HomeNoticesTest {
         n.onDismiss()
         assertTrue("primary action must fire independently of dismiss", resolved)
         assertTrue("dismiss action must fire independently of primary", dismissed)
+    }
+
+    // ── #1799：提示卡的动作交给标准组件 ─────────────────────────────
+
+    /**
+     * #1799：提示卡的「知道了」与「去处理」用 M3 TextButton 承载——role、最小触控区与涟漪
+     * 由组件给出；带 × 的一行版式（C1）的动作同样处理，「×」已是标准 IconButton 不动。
+     * 反证：换回自绘 clickable 文本动作，两条断言红。
+     */
+    @Test
+    fun notice_actions_are_standard_text_buttons() {
+        val src = File("src/main/java/com/hawkeyexb/ppass/ui/HomeNotices.kt").readText()
+        val card = src.substringAfter("fun NoticeCard(").substringBefore("fun ClosableNoticeCard")
+        val closable = src.substringAfter("fun ClosableNoticeCard(").substringBefore("fun NoticeHost")
+        for ((name, block) in listOf("NoticeCard" to card, "ClosableNoticeCard" to closable)) {
+            assertTrue("$name 的动作必须用 TextButton", block.contains("TextButton("))
+            assertFalse("$name 不许自绘 clickable 文本动作", block.contains(".clickable("))
+        }
+        assertTrue("两处动作文案来源不变", card.contains("notice.dismissLabel") && card.contains("notice.actionLabel"))
     }
 }
