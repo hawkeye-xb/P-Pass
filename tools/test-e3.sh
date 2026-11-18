@@ -648,6 +648,10 @@ STUB
   fi
   : >"$d/log"
   dev_ios_install TEST-UDID "$d/PPass.app" 0 settings || { echo "带页面时安装/启动返回失败"; exit 1; }
+  # 与无页面分支同口径：先断言启动调用恰好一次，再查这唯一一条的参数——否则「先按旧形状启动、
+  # 再带参数启动」的双启动，两条记录只要有一条匹配就会假绿（#1856）。反证：删掉这条次数断言，
+  # 双启动回归即重新变绿，证明判红来源就是它。
+  [ "$(launch_calls "$d/log" | grep -c .)" = 1 ] || { echo "带页面时启动调用不是恰好一次：$(cat "$d/log")"; exit 1; }
   # 选项与值必须是相邻的两个参数，且就在启动这一行里
   launch_calls "$d/log" | grep -qF -- "$(printf '\t--environment-variables\t'){\"PPASS_ROUTE\":\"settings\"}" ||
     { echo "带页面时启动没带 PPASS_ROUTE：$(launch_calls "$d/log")"; exit 1; }
