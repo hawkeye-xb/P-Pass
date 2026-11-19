@@ -1106,27 +1106,19 @@ private fun MorePage(
                     onClick = onOpenStorage,
                 )
                 HorizontalDivider(color = PPColor.Divider)
-                Row(
-                    Modifier.fillMaxWidth().height(CellRowHeight).padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        stringResource(R.string.setting_version),
-                        fontSize = 15.sp, color = PPColor.Ink,
-                        modifier = Modifier.weight(1f),
-                    )
-                    // #1820：本地开发包在版本号后追加构建时间（`MM-DD HH:MM`），方便分辨两个包谁新；
-                    // 正式/CI 构建 BUILD_STAMP 是空串，这一行与原来逐字相同。
-                    val buildStamp = BuildConfig.BUILD_STAMP
-                    Text(
-                        if (buildStamp.isBlank()) {
-                            "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
-                        } else {
-                            "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) $buildStamp"
-                        },
-                        fontSize = 14.sp, color = PPColor.Ink40,
-                    )
-                }
+                // #1820：本地开发包在版本号后追加构建时间（`MM-DD HH:MM`），方便分辨两个包谁新；
+                // 正式/CI 构建 BUILD_STAMP 是空串，这一行与原来逐字相同。
+                // #1881：走 CellRow，大字体下标签不再被版本值挤窄——放不下时值换到标签下一行（旧写法是
+                // 固定高度 + 标签 weight(1f)，1.5× 带 BUILD_STAMP 时标签折行被裁掉）。
+                val buildStamp = BuildConfig.BUILD_STAMP
+                CellRow(
+                    label = stringResource(R.string.setting_version),
+                    value = if (buildStamp.isBlank()) {
+                        "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+                    } else {
+                        "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) $buildStamp"
+                    },
+                )
                 // UPD-02：手动检查入口（不受 6h 节流门限）；下载/校验中点击
                 // 重新打开被「后台下载」收起的对话框。
                 if (onCheckUpdate != null) {
@@ -1480,6 +1472,7 @@ internal fun cellRowStacks(
 @Composable
 private fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)? = null, heading: Boolean = false) {
     val measurer = rememberTextMeasurer()
+    val clickable = onClick != null
     val labelStyle = LocalTextStyle.current.copy(fontSize = 15.sp)
     val valueStyle = LocalTextStyle.current.copy(fontSize = 14.sp)
     val chevronStyle = LocalTextStyle.current.copy(fontSize = 16.sp)
@@ -1494,14 +1487,15 @@ private fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)?
     ) {
         val available = constraints.maxWidth
         // 量的是渲染同一套样式（字号 + 当前字体 + 密度）下的真实单行宽；measurer 随密度变化重建，
-        // 所以大字体切换会重新量。
-        val stacked = remember(label, value, available, measurer, labelStyle, valueStyle, chevronStyle) {
+        // 所以大字体切换会重新量。键含 clickable：尾部宽度（箭头 + 间距）随它变，可点性变化要重判
+        // （如「已跳过的照片」行在 commandPending 时 onClick 由回调变 null）。
+        val stacked = remember(label, value, available, clickable, measurer, labelStyle, valueStyle, chevronStyle) {
             if (value == null) {
                 false
             } else {
                 val labelWidth = measurer.measure(AnnotatedString(label), labelStyle).size.width
                 val valueWidth = measurer.measure(AnnotatedString(value), valueStyle).size.width
-                val trailing = if (onClick != null) {
+                val trailing = if (clickable) {
                     measurer.measure(AnnotatedString("›"), chevronStyle).size.width + gapPx
                 } else {
                     0
@@ -1516,14 +1510,15 @@ private fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)?
                     Text(label, fontSize = 15.sp, color = PPColor.Ink)
                     Text(value!!, fontSize = 14.sp, color = PPColor.Ink40)
                 }
-                Text("›", fontSize = 16.sp, color = PPColor.Ink40)
+                // 账目行（onClick == null）不画「›」——有雪佛龙却点不动比没有更坏（见 MOB-100）。
+                if (clickable) Text("›", fontSize = 16.sp, color = PPColor.Ink40)
             } else {
                 Text(label, fontSize = 15.sp, color = PPColor.Ink, modifier = Modifier.weight(1f))
                 if (value != null) {
                     Text(value, fontSize = 14.sp, color = PPColor.Ink40)
-                    if (onClick != null) Spacer(Modifier.width(4.dp))
+                    if (clickable) Spacer(Modifier.width(4.dp))
                 }
-                if (onClick != null) Text("›", fontSize = 16.sp, color = PPColor.Ink40)
+                if (clickable) Text("›", fontSize = 16.sp, color = PPColor.Ink40)
             }
         }
     }

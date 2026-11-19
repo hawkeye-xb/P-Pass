@@ -1,5 +1,6 @@
 package com.hawkeyexb.ppass.ui
 
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -48,6 +49,29 @@ class CellRowLayoutTest {
 
     private fun decision(c: Config) =
         cellRowStacks(c.labelIntrinsicPx, c.summaryPx, availablePx, c.chevronPx + c.spacerPx)
+
+    private fun homeScreenSource(): String {
+        var dir = File(System.getProperty("user.dir"))
+        while (!File(dir, "apps/android").isDirectory) {
+            dir = dir.parentFile ?: error("apps/android not found")
+        }
+        return File(
+            dir,
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt",
+        ).readText()
+    }
+
+    /**
+     * 反证（红→绿→红）：纯函数对了还不够——`CellRow` 必须真的调用它并按结果分支。把 `CellRow` 里的
+     * `if (stacked)` 改回永远并排（真正的撤销），本条即红；只把纯函数改成 `= false` 则由上面
+     * [label_that_does_not_fit_its_column_stacks] 抓住。两条一起钉住「判定存在」且「被调用」。
+     */
+    @Test
+    fun cell_row_actually_branches_on_the_decision() {
+        val source = homeScreenSource()
+        assertTrue("CellRow 必须调用 cellRowStacks 判定", source.contains("cellRowStacks("))
+        assertTrue("CellRow 必须按判定分支（并排 / 换行）", source.contains("if (stacked)"))
+    }
 
     /** 几何自洽：标签列 = 可用宽 − 摘要 − 箭头 − 间距，与实测一致（证明四个输入取自同一组测量）。 */
     @Test
