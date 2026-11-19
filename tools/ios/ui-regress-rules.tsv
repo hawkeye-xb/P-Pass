@@ -2,10 +2,10 @@
 # 一行一例：用例名<TAB>通过行（Python 正则，按先后顺序都要出现在本例 App 进程的日志里，用 " >> " 分隔）<TAB>说明
 # 只看本例那一次启动（`process start: pid=` 且时间不早于本例开跑）之后的行：上一例留下的通过行不算。
 # 日志行改了（例如 #1453 补行）只改这里。
-DecisionScopeFull	onboarding: decision shown >> onboarding: photo access after prompt=full	决定页「选择备份范围」→ 系统照片权限选「允许全部」
+DecisionScopeFull	onboarding: decision shown >> scope: photo access after prompt=full	决定页先开启自动备份，再从范围页申请完整照片权限
 DecisionPick	onboarding: decision shown >> picked: 1 chosen >> onboarding: marked onboarded via=pick	决定页「先挑几张试试」→ 系统选择器选 1 张 → 进照片页
 SettingsRuleFull	onboarding: marked onboarded via=scope >> auto-rule: saved enabled=false >> auto-rule: saved enabled=true	设置页「自动备份」关一次再开：判定只认实际操作阶段的 false→true，准备阶段保存范围打的 enabled=true 不算通过证据
-SettingsRuleLimited	onboarding: photo access after prompt=partial >> auto-rule: partial photo access, opening system settings for full access >> auto-rule: partial photo access, sent allowed photos n=[1-9], rule stays off	决定页权限「限制访问」选 1 张 → 设置页开「自动备份」→ 随 App 去系统设置再回来（不改权限）→ 允许的照片发一次、开关保持关
+SettingsRuleLimited	scope: photo access after prompt=partial >> auto-rule: partial photo access, opening system settings for full access >> auto-rule: partial photo access, sent allowed photos n=[1-9], rule stays off	决定页权限「限制访问」选 1 张 → 设置页开「自动备份」→ 随 App 去系统设置再回来（不改权限）→ 允许的照片发一次、开关保持关
 # 待 #1453 合入后启用（App 现在不打这一行，启用会必红；用例清单由此表的非注释行生成）：
 # SettingsRuleDenied	onboarding: marked onboarded via=pick >> settings: auto-rule photo access after prompt=none	设置页「自动备份」→ 照片权限「不允许」→ 开关保持关
 SettingsPick	onboarding: marked onboarded via=pick >> picked: 1 chosen >> picked: 1 registered	设置页「挑几张传」→ 系统选择器选 1 张并登记进队列

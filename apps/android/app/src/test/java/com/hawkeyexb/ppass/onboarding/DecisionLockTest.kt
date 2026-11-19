@@ -28,15 +28,17 @@ class DecisionLockTest {
         assertEquals(2, started)
     }
 
-    /** 两个按钮都经过锁，并把锁状态交给决定页置灰。反证：任一按钮直接调处理函数（去掉 tryLock），本条红。 */
+    /** 三个入口都经过同一把锁，忙碌时都不可点。 */
     @Test
-    fun both_decision_buttons_go_through_the_lock() {
+    fun all_decision_actions_go_through_the_lock() {
         assertTrue(main.contains("onChooseScope = { if (decisionLock.tryLock()) onDecisionChooseScope(s.pairing) }"))
         assertTrue(main.contains("onPickPhotos = { if (decisionLock.tryLock()) launchDecisionPick(s.pairing) }"))
         assertTrue(main.contains("busy = decisionLock.busy"))
         val ui = File("src/main/java/com/hawkeyexb/ppass/ui/DecisionScreen.kt").readText()
         assertTrue(ui.contains("enabled = !busy)"))
-        assertTrue(ui.contains(".clickable(enabled = !busy, onClick = onPickPhotos)"))
+        assertTrue(main.contains("onPickFiles = { if (decisionLock.tryLock()) launchDecisionFile(s.pairing) }"))
+        assertTrue(ui.contains("onClick = onPickPhotos.takeUnless { busy }"))
+        assertTrue(ui.contains("onClick = onPickFiles.takeUnless { busy }"))
     }
 
     /**

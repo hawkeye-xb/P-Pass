@@ -2,12 +2,9 @@
 // 判断 A / B 见 #1321 评论：补记只在升级后第一次启动做一次；冷启动先补记再按记录判去向。
 package com.hawkeyexb.ppass.onboarding
 
-import com.hawkeyexb.ppass.DecisionLanding
 import com.hawkeyexb.ppass.Screen
-import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.backup.OnboardedDesktopsStore
 import com.hawkeyexb.ppass.backup.isKnownDesktop
-import com.hawkeyexb.ppass.decisionLanding
 import com.hawkeyexb.ppass.launchScreen
 import com.hawkeyexb.ppass.transport.Pairing
 import java.io.File
@@ -83,34 +80,21 @@ class OnboardingGateTest {
         assertTrue("排在「老用户」判定之后（那里要求先于任何 markOnboarded）", backfill > notify)
     }
 
-    // ── 决定页主按钮：照片权限三态 ────────────────────────────
-
     @Test
-    fun decision_main_button_lands_by_photo_permission() {
-        assertEquals(DecisionLanding.ChooseScope, decisionLanding(MediaAccess.FULL))
-        assertEquals(
-            "部分允许：系统权限框里已选过照片，直接登记，不再弹选图器（三星验收选两遍）",
-            DecisionLanding.RegisterAllowed,
-            decisionLanding(MediaAccess.PARTIAL),
-        )
-        assertEquals(DecisionLanding.PickPhotos, decisionLanding(MediaAccess.NONE))
+    fun decision_enables_auto_backup_before_opening_scope() {
+        val action = main.substringAfter("val onDecisionChooseScope:").substringBefore("systemBackTarget(screen)")
+        val enabled = action.indexOf("rulePrefs.set(true)")
+        assertTrue(enabled >= 0 && action.indexOf("screen = Screen.Buckets", enabled) > enabled)
+        assertFalse(action.contains("launchAlbumAccessPrompt"))
+        assertFalse(action.contains("markDecided"))
     }
 
-    /**
-     * 部分允许的接线：权限框回调里 RegisterAllowed 分支不打开选图器，用已授权照片登记、落盘 via=partial、进照片页。
-     * 反证：恢复旧路由（部分允许 → `launchDecisionPick`），本条红。
-     */
     @Test
-    fun partial_access_registers_allowed_photos_instead_of_opening_the_picker() {
-        val callback = main.substringAfter("val decisionPermission = rememberLauncherForActivityResult")
-            .substringBefore("val onDecisionChooseScope")
-        assertTrue(callback.contains("DecisionLanding.RegisterAllowed -> registerDecisionAllowed(pairing)"))
-        assertFalse("部分允许不再弹选图器", Regex("RegisterAllowed -> launchDecisionPick").containsMatchIn(callback))
-        val register = main.substringAfter("val registerDecisionAllowed").substringBefore("// 主按钮「选择备份范围」")
-        assertTrue(register.contains("PickedUploads.enqueueAllowedImages(context)"))
-        assertTrue(register.contains("markDecided(pairing, \"partial\")"))
-        assertTrue(register.contains("screen = Screen.Home(pairing)"))
-        assertFalse(register.contains("PickMultipleVisualMedia"))
+    fun scope_permission_result_does_not_start_a_transfer_or_redirect() {
+        val callback = main.substringAfter("val bucketAlbumPermission =").substringBefore("val launchAlbumAccessPrompt")
+        assertTrue(callback.contains("mediaAccess = mediaAccess(context)"))
+        assertFalse(callback.contains("enqueueAllowedImages"))
+        assertFalse(callback.contains("screen ="))
     }
 
     // ── 判断 A：补记只在升级后第一次启动做一次 ───────────────
@@ -191,20 +175,13 @@ class OnboardingGateTest {
     }
 
     /**
-     * 场景 A（产品负责人 2026-11-04）：决定页「选择备份范围」→ 不允许 → 系统选图里取消 → 留在决定页；
-     * 用户自己去设置改成「全部」再回来 → 仍在决定页（决定还没做，回前台不自动跳过）；再点主按钮 → 不弹框、直接进选范围页。
-     * 反证：主按钮不先看现有权限（一律 launch 权限框），或 ON_RESUME 里改 screen，本条红。
+     * 从系统设置回来只刷新权限，不替用户完成引导。
      */
     @Test
-    fun user_grants_full_in_settings_then_main_button_goes_straight_to_scope_without_prompt() {
-        val chooseScope = main.substringAfter("val onDecisionChooseScope: (Pairing) -> Unit = { pairing ->").substringBefore("\n    }\n")
-        val fullBranch = chooseScope.substringAfter("if (mediaAccess(context) == MediaAccess.FULL) {").substringBefore("} else {")
-        assertTrue(fullBranch.contains("screen = Screen.Buckets(pairing, emptySet(), firstTime = true)"))
-        assertFalse("已是全部：不弹框", fullBranch.contains("decisionPermission.launch"))
+    fun returning_from_settings_does_not_complete_onboarding() {
         val resume = main.substringAfter("Lifecycle.Event.ON_RESUME -> {").substringBefore("resumeCount++")
         assertTrue("回前台重读真实权限", resume.contains("mediaAccess = mediaAccess(context)"))
         assertFalse("回前台不替用户做决定：不改 screen", resume.contains("screen ="))
         assertFalse("回前台不落「连过」", resume.contains("markDecided"))
-        assertEquals(DecisionLanding.ChooseScope, decisionLanding(MediaAccess.FULL))
     }
 }

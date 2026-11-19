@@ -73,12 +73,6 @@ struct BucketScreen: View {
                         ForEach(folders) { folder in folderCard(folder) }
                         addFolderCard
                     }
-                    // 一个来源都没选：明确说清楚（空范围 = 不自动备份），不弹窗、不替用户补默认。
-                    if Self.showsEmptySelectionHint(hasLoaded: hasLoaded, checked: checked) {
-                        Text(L.s("bucket_no_selection")).font(PPFont.sans(15, relativeTo: .subheadline)).foregroundStyle(PPColor.ink40)
-                            .multilineTextAlignment(.center).frame(maxWidth: .infinity)
-                            .accessibilityIdentifier("bucketNoSelection")
-                    }
                 }
                 .padding(.horizontal, 24).padding(.top, 6).padding(.bottom, 14)
             }
@@ -101,12 +95,6 @@ struct BucketScreen: View {
     static func visibleAlbums(_ albums: [AlbumBucket], checked: Set<String>, photoAccess: MediaAccess) -> [AlbumBucket] {
         guard photoAccess != .full else { return albums }
         return albums.filter { checked.contains($0.id) }
-    }
-
-    /// 一个来源都没选：明确写「未选择任何来源」。空范围允许保存（= 不自动备份），不替用户补默认。
-    /// 相册未完整授权（选择被隐藏）时同样要显示：此时页面上只有文件夹可选，不写清楚会像「已选好了」。
-    static func showsEmptySelectionHint(hasLoaded: Bool, checked: Set<String>) -> Bool {
-        hasLoaded && checked.isEmpty
     }
 
     /// 首次加载：没有存过的范围一律空——显式传 cameraAlbum 也不预选相机相册（#1811）；
@@ -147,9 +135,7 @@ struct BucketScreen: View {
                 PPButton(title: L.s("bucket_request_access_action")) {
                     Task {
                         let granted = await app.backend.media.requestAccess()
-                        if AppModel.decisionLanding(granted) == .registerAllowed {
-                            _ = await app.backend.engine.sendAllowedPhotos()
-                        }
+                        AppLog.log("scope: photo access after prompt=\(granted)")
                         app.refreshAccess()
                         await load()
                     }

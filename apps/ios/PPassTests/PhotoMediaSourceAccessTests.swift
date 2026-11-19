@@ -175,13 +175,11 @@ final class PhotoMediaSourceAccessTests: XCTestCase {
         XCTAssertEqual(try store.selectedBucketIds(), ["a"], "原样保存不会误删已保存范围")
     }
 
-    /// #1811：首次进范围页没有照片权限、授权回来也不自动补默认；一个来源都没选也能保存（空范围 = 不自动备份），
-    /// 页面上必须明确写「未选择任何来源」，不弹窗。相册权限 none/partial（选择隐藏）时同样要写清楚。
-    /// 反证：去掉提示（`showsEmptySelectionHint` 恒 false）或恢复「相册未完整授权不显示」，第一条断言红。
-    func testEmptySelectionIsExplicitAndGetsNoDefault() {
-        XCTAssertTrue(BucketScreen.showsEmptySelectionHint(hasLoaded: true, checked: []))
-        XCTAssertFalse(BucketScreen.showsEmptySelectionHint(hasLoaded: false, checked: []), "还没加载完不显示")
-        XCTAssertFalse(BucketScreen.showsEmptySelectionHint(hasLoaded: true, checked: ["recents"]))
+    func testEmptySelectionIsAllowedWithoutAnEmptySelectionMessage() throws {
+        XCTAssertEqual(BucketScreen.initialSelectionWithUnavailable(saved: [], availableAlbums: ["recents"], cameraAlbum: "recents"), [])
+        let source = try String(contentsOf: RepoPaths.root.appendingPathComponent("apps/ios/PPass/Home/BucketScreen.swift"), encoding: .utf8)
+        XCTAssertFalse(source.contains("bucket_no_selection"))
+        XCTAssertFalse(source.contains("sendAllowedPhotos()"), "授权不等于发起单次传输")
     }
 
     /// #1811：权限两态——有限授权与拒绝在范围页是同一套「相册未完整授权」，相册不进自动范围，文件夹照常。

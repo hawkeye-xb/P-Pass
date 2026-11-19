@@ -14,7 +14,6 @@
 "bucket_no_access_body" = "Photos won't be backed up automatically. Back up folders only, or send selected photos.";
 "bucket_no_access_action" = "Open Settings";
 "bucket_request_access_action" = "Allow Access";
-"bucket_no_selection" = "No sources selected.";
 
 /* Simulator and devices without a camera. */
 "scan_camera_unavailable" = "Camera unavailable. Enter the pairing code to connect.";

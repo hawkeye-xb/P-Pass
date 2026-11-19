@@ -22,19 +22,26 @@ OLD=$((NOW - 600))
 cat >"$T/stale.log" <<EOF
 $(iso "$OLD") process start: pid=100 version=0.11.0(1) appState=active
 $(iso "$OLD") onboarding: decision shown
-$(iso "$OLD") onboarding: photo access after prompt=full
+$(iso "$OLD") scope: photo access after prompt=full
 $(iso "$NOW") process start: pid=200 version=0.11.0(1) appState=active
 $(iso "$NOW") onboarding: decision shown
-$(iso "$NOW") onboarding: photo access after prompt=none
+$(iso "$NOW") scope: photo access after prompt=none
 EOF
 expect FAIL DecisionScopeFull "$T/stale.log" "$NOW" "上一例的通过行不算"
+
+cat >"$T/old-decision.log" <<EOF
+$(iso "$NOW") process start: pid=200 version=0.11.0(1) appState=active
+$(iso "$NOW") onboarding: decision shown
+$(iso "$NOW") onboarding: photo access after prompt=full
+EOF
+expect FAIL DecisionScopeFull "$T/old-decision.log" "$NOW" "决定页旧权限日志不算范围页授权"
 
 # 本例进程里有，按顺序 ⇒ PASS。
 cat >"$T/ok.log" <<EOF
 $(iso "$OLD") process start: pid=100 version=0.11.0(1) appState=active
 $(iso "$NOW") process start: pid=200 version=0.11.0(1) appState=active
 $(iso "$NOW") onboarding: decision shown
-$(iso "$NOW") onboarding: photo access after prompt=full
+$(iso "$NOW") scope: photo access after prompt=full
 EOF
 expect PASS DecisionScopeFull "$T/ok.log" "$NOW" "本例进程的通过行"
 
@@ -58,7 +65,7 @@ expect PASS SettingsPick "$T/order.log" "$NOW" "设置页再选一次"
 cat >"$T/relaunch.log" <<EOF
 $(iso "$NOW") process start: pid=200 version=0.11.0(1) appState=active
 $(iso "$NOW") onboarding: decision shown
-$(iso "$NOW") onboarding: photo access after prompt=full
+$(iso "$NOW") scope: photo access after prompt=full
 $(iso "$((NOW + 4))") process start: pid=300 version=0.11.0(1) appState=active
 $(iso "$((NOW + 4))") launch origin: background (com.hawkeyexb.ppass.refresh)
 EOF
@@ -68,7 +75,7 @@ expect PASS DecisionScopeFull "$T/relaunch.log" "$NOW" "用例结束后后台拉
 cat >"$T/tolerance.log" <<EOF
 $(iso "$((NOW - 2))") process start: pid=100 version=0.11.0(1) appState=active
 $(iso "$((NOW - 1))") onboarding: decision shown
-$(iso "$((NOW - 1))") onboarding: photo access after prompt=full
+$(iso "$((NOW - 1))") scope: photo access after prompt=full
 $(iso "$((NOW + 3))") process start: pid=200 version=0.11.0(1) appState=active
 $(iso "$((NOW + 3))") logs: Logs excluded from backup = true
 EOF
@@ -85,7 +92,7 @@ $(iso "$((NOW - 10))") process start: pid=90 version=0.11.0(1) appState=active
 $(iso "$((NOW - 9))") onboarding: decision shown
 $(iso "$((NOW - 3))") process start: pid=100 version=0.11.0(1) appState=active
 $(iso "$((NOW - 1))") onboarding: decision shown
-$(iso "$NOW") onboarding: photo access after prompt=full
+$(iso "$NOW") scope: photo access after prompt=full
 $(iso "$((NOW + 5))") process start: pid=300 version=0.11.0(1) appState=active
 EOF
 expect PASS DecisionScopeFull "$T/skew.log" "$NOW" "有时钟差时按开跑前的日志快照切片" "$T/skew-base.log"
@@ -94,7 +101,7 @@ expect PASS DecisionScopeFull "$T/skew.log" "$NOW" "有时钟差时按开跑前�
 cat >"$T/pre.log" <<EOF
 $(iso "$((NOW - 9))") process start: pid=90 version=0.11.0(1) appState=active
 $(iso "$((NOW - 8))") onboarding: decision shown
-$(iso "$((NOW - 8))") onboarding: photo access after prompt=full
+$(iso "$((NOW - 8))") scope: photo access after prompt=full
 EOF
 cp "$T/pre.log" "$T/pre-base.log"
 printf '%s process start: pid=200 version=0.11.0(1) appState=active\n' "$(iso "$NOW")" >>"$T/pre.log"
@@ -106,7 +113,7 @@ expect PASS DecisionScopeFull "$T/ok.log" "$NOW" "快照拉不回来时退回按
 cat >"$T/nobase.log" <<EOF
 $(iso "$((NOW - 9))") process start: pid=90 version=0.11.0(1) appState=active
 $(iso "$((NOW - 8))") onboarding: decision shown
-$(iso "$((NOW - 8))") onboarding: photo access after prompt=full
+$(iso "$((NOW - 8))") scope: photo access after prompt=full
 $(iso "$NOW") process start: pid=200 version=0.11.0(1) appState=active
 EOF
 expect FAIL DecisionScopeFull "$T/nobase.log" "$NOW" "快照拉不回来时上一例的通过行不算本例的" "$T/no-such-baseline.log"

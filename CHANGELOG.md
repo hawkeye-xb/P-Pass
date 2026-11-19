@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Android 端、iOS 端：配对后可直接开启自动备份并选择相册或文件夹，也可从相册或文件发起单次传输。照片权限在范围页按需申请（#1902）。
 - Android 端、iOS 端：设置页的「更多」并入「通知」所在的那一组，不再单独占一组（#1889）。
 
 ## [2026.11.4] - 2026-11-12

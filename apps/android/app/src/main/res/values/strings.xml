@@ -8,7 +8,7 @@
     <!-- T-080 layout v1: welcome three steps -->
     <string name="welcome_step1">1 · Install and open P-Pass on the computer</string>
     <string name="welcome_step2">2 · Scan the QR code or enter the pairing code to connect to the computer</string>
-    <string name="welcome_step3">3 · Choose the albums to back up</string>
+    <string name="welcome_step3">3 · Choose the albums and folders to back up</string>
 
     <!-- Scan (M2/M3, full-page-states doc) -->
     <string name="scan_header_title">Scan to connect</string>
@@ -18,7 +18,8 @@
     <string name="decision_connected">Connected to %1$s</string>
     <string name="decision_title">Choose the photos to back up automatically</string>
     <string name="decision_destination">After you choose albums and a time range, photos in that range are sent to %1$s each time you open the app.</string>
-    <string name="decision_choose_scope">Choose what to back up</string>
+    <string name="decision_choose_scope">Turn on automatic backup</string>
+    <string name="scope_album_no_access_title">Photos access is incomplete</string>
     <string name="decision_choose_scope_note">Requires access to all photos</string>
     <string name="decision_pick_photos">Pick a few to try first</string>
 

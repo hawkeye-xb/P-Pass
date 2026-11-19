@@ -57,20 +57,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// 决定页主按钮「选择备份范围」在照片权限框之后去哪（ADR 结论 5，对位 Android `decisionLanding`）：
-    /// 全部允许 → 选范围页；拒绝 → 系统选图（单张备份）。
-    /// 部分允许：iOS 在权限框里已经弹了系统自己的选照片页，用户在那里选的就是这次的「系统选图」——
-    /// 直接登记这些已授权的照片（单张备份），不再弹 App 的选图器让人选第二遍。都不新增第三个出口。
-    enum DecisionLanding: Equatable { case chooseScope, registerAllowed, pickPhotos }
-
-    nonisolated static func decisionLanding(_ access: MediaAccess) -> DecisionLanding {
-        switch access {
-        case .full: return .chooseScope
-        case .partial: return .registerAllowed
-        case .none: return .pickPhotos
-        }
-    }
-
     enum Tab: Hashable { case photos, settings }
 
     let backend: Backend
@@ -89,6 +75,9 @@ final class AppModel: ObservableObject {
     /// 选图器收起（含下滑关掉、点取消——系统选图器取消时不回调 `pickedChosen`）：还在决定页就解锁，按钮能再点。
     @Published var pickerRequested = false {
         didSet { if oldValue, !pickerRequested, phase == .decision { decisionBusy = false } }
+    }
+    @Published var filePickerRequested = false {
+        didSet { if oldValue, !filePickerRequested, phase == .decision { decisionBusy = false } }
     }
     @Published private(set) var pairing: PairingStatus = .notPaired
     @Published private(set) var scope: Set<String>?
@@ -339,33 +328,18 @@ final class AppModel: ObservableObject {
         AppLog.log("onboarding: decision shown")
     }
 
-    /// 决定页主按钮「选择备份范围」：申请照片权限（读写、全部照片），按结果分流（`decisionLanding`）。
+    /// 权限只在范围页主动申请；进入范围页之前先持久化规则。
     func decisionChooseScope() {
-        guard !decisionBusy else { return }
-        decisionBusy = true
-        Task {
-            let granted = await backend.media.requestAccess()
-            access = granted
-            AppLog.log("onboarding: photo access after prompt=\(granted)")
-            guard phase == .decision else { decisionBusy = false; return }
-            switch Self.decisionLanding(granted) {
-            case .chooseScope: phase = .chooseAlbums
-            case .registerAllowed: registerAllowedOnDecision()
-            case .pickPhotos: pickerRequested = true
-            }
+        guard phase == .decision, !decisionBusy else { return }
+        do {
+            try backend.engine.setAutoRule(true)
+        } catch {
+            settingWriteFailed("auto-rule", error)
+            return
         }
-    }
-
-    /// 部分允许：用户在系统选照片页已经做了选择——当场落盘、进照片页，不停在决定页等（停着按钮还能再点）；
-    /// 登记系统已授权的照片（同 `pickedChosen` 的单张备份口径）放到后台做。
-    private func registerAllowedOnDecision() {
-        markDecided(via: "partial") // 与 Android 同一日志口径
-        phase = .main
-        Task {
-            let n = await backend.engine.sendAllowedPhotos()
-            AppLog.log("onboarding: partial access registered \(n) allowed photos")
-            refresh()
-        }
+        autoRule = true
+        AppLog.log("onboarding: auto backup enabled, opening scope")
+        phase = .chooseAlbums
     }
 
     /// 决定页次入口「先挑几张试试」：直接系统选图（不要照片权限）。
@@ -373,6 +347,12 @@ final class AppModel: ObservableObject {
         guard !decisionBusy else { return }
         decisionBusy = true
         pickerRequested = true
+    }
+
+    func decisionPickFiles() {
+        guard phase == .decision, !decisionBusy else { return }
+        decisionBusy = true
+        filePickerRequested = true
     }
 
     /// 首次选范围页「返回」：还没做决定，回决定页（对位 Android `systemBackTarget` 的 Buckets(firstTime) → Decision）。
