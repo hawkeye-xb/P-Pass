@@ -1,0 +1,3 @@
+FATAL EXCEPTION: main
+ Process: com.hawkeyexb.ppass, PID: 1234
+ java.lang.Runtime: fixture
