@@ -155,23 +155,27 @@ class SingleTransferStatusTest {
     private fun group(source: String, marker: String): String? =
         Regex("(?s)// ── #1789 固定分组 ${marker}.*?(?=// ── #1789 固定分组|// ── #1789 固定分组结束)").find(source)?.value
 
-    /** #1784：设置按「自动备份 / 单次传输 / 传输条件与通知 / 更多」固定分组，组序固定。 */
+    /** #1784：设置按「自动备份 / 单次传输 / 传输条件与通知」固定分组，组序固定。
+     *  #1889：「更多」并入「传输条件与通知」组，不再单独成组，所以是三个分组。 */
     @Test
     fun settings_groups_are_fixed_and_in_order() {
         val source = homeScreen()
-        val one = source.indexOf("// ── #1789 固定分组 1/4")
-        val two = source.indexOf("// ── #1789 固定分组 2/4")
-        val three = source.indexOf("// ── #1789 固定分组 3/4")
-        val four = source.indexOf("// ── #1789 固定分组 4/4")
-        assertTrue("四个固定分组都要在", one >= 0 && two >= 0 && three >= 0 && four >= 0)
-        assertTrue("组序：自动备份 → 单次传输 → 传输条件与通知 → 更多", one < two && two < three && three < four)
+        val one = source.indexOf("// ── #1789 固定分组 1/3")
+        val two = source.indexOf("// ── #1789 固定分组 2/3")
+        val three = source.indexOf("// ── #1789 固定分组 3/3")
+        assertTrue("三个固定分组都要在", one >= 0 && two >= 0 && three >= 0)
+        assertTrue("组序：自动备份 → 单次传输 → 传输条件与通知（含「更多」）", one < two && two < three)
+        assertFalse(
+            "「更多」不再单独成组（不该再有自己的分组标记）",
+            source.contains("// ── #1789 固定分组 4/"),
+        )
     }
 
     /** #1784：单次传输下固定为「从相册选择」「从文件选择」，两行只发起选择，不显示进度、结果或最近一批。
      *  评审 Cy：逐行核对标签与动作的配对——把两行的 onClick 互换，「组里存在两个标签 + 两个动作」的写法仍会通过。 */
     @Test
     fun the_two_single_transfer_entries_only_initiate_selection() {
-        val group = group(homeScreen(), "2/4")
+        val group = group(homeScreen(), "2/3")
         assertTrue(group != null)
         group.let { g ->
             // 按 CellRow 切开：每行入口的标签与 onClick 必须一一配对。
@@ -195,7 +199,7 @@ class SingleTransferStatusTest {
     fun no_pick_progress_line_is_left_in_the_settings_card() {
         val source = homeScreen()
         assertFalse("旧「挑几张传」行值函数必须退场", source.contains("pickedBatchLine"))
-        assertFalse("设置卡里不再消费最近一批", Regex("(?s)// ── #1789 固定分组 1/4.*?// ── #1789 固定分组结束")
+        assertFalse("设置卡里不再消费最近一批", Regex("(?s)// ── #1789 固定分组 1/3.*?// ── #1789 固定分组结束")
             .find(source)!!.value.contains("pickedBatch"))
     }
 

@@ -118,12 +118,13 @@ struct SettingsScreen: View {
         }
     }
 
-    /// #1784：设置按「自动备份 / 单次传输 / 传输条件与通知 / 更多」固定分组，组序由
+    /// #1784：设置按「自动备份 / 单次传输 / 传输条件与通知」固定分组，组序由
     /// SingleTransferStatusTests 锁死；条件行只在原组内显隐，分组不移动。真有问题时上方
     /// 的红卡与告示自然出现（「需要注意」），不在这里重复。组内不贴 section 标签——
-    /// 组的第一行（自动备份开关 / 从相册选择 / 仅 Wi-Fi / 更多）就是这组的名字。
+    /// 组的第一行（自动备份开关 / 从相册选择 / 仅 Wi-Fi）就是这组的名字。
+    /// #1889：产品负责人 2026-11-19 拍板，「更多」不再单独成组，并入「通知」所在的一组。
     @ViewBuilder private var settingsSection: some View {
-        // ── #1789 固定分组 1/4「自动备份」：开关、范围与它的条件行（取消剩余 / 已跳过 / 源已删除账目）。
+        // ── #1789 固定分组 1/3「自动备份」：开关、范围与它的条件行（取消剩余 / 已跳过 / 源已删除账目）。
         Section {
             ruleRow
             // 范围入口常开：关闭自动备份或拒绝照片权限时，也能管理已有目录授权。
@@ -164,7 +165,7 @@ struct SettingsScreen: View {
         }
         .ppTinted(PPUI.Surface.settingsCard)
 
-        // ── #1789 固定分组 2/4「单次传输」：固定两行「从相册选择」「从文件选择」，
+        // ── #1789 固定分组 2/3「单次传输」：固定两行「从相册选择」「从文件选择」，
         // 两行只发起选择，不显示进度、结果或最近一批——状态只在英雄区出现（#1784）。
         Section {
             Button { app.pickerRequested = true } label: {
@@ -184,7 +185,8 @@ struct SettingsScreen: View {
         }
         .ppTinted(PPUI.Surface.settingsCard)
 
-        // ── #1789 固定分组 3/4「传输条件与通知」：仅 Wi-Fi 与失败通知两个开关。
+        // ── #1789 固定分组 3/3「传输条件与通知」：仅 Wi-Fi 与失败通知两个开关，
+        // 以及并入本组的「更多」入口（#1889：产品负责人 2026-11-19 拍板，不再单独成组）。
         Section {
             Toggle(L.s("setting_wifi_only"), isOn: Binding(get: { app.wifiOnly }, set: { app.setWifiOnly($0) }))
                 .font(Self.labelFont).tint(PPColor.safe)
@@ -197,11 +199,7 @@ struct SettingsScreen: View {
                     Text(L.s("rule_notify_denied_hint")).font(Self.hintFont).foregroundStyle(PPColor.ink40)
                 }
             }
-        }
-        .ppTinted(PPUI.Surface.settingsCard)
-
-        // ── #1789 固定分组 4/4「更多」：点进去仍是原来的二级页（存储电脑、断开连接、版本、检查更新）。
-        Section {
+            // 「更多」点进去仍是原来的二级页（存储电脑、断开连接、版本、检查更新）。
             row(L.s("more_label"), value: "", route: .more)
         }
         .ppTinted(PPUI.Surface.settingsCard)
