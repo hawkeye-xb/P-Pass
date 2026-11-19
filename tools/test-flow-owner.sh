@@ -825,6 +825,55 @@ else
   bad "摘 decided:owner 那一行没匹配上，变异没生效"
 fi
 
+echo "── 9h. triage：只信固定 main 上生成、且范围相同的桌面升版差异"
+fresh
+P="${S}/plan.md"
+TCONF=apps/desktop/src-tauri/tauri.conf.json
+mkdir -p "$(dirname "$TCONF")"
+printf '{\n  "version": "0.10.1",\n  "tag": "stable"\n}\n' >"$TCONF"
+cat >tools/bump-version.sh <<'BUMP_STUB'
+#!/usr/bin/env bash
+set -eu
+[ "$*" = "--platform desktop 0.10.3" ] || exit 2
+p=apps/desktop/src-tauri/tauri.conf.json
+sed -i.bak 's/0\.10\.1/0.10.3/' "$p"
+rm "$p.bak"
+printf '{"desktop": "0.10.3"}\n' >release/versions.json
+BUMP_STUB
+git add "$TCONF" tools/bump-version.sh
+git commit -q -s -m 'desktop bump fixture' && git push -q origin HEAD:refs/heads/main || exit 1
+# 调用者的未提交脚本不得作为证据；调用者的配置文件不得被改写。
+printf '\nexit 42\n' >>tools/bump-version.sh
+BUMP_SCOPE="$(printf '%s\n' "$TCONF" release/versions.json)"
+BUMP_REQ='**桌面升版**：0.10.3'
+triage_bump_case() { # <号> <范围> <升版字段> <期望分流> <说明>
+  local n="$1" scope="$2" request="$3" expected="$4" description="$5" result
+  tcard "$n" status:inbox
+  plan "$P" "$scope" "无" "$request"
+  result="$(bash tools/flow/owner-triage.sh "$n" "$P" 2>&1)"
+  check "$description" grep -qx "TRIAGE $n $expected" <<<"$result"
+  if ! grep -qx "TRIAGE $n $expected" <<<"$result"; then
+    printf '%s\n' "$result"
+  fi
+}
+triage_bump_case 191 "$BUMP_SCOPE" "$BUMP_REQ" ready "标准升版、精确范围相同 → ready"
+check "分拣没有更改调用者的版本文件" git diff --quiet HEAD -- "$TCONF" release/versions.json
+triage_bump_case 192 "$BUMP_SCOPE" '' blocked "没有差异 → blocked"
+triage_bump_case 193 "$BUMP_SCOPE" '**桌面升版**：不是版本号' blocked "版本字段无效 → blocked"
+triage_bump_case 194 "$BUMP_SCOPE" '**桌面升版**：0.10.4' blocked "生成器失败 → blocked"
+triage_bump_case 195 "$TCONF" "$BUMP_REQ" blocked "范围少于生成文件 → blocked"
+triage_bump_case 196 "$BUMP_SCOPE"$'\ndocs/b.md' "$BUMP_REQ" blocked "范围多于生成文件 → blocked"
+triage_bump_case 197 $'apps/desktop/src-tauri/**\nrelease/versions.json' "$BUMP_REQ" blocked "通配范围即使目前展开一致 → blocked"
+cat >>tools/bump-version.sh <<'BUMP_STUB'
+sed -i.bak 's/stable/preview/' "$p"
+rm "$p.bak"
+BUMP_STUB
+sed -i.bak '/^exit 42$/d' tools/bump-version.sh && rm tools/bump-version.sh.bak
+git add tools/bump-version.sh
+git commit -q -s -m 'fixture also changes a non-version setting' && git push -q origin HEAD:refs/heads/main || exit 1
+triage_bump_case 198 "$BUMP_SCOPE" "$BUMP_REQ" blocked "同一配置还改非版本字段 → blocked"
+
+
 echo
 echo "flow-owner: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
