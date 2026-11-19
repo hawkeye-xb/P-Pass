@@ -103,6 +103,64 @@ internal fun onSubscriptionDesktopReachable(s: SubscriptionSessionState): Subscr
     if (s.subscribeExhausted) onSubscriptionManualRetry(s) else null
 
 /**
+ * #1883：手机与电脑之间**唯一**的连接状态——存储电脑详情页与照片页都从这里取文案与显示条件，
+ * 同一时刻不可能给出相反结论。
+ *
+ * 词汇表对齐桌面 `crates/transport/src/conninfo.rs` 的 `ConnectionStatus`
+ * （Direct / Relay / Offline / Unknown），另加一档 [Status.PairingLost]：那是另一个维度
+ * （配对还有没有效），不是连接状态本身。
+ *
+ * 手机侧不区分直连与中继——实时订阅只知道「连上没有」，路径分类（lan / direct / relay）
+ * 只存在于诊断探测里（`transport/ConnPath.kt`），拿不到就不编：连上就是 [Status.Connected]。
+ */
+internal data class ConnectionState(
+    val status: Status,
+    /** 距上次确认可达的天数（`SentinelStore.lastReachableAt` 推算）；null = 从未确认过，不编天数。 */
+    val daysUnreachable: Int? = null,
+) {
+    enum class Status {
+        /** 配对已失效（桌面吊销/移除本设备）——重新扫码连接是唯一出路。 */
+        PairingLost,
+        /** 实时连上了（直连或中继）。 */
+        Connected,
+        /** 断过、正在退避重连。 */
+        Reconnecting,
+        /** 退避耗尽：没有实时连接。 */
+        Offline,
+        /** 还没有依据（刚进前台、这次订阅还没连上）。 */
+        Unknown,
+    }
+
+    /** 「已连接」这种强断言只能在真的有连接时用——两页共用这一条判定。 */
+    val isConnected: Boolean get() = status == Status.Connected
+
+    /** 配对已失效：两页都收起各自的提示，只留「重新扫码连接」这一条出路。 */
+    val needsRepair: Boolean get() = status == Status.PairingLost
+}
+
+/**
+ * #1883：把三份信号合成唯一状态——配对有效性（`pairingLost`）、实时订阅会话（[SubscriptionSessionState]）、
+ * 失联天数。配对有效性是另一个维度，优先；其余按订阅会话判定。
+ *
+ * 顺序即优先级：配对已失效 > 已连上 > 退避耗尽（断开）> 重连中 > 未知。
+ * 「已连上」排在「退避耗尽」前面——真的连上了就是连上了，即便上一轮的退避记录还在。
+ */
+internal fun connectionStateOf(
+    pairingLost: Boolean,
+    state: SubscriptionSessionState,
+    daysUnreachable: Int? = null,
+): ConnectionState = ConnectionState(
+    status = when {
+        pairingLost -> ConnectionState.Status.PairingLost
+        state.subscribeConnected -> ConnectionState.Status.Connected
+        state.subscribeExhausted -> ConnectionState.Status.Offline
+        state.subscribeHadFailure -> ConnectionState.Status.Reconnecting
+        else -> ConnectionState.Status.Unknown
+    },
+    daysUnreachable = daysUnreachable,
+)
+
+/**
  * SYNC-06: holder 对 timeline 通道的依赖面——生产实现包 TimelineLoader，
  * 测试注入计数 fake（不走网络）。协议层（SYNC-03/04）原样不动。
  */

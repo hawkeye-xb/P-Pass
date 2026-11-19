@@ -4,8 +4,9 @@
 // 时间线区域的「正在重新连接电脑…」，以及「没能连上电脑。(timeline: err.not_authorized)」。
 // 一个说要重新扫码，一个说正在重连，还露出了原始错误 key。设置 tab 同一信号下只给「重新扫码」。
 //
-// 判据：pairingLost（与红卡、设置 tab 同一个 holder.pairingLost）为真时，时间线区域的
-// 重连 / 耗尽重试 / 原始错误三处提示全部收起；为假时行为与改动前一致。
+// 判据：配对失效（#1883 起 = 唯一连接状态里的 ConnectionState.Status.PairingLost，
+// 与红卡、设置 tab 同一个 holder.pairingLost）时，时间线区域的重连 / 耗尽重试 / 原始错误
+// 三处提示全部收起；其余状态行为与改动前一致。
 package com.hawkeyexb.ppass.ui
 
 import java.io.File
@@ -20,10 +21,14 @@ class UI17PhotosPairingLostTest {
     private val exhausted = SubscriptionSessionState(subscribeHadFailure = true, subscribeExhausted = true)
     private val rawKey = "timeline: err.not_authorized"
 
+    /** #1883：投影的输入收成了唯一连接状态——这里按同一份合成函数造输入。 */
+    private fun chrome(pairingLost: Boolean, state: SubscriptionSessionState, error: String?) =
+        photosTimelineChrome(connectionStateOf(pairingLost = pairingLost, state = state), error)
+
     @Test
     fun pairingLostHidesReconnectingAndRawError() {
         // 回归现场的组合：订阅被拒在重连 + 初始整页加载失败带原始 key。
-        val c = photosTimelineChrome(pairingLost = true, state = reconnecting, error = rawKey)
+        val c = chrome(pairingLost = true, state = reconnecting, error = rawKey)
         assertFalse("配对失效时不得再说「正在重新连接电脑…」", c.showReconnecting)
         assertFalse("配对失效时不得露出原始错误 key", c.showTimelineError)
         assertFalse(c.showExhaustedRetry)
@@ -32,7 +37,7 @@ class UI17PhotosPairingLostTest {
     @Test
     fun pairingLostHidesExhaustedRetry() {
         // 「重试」是另一个出路（重连），与红卡「重新扫码」冲突。
-        val c = photosTimelineChrome(pairingLost = true, state = exhausted, error = rawKey)
+        val c = chrome(pairingLost = true, state = exhausted, error = rawKey)
         assertFalse("配对失效时不得给「重试」这个出路", c.showExhaustedRetry)
         assertFalse(c.showReconnecting)
         assertFalse(c.showTimelineError)
@@ -41,13 +46,13 @@ class UI17PhotosPairingLostTest {
     @Test
     fun notPairingLostKeepsExistingBehaviour() {
         // 普通断线（桌面停服/没网）不受影响——SYNC-04 的提示照旧。
-        val r = photosTimelineChrome(pairingLost = false, state = reconnecting, error = null)
+        val r = chrome(pairingLost = false, state = reconnecting, error = null)
         assertEquals(PhotosTimelineChrome(showReconnecting = true, showExhaustedRetry = false, showTimelineError = false), r)
 
-        val e = photosTimelineChrome(pairingLost = false, state = exhausted, error = "boom")
+        val e = chrome(pairingLost = false, state = exhausted, error = "boom")
         assertEquals(PhotosTimelineChrome(showReconnecting = false, showExhaustedRetry = true, showTimelineError = true), e)
 
-        val ok = photosTimelineChrome(
+        val ok = chrome(
             pairingLost = false,
             state = SubscriptionSessionState(subscribeConnected = true),
             error = null,
@@ -77,8 +82,8 @@ class UI17PhotosPairingLostTest {
         val src = photosScreen()
         val body = src.substringAfter("internal fun PhotosScreen(")
         assertTrue(
-            "投影输入必须是红卡同一个 pairingLost 参数",
-            body.contains("photosTimelineChrome(pairingLost, holder.state, error)"),
+            "投影输入必须是红卡同一个连接状态参数",
+            body.contains("photosTimelineChrome(connection, error)"),
         )
         assertTrue("「正在重新连接」必须经投影", body.contains("if (chrome.showReconnecting)"))
         assertTrue("「重试」必须经投影", body.contains("if (chrome.showExhaustedRetry)"))

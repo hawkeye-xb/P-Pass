@@ -255,7 +255,7 @@ fun desktopLowSpaceHintVisible(lowSpace: Boolean, mediaAccess: MediaAccess, pair
     lowSpace && mediaAccess == MediaAccess.FULL && !pairingLost
 
 @Composable
-fun HomeScreen(
+internal fun HomeScreen(
     // T-083 目标 1：副标题「已连接 …」已删（连接状态是桌面设备行的职责，
     // 手机页头只有「备份」）。参数位暂留——调用方仍传入，后续卡可能复用。
     storageName: String,
@@ -280,8 +280,9 @@ fun HomeScreen(
     backgroundBackupState: BackgroundBackupState = BackgroundBackupState.OffByUser,
     onResolveBackgroundBackup: () -> Unit = {},
     onDisconnect: () -> Unit = {},
-    // 存储端移除/吊销本设备后备份被拒——「配对已失效」红卡 + 重新扫码。
-    pairingLost: Boolean = false,
+    // #1883：唯一的连接状态（[connectionStateOf] 合成）——本页的「配对已失效」判断与
+    // 「存储电脑」详情页的连接表述都从这一份取，跟照片页同一个事实源。
+    connection: ConnectionState = ConnectionState(ConnectionState.Status.Unknown),
     onRepair: () -> Unit = {},
     // 存储电脑详情是二级页——打开/关闭时告知调用方，好让底部 Photos/
     // 设置 tab 栏跟大图查看页一样整体隐藏（用户实机反馈：进了二级页
@@ -378,6 +379,9 @@ fun HomeScreen(
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
+    // #1883：配对有效性是连接状态的一档（[ConnectionState.needsRepair]）——本页所有
+    // 「配对失效就收起备份相关界面」的判断都从这一个状态推出来，不再各自读一个布尔。
+    val pairingLost = connection.needsRepair
 
     // "存储电脑"详情子页——"断开连接"收进这里最底部（点按钮二次确认）。
     // M10：仅充电/仅 Wi-Fi 改回主列表里的直接开关行，不再收进单独的
@@ -406,7 +410,7 @@ fun HomeScreen(
             pairedAt = pairedAt,
             confirmedCount = triplet?.m ?: 0L,
             lastSuccessAt = triplet?.lastSuccessAt ?: 0L,
-            pairingLost = pairingLost,
+            connection = connection,
             // #1272：详情在「更多」里打开，返回回到「更多」（底栏仍收着）。
             onBack = { showStorageDetail = false },
             onDisconnect = onDisconnect,
@@ -1149,7 +1153,7 @@ private fun StorageComputerDetail(
     pairedAt: Long,
     confirmedCount: Long,
     lastSuccessAt: Long,
-    pairingLost: Boolean,
+    connection: ConnectionState,
     onBack: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
@@ -1180,13 +1184,15 @@ private fun StorageComputerDetail(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         Modifier.size(9.dp).clip(androidx.compose.foundation.shape.CircleShape)
-                            .background(if (pairingLost) PPColor.Act else PPColor.Safe),
+                            // #1883：状态点跟正文同一份事实——绿=真的连上了、红=要人处理、
+                            // 琥珀=重连中、灰=没有连接（tokens 的 idle = neutral waiting / offline peer）。
+                            .background(storageDetailDotColor(connection.status)),
                     )
                     Spacer(Modifier.width(10.dp))
                     Text(storageName, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink)
                 }
                 Spacer(Modifier.height(10.dp))
-                Text(storageDetailBody(pairingLost, lastSuccessAt, pairedAt, confirmedCount),
+                Text(storageDetailBody(connection, lastSuccessAt, pairedAt, confirmedCount),
                     fontSize = 14.sp, lineHeight = 24.sp, color = PPColor.Ink60,
                 )
             }
@@ -1240,18 +1246,42 @@ private fun StorageComputerDetail(
     }
 }
 
-/** M11 信息卡正文——已失效直接说失效；否则"已连接·最近同步 X"，
- *  配对日期未知（老 pairing 升级上来，字段是 0）就不硬凑第二行，
- *  不编数据。 */
+/** M11 信息卡状态点颜色——跟正文同一份连接状态（#1883），不再只看配对有效性。
+ *  绿=真的连上了、红=要人处理、琥珀=重连中、灰=没有连接（tokens 的 idle = offline peer）。 */
+internal fun storageDetailDotColor(status: ConnectionState.Status): Color = when (status) {
+    ConnectionState.Status.Connected -> PPColor.Safe
+    ConnectionState.Status.PairingLost -> PPColor.Act
+    ConnectionState.Status.Reconnecting -> PPColor.Waiting
+    ConnectionState.Status.Offline, ConnectionState.Status.Unknown -> PPColor.Idle
+}
+
+/** M11 信息卡第一行说哪句——只由唯一连接状态决定（#1883）。
+ *  纯函数，JVM 可测：「已连接」只在那一个状态出现，其余状态一律只说「未连接」。 */
+internal fun storageDetailStatusRes(status: ConnectionState.Status): Int = when (status) {
+    ConnectionState.Status.PairingLost -> R.string.storage_detail_lost
+    ConnectionState.Status.Connected -> R.string.storage_detail_connected
+    ConnectionState.Status.Reconnecting,
+    ConnectionState.Status.Offline,
+    ConnectionState.Status.Unknown -> R.string.storage_detail_offline
+}
+
+/** M11 信息卡正文——#1883：连接表述从唯一状态 [ConnectionState] 取，与照片页同一个事实源。
+ *  配对已失效直接说失效；真的连上了才说「已连接」；其余（断开 / 重连中 / 还没连上）
+ *  只说「未连接」+ 最近同步——不再把「配对还有效」当成「电脑连得上」。
+ *  配对日期未知（老 pairing 升级上来，字段是 0）就不硬凑第二行，不编数据。 */
 @Composable
-private fun storageDetailBody(
-    pairingLost: Boolean,
+internal fun storageDetailBody(
+    connection: ConnectionState,
     lastSuccessAt: Long,
     pairedAt: Long,
     confirmedCount: Long,
 ): String {
-    if (pairingLost) return stringResource(R.string.storage_detail_lost)
-    val line1 = stringResource(R.string.storage_detail_connected, lastSuccessText(lastSuccessAt))
+    val statusRes = storageDetailStatusRes(connection.status)
+    val line1 = if (connection.needsRepair) {
+        stringResource(statusRes)
+    } else {
+        stringResource(statusRes, lastSuccessText(lastSuccessAt))
+    }
     if (pairedAt <= 0) return line1
     val line2 = stringResource(R.string.storage_detail_paired, pairedDateText(pairedAt), groupThousands(confirmedCount))
     return "$line1\n$line2"
