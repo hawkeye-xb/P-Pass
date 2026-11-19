@@ -24,6 +24,7 @@ class DefinitiveEventNoticesTest {
         backgroundRequested = true,
         interruptionDetectedAt = null,
         batteryWhitelisted = true,
+        hasUsableSource = false,
     )
 
     private val dir: File = Files.createTempDirectory("definitive").toFile()
@@ -92,6 +93,18 @@ class DefinitiveEventNoticesTest {
         assertEquals(listOf(DefinitiveEvent.MEDIA_ACCESS_REVOKED), n.cancelled)
         run(healthy.copy(mediaAccess = MediaAccess.PARTIAL), n)
         assertEquals(2, n.posted.size)
+    }
+
+    @Test
+    fun media_downgrade_with_a_usable_folder_does_not_post_or_replay() {
+        val n = FakeNotifier()
+        for (access in listOf(MediaAccess.PARTIAL, MediaAccess.NONE)) {
+            run(healthy.copy(hasUsableSource = true), n)
+            val downgraded = healthy.copy(mediaAccess = access, hasUsableSource = true)
+            assertEquals(access.name, run(downgraded, n).next.lastMediaAccess)
+            run(downgraded.copy(hasUsableSource = false), n)
+            assertEquals("$access：目录还能备份时不能通知全停，之后也不补发", emptyList<DefinitiveNotice>(), n.posted)
+        }
     }
 
     @Test
