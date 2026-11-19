@@ -8,6 +8,7 @@
 #   **时间性**：停线 / 截止日 / 线性 / 无   （停线＝此刻卡住交付或卡着产品负责人；产品负责人点名的一类卡也算停线）
 #   **范围**：后面跟一个 ``` 代码块，一行一个路径或 glob（新文件也要写上）
 #   **验收场景**：…        （按任务卡模板：场景 id，或步骤 + 日志判据 + 反证，标 E1–E4）
+#   **桌面升版**：0.12.0   （可选；隔离生成差异，不是免审声明）
 #   **ADR**：docs/decisions/<文件>.md        （范围命中核心时必填）
 #   **选项一**：… **选项二**：…               （需要产品负责人拍板时必填，各写做法与影响）
 #   **产品定案**：docs/decisions/<文件>.md，产品负责人 <日期> 已确认
@@ -62,6 +63,7 @@ UI_GLOBS="assets/i18n/** assets/design/** apps/android/app/src/main/res/** apps/
 
 need_gh
 fetch_origin
+BASE="$(git rev-parse --verify refs/remotes/origin/main)" || refuse "找不到 origin/main"
 load_issue "$N" || refuse "$CARD_ERR"
 [ "$ISSUE_STATE" = OPEN ] || refuse "#${N} 不是打开状态"
 has_label status:inbox || refuse "#${N} 不是 status:inbox（标签：${ISSUE_LABELS}）" "triage 只给新诉求定方案；已分拣过的卡要重来，先把它改回 status:inbox。"
@@ -73,7 +75,7 @@ python3 -I -X utf8 - "$PLAN" "$TMPD" <<'PY'
 import re, sys, pathlib
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").replace("\r", "")
 out = pathlib.Path(sys.argv[2])
-names = ["做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "影响", "时间性", "范围", "验收场景", "ADR", "选项一", "选项二", "产品定案", "标准依据", "owner 定案", "复现路径"]
+names = ["做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "影响", "时间性", "范围", "验收场景", "ADR", "选项一", "选项二", "产品定案", "标准依据", "owner 定案", "复现路径", "桌面升版"]
 pat = re.compile(r"^\*\*(" + "|".join(names) + r")\*\*[：:]?[ \t]*", re.M)
 hits = list(pat.finditer(text))
 fields = {}
@@ -152,7 +154,7 @@ fi
 # 宁可多判核心，不漏判。
 FILES="${TMPD}/files"
 : >"$FILES"
-ALL="$(git ls-tree -r --name-only origin/main)"
+ALL="$(git ls-tree -r --name-only "$BASE")" || refuse "读不到 origin/main 的文件清单"
 for g in "${GLOBS[@]}"; do
   hits="$(printf '%s\n' "$ALL" | python3 -I -X utf8 -c '
 import re, sys
@@ -168,7 +170,38 @@ for line in sys.stdin:
     printf '%s\n' "$g" | sed -e 's#\*\*#__new__/__new__#g' -e 's#\*#__new__#g' -e 's#?#_#g' >>"$FILES"
   fi
 done
-CORE="$(sort -u "$FILES" | bash "${REPO_ROOT}/tools/ci-paths.sh" core - "${REPO_ROOT}/.github/core-paths.txt" 2>/dev/null)"
+LC_ALL=C sort -u "$FILES" >"${TMPD}/scope-files" || refuse "无法整理范围文件"
+CORE_RULES="${TMPD}/core-paths.txt"
+# 普通卡仍按路径判；取不到 main 的规则时，判定器会保守返回 true。
+MSYS_NO_PATHCONV=1 git cat-file blob "${BASE}:.github/core-paths.txt" >"$CORE_RULES" || rm -f "$CORE_RULES"
+CORE_ARGS=(core - "$CORE_RULES")
+preview_desktop_bump() {
+  local target="$1" path untracked preview="${TMPD}/version-preview"
+  # 方案只提供一个参数，不是证据。不接受通配范围或外部 patch。
+  [[ "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] || return 1
+  for path in "${GLOBS[@]}"; do
+    case "$path" in *[\*\?\[]*) return 1 ;; esac
+  done
+  # 用仓库已合入的生成器；候选变化只落在临时克隆，不动调用者的工作区。
+  git clone -q --template= --shared --no-checkout -- "$REPO_ROOT" "$preview" &&
+    git -C "$preview" -c core.autocrlf=false -c core.hooksPath="${TMPD}/no-hooks" checkout -q --detach "$BASE" &&
+    (cd "$preview" && CARGO_NET_OFFLINE=true bash tools/bump-version.sh --platform desktop "$target") &&
+    git -C "$preview" diff --no-renames --name-only "$BASE" -- | LC_ALL=C sort -u >"${TMPD}/bump-files" || return 1
+  cmp -s "${TMPD}/scope-files" "${TMPD}/bump-files" || return 1
+  untracked="$(git -C "$preview" ls-files --others)" && [ -z "$untracked" ] || return 1
+  git -C "$preview" diff --no-renames --no-color --no-ext-diff --no-textconv \
+    --src-prefix=a/ --dst-prefix=b/ "$BASE" -- >"${TMPD}/bump.diff" && [ -s "${TMPD}/bump.diff" ]
+}
+BUMP_TARGET="$(field 桌面升版)"
+if [ -n "$BUMP_TARGET" ]; then
+  if preview_desktop_bump "$BUMP_TARGET" >"${TMPD}/bump.log" 2>&1; then
+    CORE_ARGS+=(--diff "${TMPD}/bump.diff")
+  else
+    say "桌面升版差异生成失败或与精确范围不一致，仍按路径判定核心。"
+    tail -n 8 "${TMPD}/bump.log" >&2
+  fi
+fi
+CORE="$(bash "${REPO_ROOT}/tools/ci-paths.sh" "${CORE_ARGS[@]}" <"${TMPD}/scope-files" 2>/dev/null)"
 set -f
 # shellcheck disable=SC2086
 UI="$(sort -u "$FILES" | bash "${REPO_ROOT}/tools/ci-paths.sh" hit - $UI_GLOBS 2>/dev/null)"
@@ -374,6 +407,9 @@ fi
 # 写回 issue 正文。
 printf '%s\n' "$ISSUE_BODY" >"${TMPD}/body"
 CORE_TXT="否（范围不命中 .github/core-paths.txt）"
+if [ "$CORE" = false ] && [ "${#CORE_ARGS[@]}" -gt 3 ]; then
+  CORE_TXT="否（桌面升版差异已核对，PR 仍查实际改动；基线 ${BASE}）"
+fi
 [ "$CORE" = false ] || CORE_TXT="是（定案：$(printf '%s' "${ADRS:-无}" | tr '\n' ' ')）"
 python3 -I -X utf8 - "${TMPD}" "$CORE_TXT" "$DECISION" "${REASONS%；}" "$PRIO" "$PRIO_WHY" <<'PY'
 import re, sys, pathlib
@@ -419,7 +455,7 @@ else:
 
 sec = [begin, "## 实施方案（just triage）", ""]
 sec += extra
-for k in ("做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "影响", "时间性", "ADR", "产品定案", "标准依据", "owner 定案"):
+for k in ("做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "影响", "时间性", "ADR", "产品定案", "标准依据", "owner 定案", "桌面升版"):
     if f(k):
         sec.append("**" + k + "**：" + f(k) + "\n")
 if decision == "needs:product":
@@ -427,7 +463,7 @@ if decision == "needs:product":
     sec.append("1. " + f("选项一"))
     sec.append("2. " + f("选项二") + "\n")
 sec.append("**优先级**：`P" + prio + "`（" + prio_why + "）\n")
-sec.append("分流结果：`" + decision + "`（脚本按范围路径与字段判定）")
+sec.append("分流结果：`" + decision + "`（脚本核对范围与方案）")
 sec.append(end)
 (d / "newbody").write_text(body.rstrip() + "\n\n" + "\n".join(sec) + "\n", encoding="utf-8")
 PY
