@@ -146,24 +146,19 @@ class S1883ConnectionConsistencyTest {
         }
     }
 
-    // ── 连上之后照片页不再整页说「无法连接电脑」（独立评审 #1898 建议 1） ──
+    // ── 连上之后照片页不再整页说「无法连接电脑」（评审 #1898 建议 1，Bugbot 复审后改了做法） ──
 
     @Test
-    fun photosPageStopsClaimingUnreachableOnceTheConnectionIsLive() {
-        // 初始整页加载失败留下 error，订阅随后连上——onSubscriptionConnected 不清 error，
-        // 要等下一次刷新信号才清。这段里详情页说「已连接」，照片页不能再整页说「无法连接电脑」。
+    fun photosChromeShowsTheRawErrorOnlyWhileThereIsOne() {
+        // 这一层不再按连接状态二次遮 error：遮掉会让下面「error 非空且一张都没有」那条
+        // 落到空白页（Bugbot 在 #1898 上抓到过）。真正的修法在源头——holder 在 onConnected
+        // 里补一次整页，把连上之后作废的旧 error 清掉（协程级断言见
+        // TimelineSubscriptionHolderTest.connectingRetriesThePageThatFailedBeforeTheConnection）。
         val connected = connectionStateOf(pairingLost = false, state = live())
         assertTrue(connected.isConnected)
-        assertFalse(
-            "连上了就不再显「无法连接电脑」",
-            photosTimelineChrome(connected, error = "timeline: boom").showTimelineError,
-        )
-        // 没连上时照旧显错——错误仍要有人负责。
-        for (s in listOf(exhausted(), reconnecting(), SubscriptionSessionState())) {
-            val c = connectionStateOf(pairingLost = false, state = s)
-            assertTrue("${c.status} 未连上时仍显原始错误", photosTimelineChrome(c, error = "boom").showTimelineError)
-        }
-        // 配对已失效时本来就不显（红卡是唯一出路）。
+        assertFalse("没有 error 就不显", photosTimelineChrome(connected, error = null).showTimelineError)
+        assertTrue("有 error 就显——由 holder 保证连上后它会清掉", photosTimelineChrome(connected, error = "boom").showTimelineError)
+        // 配对已失效时红卡是唯一出路，本来就不显。
         val lost = connectionStateOf(pairingLost = true, state = live())
         assertFalse(photosTimelineChrome(lost, error = "boom").showTimelineError)
     }

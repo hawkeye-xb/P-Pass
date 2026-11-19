@@ -346,6 +346,19 @@ internal class TimelineSubscriptionHolder(
                         state = onSubscriptionConnected(state)
                         connectedAt = System.currentTimeMillis()
                         log("subscribe: connected")
+                        // #1883：初始整页加载失败留下的 error 不会自己消失（订阅连上不经过
+                        // refreshFullPage），而详情页这时已经说「已连接」——照片页不能停在
+                        // 「连不上」上。连上就把那一页补回来：成功即清 error，失败保留
+                        // （页面照旧说「无法连接电脑」，那是实话）。
+                        if (error != null) {
+                            try {
+                                refreshFullPage(ch)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Throwable) {
+                                // 补页又失败——留着 error，等下一次信号/兜底轮询。
+                            }
+                        }
                     },
                 ) {
                     try {
