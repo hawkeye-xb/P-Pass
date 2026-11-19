@@ -70,6 +70,9 @@
   import { staleHint } from "./lib/staleHint.js";
   // #1699：设备页分组——未知/缺失的 removal 值留在列表里（fail-open）。
   import { deviceGroups as deviceGroupsOf } from "./lib/deviceGroups.js";
+  // #1433：设备名兜底（空名 → 「手机 · <ID 前 4 位>」）抽成共用函数，所有显示
+  // 设备名的地方都走它——主行、水位卡、移除确认弹窗各写一套口径一定会漂。
+  import { displayName } from "./lib/deviceDisplayName.js";
   import {
     pendingDialogText,
     pendingSubText,
@@ -767,9 +770,6 @@
   // 点设备名 → 变输入框；回车/失焦保存（空名/未改动不提交）；Esc 取消。
   let renameTarget = $state(null); // { nodeId, name }
   let renameValue = $state("");
-
-  // #1406：名字为空时的兜底显示名（按钮要有宽度才点得到）。ID 取自 ID 列同一个短指纹。
-  const displayName = (d) => d.name?.trim() || t("ui.device_fallback_name", { id: d.node_id.slice(0, 4) });
 
   function startRename(d) {
     renameTarget = { nodeId: d.node_id, name: d.name };
@@ -1901,7 +1901,7 @@
                              水位卡为单行结构）。T-092: 行点变四色——哨兵 act >
                              连接态（direct=safe / relay=wait / offline·unknown=idle）。 -->
                         <span class="h-[9px] w-[9px] flex-none rounded-full {DOT_BG[row.dot]}"></span>
-                        <span class="flex-1 text-[15px] font-semibold">{d.name}</span>
+                        <span class="flex-1 text-[15px] font-semibold">{displayName(d)}</span>
                         <span class="flex-none text-[13.5px] {row.alert ? 'text-act' : 'text-ink-40'}">{row.right}</span>
                       </li>
                     {/each}
@@ -2084,7 +2084,7 @@
                         variant="link"
                         class="h-auto min-h-0 rounded-sm border-0 border-none px-[4px] py-[8px] text-[14px] font-semibold text-act no-underline hover:bg-act-bg hover:underline hover:underline-offset-[3px]"
                         aria-label={`${t("ui.remove")} ${displayName(d)}`}
-                        onclick={() => revoke(d.node_id, d.name)}
+                        onclick={() => revoke(d.node_id, displayName(d))}
                       >{t("ui.remove")}</Button>
                     </li>
                     {/each}

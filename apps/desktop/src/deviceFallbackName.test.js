@@ -1,13 +1,16 @@
 // @vitest-environment jsdom
 //
 // #1406：设备名为空时列表里显示兜底名「手机 · <ID 前 4 位>」，且可点击进入改名。
+// #1433：兜底名抽成 lib/deviceDisplayName.js 的共用函数——列表主行、水位卡、
+//        移除确认弹窗三处必须取到同一个名字（各写一套口径一定会漂）。
 // 挂载真的 App.svelte（同 deviceNeedsUpdate.test.js）。
 //
-// 反证：把按钮文案改回 `{d.name}`，两条用例必须红（空名按钮没有文字，找不到）。
+// 反证：把任一处的 displayName(d) 改回 `{d.name}`（或 revoke 的第二个实参改回
+// d.name），对应用例必须红——空名那一处渲染成空白，找不到「手机 · cccc」。
 import { cleanup, render, screen, fireEvent } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { invokeMock, handlers } = vi.hoisted(() => {
+const { invokeMock, handlers, confirmMock } = vi.hoisted(() => {
   const mem = new Map();
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,
@@ -19,7 +22,7 @@ const { invokeMock, handlers } = vi.hoisted(() => {
     },
   });
   Object.defineProperty(navigator, "language", { configurable: true, value: "zh-CN" });
-  return { invokeMock: vi.fn(), handlers: new Map() };
+  return { invokeMock: vi.fn(), handlers: new Map(), confirmMock: vi.fn(async () => true) };
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -36,7 +39,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
-  confirm: vi.fn(async () => true),
+  confirm: confirmMock,
   message: vi.fn(async () => {}),
 }));
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: vi.fn(async () => null) }));
@@ -46,6 +49,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 }));
 
 import App from "./App.svelte";
+import { displayName } from "./lib/deviceDisplayName.js";
 import { daemonMethodOf } from "./lib/daemonApi.js";
 
 const NODE = "c".repeat(64);
@@ -89,39 +93,80 @@ function daemon(name) {
   });
 }
 
-async function openDevices() {
-  location.hash = "#/devices";
+async function openPage(hash) {
+  location.hash = hash;
   render(App);
   await vi.advanceTimersByTimeAsync(0);
 }
 
-describe("设备名为空的兜底名", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    invokeMock.mockReset();
-    handlers.clear();
-    globalThis.IntersectionObserver = class {
-      observe() {}
-      disconnect() {}
-    };
-    window.matchMedia = () => ({
-      matches: false,
-      addEventListener() {},
-      removeEventListener() {},
-      addListener() {},
-      removeListener() {},
-    });
+const openDevices = () => openPage("#/devices");
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  invokeMock.mockReset();
+  confirmMock.mockClear();
+  handlers.clear();
+  globalThis.IntersectionObserver = class {
+    observe() {}
+    disconnect() {}
+  };
+  window.matchMedia = () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
   });
-  afterEach(() => {
-    cleanup();
-    vi.useRealTimers();
+});
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+
+// 三处显示点共用同一个函数，这一组钉住函数本身的三种输入。
+// （devices.list 的行不带型号，兜底恒走「手机 · <ID 前 4 位>」那一支——
+// 型号分支等 daemon 真给 model 字段时再补。）
+describe("#1433 兜底名纯函数（唯一口径）", () => {
+  it("空名 → 「手机 · <ID 前 4 位>」", () => {
+    expect(displayName({ name: "", node_id: NODE })).toBe("手机 · cccc");
   });
 
-  it("空名 → 显示「手机 · cccc」，与 ID 列 #cccccccc 的前 4 位对得上", async () => {
+  it("纯空白名 → 同样兜底", () => {
+    expect(displayName({ name: "   ", node_id: "abcdef1234" })).toBe("手机 · abcd");
+  });
+
+  it("有名字 → 用名字，不兜底", () => {
+    expect(displayName({ name: "测试手机", node_id: NODE })).toBe("测试手机");
+  });
+
+  it("名字两边空白 → 去掉空白", () => {
+    expect(displayName({ name: "  测试手机  ", node_id: NODE })).toBe("测试手机");
+  });
+});
+
+describe("#1433 三处显示同一个兜底名", () => {
+  it("设备列表主行：空名 → 「手机 · cccc」，与 ID 列 #cccccccc 的前 4 位对得上", async () => {
     daemon("");
     await openDevices();
     expect(screen.getByRole("button", { name: "手机 · cccc" })).toBeTruthy();
     expect(screen.getByText("#cccccccc")).toBeTruthy();
+  });
+
+  it("水位卡（总览）：空名 → 「手机 · cccc」", async () => {
+    daemon("");
+    await openPage("#/overview");
+    expect(screen.getByText("手机 · cccc")).toBeTruthy();
+  });
+
+  it("移除确认弹窗：点「移除」→ 弹窗正文点名「手机 · cccc」", async () => {
+    daemon("");
+    await openDevices();
+    await fireEvent.click(screen.getByRole("button", { name: "移除 手机 · cccc" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(confirmMock).toHaveBeenCalledWith(
+      expect.stringContaining("手机 · cccc"),
+      expect.anything(),
+    );
   });
 
   it("兜底名本身可点击进入改名", async () => {
@@ -131,7 +176,7 @@ describe("设备名为空的兜底名", () => {
     expect(document.querySelector("input")).toBeTruthy();
   });
 
-  it("有名字时照常显示名字（反证：不被兜底名覆盖）", async () => {
+  it("有名字时三处照常显示名字（反证：不被兜底名覆盖）", async () => {
     daemon("测试手机");
     await openDevices();
     expect(screen.getByRole("button", { name: "测试手机" })).toBeTruthy();
