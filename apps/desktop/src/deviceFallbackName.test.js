@@ -123,20 +123,28 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-// 三处显示点共用同一个函数，这一组钉住函数本身的三种输入。
-// （devices.list 的行不带型号，兜底恒走「手机 · <ID 前 4 位>」那一支——
-// 型号分支等 daemon 真给 model 字段时再补。）
+// 三处显示点共用同一个函数，这一组钉住 #1406 定案的三种输入：name 为空
+// （有型号 / 无型号）与有名字。devices.list 目前不带 model 字段，线上恒走
+// 「手机」那一支；型号分支先按定案实现并钉住，daemon 补字段即生效。
 describe("#1433 兜底名纯函数（唯一口径）", () => {
-  it("空名 → 「手机 · <ID 前 4 位>」", () => {
+  it("空名 + 无型号 → 「手机 · <ID 前 4 位>」", () => {
     expect(displayName({ name: "", node_id: NODE })).toBe("手机 · cccc");
   });
 
-  it("纯空白名 → 同样兜底", () => {
+  it("空名 + 有型号 → 「<型号> · <ID 前 4 位>」（#1406 例：SM-S9210 · 3f2a）", () => {
+    expect(displayName({ name: "", model: "SM-S9210", node_id: "3f2a1234" })).toBe("SM-S9210 · 3f2a");
+  });
+
+  it("纯空白名 → 同样兜底（无型号）", () => {
     expect(displayName({ name: "   ", node_id: "abcdef1234" })).toBe("手机 · abcd");
   });
 
-  it("有名字 → 用名字，不兜底", () => {
-    expect(displayName({ name: "测试手机", node_id: NODE })).toBe("测试手机");
+  it("纯空白型号 → 当没有型号", () => {
+    expect(displayName({ name: "", model: "   ", node_id: NODE })).toBe("手机 · cccc");
+  });
+
+  it("有名字 → 用名字，型号不参与", () => {
+    expect(displayName({ name: "测试手机", model: "SM-S9210", node_id: NODE })).toBe("测试手机");
   });
 
   it("名字两边空白 → 去掉空白", () => {
