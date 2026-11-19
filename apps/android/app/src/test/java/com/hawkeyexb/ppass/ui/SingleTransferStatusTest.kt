@@ -169,6 +169,21 @@ class SingleTransferStatusTest {
             "「更多」不再单独成组（不该再有自己的分组标记）",
             source.contains("// ── #1789 固定分组 4/"),
         )
+        // 只判标记不够：把「更多」挪出第三组、顺手删掉标记注释，上面三条仍会绿（评审建议）。
+        // 所以按第三组的**区间**判——它必须含「更多」，且只能有一张卡（Surface）。
+        val third = group(source, "3/3")
+        assertTrue("第三组必须可读", third != null)
+        third.let { g ->
+            assertTrue(
+                "「更多」必须留在第三组内（挪出第三组这条就红）",
+                g!!.contains("R.string.more_label"),
+            )
+            assertEquals(
+                "第三组只能有一张卡——「更多」必须并进「通知」那张卡，不能自己另起一张",
+                1,
+                g.split("Surface(").size - 1,
+            )
+        }
     }
 
     /** #1784：单次传输下固定为「从相册选择」「从文件选择」，两行只发起选择，不显示进度、结果或最近一批。

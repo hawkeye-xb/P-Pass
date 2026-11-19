@@ -60,6 +60,17 @@ final class SingleTransferStatusTests: XCTestCase {
         } else {
             XCTFail("缺「更多」或「通知」行，判不了同组关系")
         }
+        // 只判「在注释区间内」不够：把 `row(.more)` 拆成不带 4/ 标记的新 Section，上面全绿（评审建议）。
+        // 所以按第三组的**区间**判——它必须含「更多」，且只能有一个 Section（组 = 一张卡）。
+        if let third = group(source, "3/3") {
+            XCTAssertTrue(third.contains("more_label"), "「更多」必须留在第三组内（拆出去这条就红）")
+            XCTAssertEqual(
+                third.components(separatedBy: "Section {").count - 1, 1,
+                "第三组只能有一个 Section——「更多」必须并进「通知」那一节，不能自己另起一节",
+            )
+        } else {
+            XCTFail("缺「传输条件与通知」分组")
+        }
     }
 
     /// #1784：单次传输下固定为「从相册选择」「从文件选择」，两行只发起选择，不显示进度、结果或最近一批。
