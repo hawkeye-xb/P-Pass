@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Android 端：系统切到深色模式时，App 保持暖纸浅色——本期不提供深色外观（#1872）。
+
 ### Fixed
 - Android 端：存储电脑详情页和照片页现在说的是同一件事——电脑关掉、睡眠或断网时，详情页不再一边写「已连接」、照片页一边写「连接已中断」。详情页只在真的连上时才写「已连接」，其余时候写「未连接 · 最近同步 …」（#1883）。
 
