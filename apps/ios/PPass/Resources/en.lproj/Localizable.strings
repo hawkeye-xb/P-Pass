@@ -84,6 +84,7 @@
 "storage_detail_connected" = "Connected · %1$@";
 "storage_detail_paired" = "Paired %1$@ · %2$@ photos backed up";
 "storage_detail_lost" = "Pairing is no longer valid";
+"storage_detail_offline" = "Not connected · %1$@";
 "hero_of_n" = "/ %1$@ photos backed up";
 "pending_count" = "%1$ld to back up";
 "triplet_unavailable" = "Couldn't read the album photo count.";
