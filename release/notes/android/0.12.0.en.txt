@@ -1,0 +1,3 @@
+Backup range can now include folders on your phone.
+The interface has a new look in settings, backup range and photo viewing.
+You can also pick videos, and select several at once.
