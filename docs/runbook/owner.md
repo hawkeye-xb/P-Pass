@@ -9,7 +9,7 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 
 ## 开工自检（doctor）
 
-每条 owner 命令开头都会先跑 `just doctor`（`tools/flow/doctor.sh`）。它在你自己的外壳里检查：
+`just idea` / `just triage` / `just release-test` 这类 owner 命令会先自动跑 `just doctor`（`tools/flow/doctor.sh`）；只是查问题、读文档、跟人对话或汇报进度时不必手动跑——doctor 检查的是开发环境，不是所有任务的入口。它在你自己的外壳里检查：
 当前目录是主副本或它的 worktree、bash 能否真执行（Windows 上必须是 Git Bash，不能是 WSL 桩）、
 本地提交拦截已装、gh 能读本仓库 issue、提交身份在 `.github/allowed-identities.txt` 里、磁盘 ≥ 15G。
 私仓模式与在线设备只报不判。任一必需项不满足就非 0 退出并打印怎么修，修好再重跑。
