@@ -160,12 +160,37 @@ class PPThemeTokensTest {
         assertTrue("根 MaterialTheme 必须下发 colorScheme", call.contains("colorScheme ="))
         assertTrue("根 MaterialTheme 必须下发 typography = PPTypography", call.contains("typography = PPTypography"))
         assertTrue("根 MaterialTheme 必须下发 shapes = PPShapes", call.contains("shapes = PPShapes"))
-        // 明暗入口：深色必须真的走 PPDarkColorScheme，而不是永远用浅色。
+    }
+
+    @Test
+    fun app_does_not_follow_system_dark_mode() {
+        // #1872 产品定案：本期不实现深色外观，暖纸是唯一外观——系统明暗取到的是同一套配色。
+        // 本仓没有 Robolectric，Composable 的运行时配色取不到，这里钉住的是「App 里不存在跟随
+        // 系统深色的依赖、也不存在第二套配色」这条真实约束：把跟随分支或暗色一套加回来必须变红。
+        val sources = File("src/main/java/com/hawkeyexb/ppass")
+            .walkTopDown().filter { it.isFile && it.extension == "kt" }
+            .associate { it.name to codeOnly(it.readText()) }
+        assertTrue("没扫到 App 源码，测试本身失效", sources.size >= 100)
+        val following = sources.filterValues(::followsSystemDark)
+        assertTrue("这些文件让外观跟随了系统深色：${following.keys}", following.isEmpty())
+        // 反证：修复前的写法必须被这条判据抓住。
         assertTrue(
-            "根主题必须按 darkTheme 选 scheme",
-            theme.contains("colorScheme = if (darkTheme) PPDarkColorScheme else PPColorScheme"),
+            "判据抓不住修复前的写法",
+            followsSystemDark("colorScheme = if (darkTheme) PPDarkColorScheme else PPColorScheme"),
         )
     }
+
+    /** 判定的是行为不是措辞：注释里提到这些名字不算跟随。 */
+    private fun codeOnly(source: String): String =
+        source.replace(blockComment, "").lineSequence().joinToString("\n") { it.substringBefore("//") }
+
+    private val blockComment = Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL)
+
+    /** 跟随系统深色的三种写法：读系统标志、建一套暗色配色、引用暗色配色。 */
+    private fun followsSystemDark(source: String): Boolean =
+        source.contains("isSystemInDarkTheme") ||
+            source.contains("darkColorScheme(") ||
+            source.contains("PPDarkColorScheme")
 
     private fun shapeSlots(shapes: Shapes): Map<String, CornerBasedShape> = mapOf(
         "extraSmall" to shapes.extraSmall,

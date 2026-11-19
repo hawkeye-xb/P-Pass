@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Android 端：系统切到深色模式时，App 保持暖纸浅色——本期不提供深色外观（#1872）。
+
 ## [2026.11.4] - 2026-11-12
 
 ### Changed
