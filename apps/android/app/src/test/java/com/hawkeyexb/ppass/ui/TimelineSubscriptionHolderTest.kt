@@ -15,6 +15,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -76,6 +77,53 @@ class TimelineSubscriptionHolderTest {
         override fun onRefreshed(hashes: Set<String>) {}
 
         override fun onAppended(hashes: Set<String>) {}
+    }
+
+    /** #1883：第一次整页加载失败（留下 error），之后的加载成功；订阅一上来就连上。 */
+    private class FlakyFirstLoadChannel : TimelineChannel {
+        var pageCalls: Int = 0
+            private set
+        private val release = CompletableDeferred<Unit>()
+
+        override val loader: TimelineLoader? get() = null
+
+        override suspend fun loadPage(cursor: String?): TimelinePage {
+            pageCalls++
+            if (pageCalls == 1) throw IllegalStateException("first page load failed")
+            return TimelinePage()
+        }
+
+        override suspend fun subscribe(
+            onConnected: suspend () -> Unit,
+            onInvalidated: suspend () -> Unit,
+        ) {
+            onConnected()
+            release.await()
+        }
+
+        override fun onRefreshed(hashes: Set<String>) {}
+
+        override fun onAppended(hashes: Set<String>) {}
+    }
+
+    /**
+     * #1883：初始整页加载失败留下的 error，在订阅连上后不能自己赖着不走——那段里详情页已经说
+     * 「已连接」，照片页却还整页说「无法连接电脑」（或者被遮成空白页，Bugbot 在 #1898 上抓过）。
+     * 连上就补一次整页：成功即清 error。
+     */
+    @Test
+    fun connectingRetriesThePageThatFailedBeforeTheConnection() = runTest {
+        val ch = FlakyFirstLoadChannel()
+        val holder = TimelineSubscriptionHolder(
+            scope = backgroundScope,
+            currentPairing = { pairing },
+            channelFor = { ch },
+        )
+        holder.start()
+        runCurrent()
+        assertTrue("fake 订阅立即连上", holder.state.subscribeConnected)
+        assertNull("连上后不得再留着「连不上」的旧 error", holder.error)
+        assertEquals("连上时补一次整页", 2, ch.pageCalls)
     }
 
     @Test

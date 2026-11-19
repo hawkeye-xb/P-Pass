@@ -84,6 +84,7 @@
 "storage_detail_connected" = "已连接 · %1$@";
 "storage_detail_paired" = "%1$@ 配对 · 已备份 %2$@ 张照片";
 "storage_detail_lost" = "配对已失效";
+"storage_detail_offline" = "未连接 · %1$@";
 "hero_of_n" = "/ %1$@ 张已备份";
 "pending_count" = "待备份 %1$ld 张";
 "triplet_unavailable" = "无法读取相册里的照片数量";

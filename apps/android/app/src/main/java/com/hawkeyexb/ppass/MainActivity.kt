@@ -126,6 +126,7 @@ import com.hawkeyexb.ppass.ui.photosGuideOf
 import com.hawkeyexb.ppass.ui.scopeEmptyHintShown
 import com.hawkeyexb.ppass.ui.TimelineLoader
 import com.hawkeyexb.ppass.ui.TimelineSubscriptionHolder
+import com.hawkeyexb.ppass.ui.connectionStateOf
 import com.hawkeyexb.ppass.ui.TwoTabs
 import com.hawkeyexb.ppass.transport.disconnectAndNotifyInBackground
 import com.hawkeyexb.ppass.transport.sendUnpairNoticeOnce
@@ -1419,6 +1420,13 @@ fun PPassApp() {
             }
             // #1072：版本不兼容显示在首页状态卡上（不弹窗、不遮挡），见 HomeScreen 的 outdated。
             val outdatedSide = ProtocolVersionGate.outdated.collectAsState().value
+            // #1883：唯一的连接状态——配对有效性（holder）+ 实时订阅会话（timeline）+ 失联天数，
+            // 在这里合成一次，照片页与存储电脑详情页都读这一份，同屏不可能出现相反结论。
+            val connection = connectionStateOf(
+                pairingLost = holder.pairingLost.value,
+                state = timeline.state,
+                daysUnreachable = daysUnreachable,
+            )
             TwoTabs(
                 tab = tab,
                 onTab = { tab = it },
@@ -1465,9 +1473,8 @@ fun PPassApp() {
                     PhotosScreen(
                         timeline,
                         onViewerOpenChange = { photoViewerOpen = it },
-                        pairingLost = holder.pairingLost.value,
+                        connection = connection,
                         onReconnect = onRepairPairing,
-                        daysUnreachable = daysUnreachable,
                         // #1322：引导位按当前开关现算（方案结论 6）；「还没有选择相册」并入「开启范围备份」这一步。
                         // 范围存了但读不出来不算「没选」（设置行另说「读不到」）。
                         guide = guide,
@@ -1615,7 +1622,7 @@ fun PPassApp() {
                         // 存储端移除/吊销本设备后：主按钮变「重新扫码连接」——
                         // 本地照清（无需 unpair，daemon 端本就不认本设备），
                         // 直达扫码（UI-18），新 token 走 rejoin 门重建。
-                        pairingLost = holder.pairingLost.value,
+                        connection = connection,
                         onRepair = onRepairPairing,
                         onStorageDetailOpenChange = { storageDetailOpen = it },
                         // #1762：素材文件夹二级页（tab 栏随二级页隐藏，与存储电脑详情页同口径）。

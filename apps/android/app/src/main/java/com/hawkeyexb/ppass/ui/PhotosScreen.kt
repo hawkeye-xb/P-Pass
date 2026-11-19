@@ -262,7 +262,10 @@ private fun AssetMeta.sourceDeviceOrNull(): String? = srcDevice?.takeIf { it.isN
 /**
  * UI-17（#354）：照片 tab 时间线区域上方那几行状态提示该不该露出——纯函数，JVM 可测。
  *
- * 配对失效（`holder.pairingLost`，与设置 tab 红卡、设置角标同一个信号）时，出路只有一个：
+ * #1883：判定输入从三个各自的信号收成唯一状态 [ConnectionState]——详情页与照片页看同一份事实，
+ * 同一时刻不可能一个说已连接、一个说已中断。
+ *
+ * 配对失效（[ConnectionState.needsRepair]，与设置 tab 红卡、设置角标同一个信号）时，出路只有一个：
  * 红卡上的「重新扫码连接」。这时订阅必然一直被拒（not_authorized），如果时间线区域照常显示
  * 「正在重新连接电脑…」/「连不上 + 重试」/「没能连上电脑。(timeline: err.not_authorized)」，
  * 就等于同一屏里一个说要重新扫码、一个说正在重连，还露出原始错误 key。所以配对失效时三者全部收起。
@@ -277,17 +280,19 @@ internal data class PhotosTimelineChrome(
 )
 
 internal fun photosTimelineChrome(
-    pairingLost: Boolean,
-    state: SubscriptionSessionState,
+    connection: ConnectionState,
     error: String?,
 ): PhotosTimelineChrome =
-    if (pairingLost) {
+    if (connection.needsRepair) {
         PhotosTimelineChrome(showReconnecting = false, showExhaustedRetry = false, showTimelineError = false)
     } else {
         PhotosTimelineChrome(
             // SYNC-04：跟「耗尽」互斥（耗尽之后不会再是「重连中」）。
-            showReconnecting = state.subscribeHadFailure && !state.subscribeConnected && !state.subscribeExhausted,
-            showExhaustedRetry = state.subscribeExhausted,
+            showReconnecting = connection.status == ConnectionState.Status.Reconnecting,
+            showExhaustedRetry = connection.status == ConnectionState.Status.Offline,
+            // #1883：这一层只看 error。连上之后旧 error 由 holder 在 onConnected 里补一次整页清掉
+            // （见 TimelineSubscriptionHolder.sessionLoop）——在这里再按连接状态遮一次，会让下面
+            // 「error 非空且一张都没有」那条落到空白页，反而更糟。
             showTimelineError = error != null,
         )
     }
@@ -302,14 +307,11 @@ internal fun PhotosScreen(
     // opened/viewer 状态（不改动内部数据流），只是多一条"我现在是否
     // 在全屏查看"的通知线往上冒泡。
     onViewerOpenChange: (Boolean) -> Unit = {},
-    // 2026-08-17 设计稿对齐：存储端移除/吊销本设备后（同 HomeScreen 的
-    // pairingLost），照片页也要露出红色警示卡——不能只藏在设置页。
-    pairingLost: Boolean = false,
+    // #1883：唯一的连接状态（[connectionStateOf] 合成）——照片页与存储电脑详情页
+    // 都从这一份取文案与显示条件，不再各自读 pairingLost / subscribeExhausted /
+    // 失联天数三个信号（那正是「同一屏两个相反结论」的来源）。
+    connection: ConnectionState = ConnectionState(ConnectionState.Status.Unknown),
     onReconnect: () -> Unit = {},
-    // 距上次确认可达的天数（SentinelStore.lastReachableAt 推算，
-    // SENT-01 既有数据源，非新造）；null = 从未确认可达过，不编造
-    // 具体天数，警示卡改用不带天数的兜底文案。
-    daysUnreachable: Int? = null,
     // #1322：引导位这一刻给哪一张（[photosGuideOf] 按当前开关现算），同一时间最多一张。
     guide: PhotosGuide = PhotosGuide.None,
     computerName: String = "",
@@ -334,7 +336,7 @@ internal fun PhotosScreen(
     // 10-29 文案 B13：原始报错只进日志，屏幕上只说「无法连接电脑」和用户能做的事。
     LaunchedEffect(error) { error?.let { PLog.w("PPassTimeline", "photos tab load failed: $it") } }
     // UI-17: 配对失效时红卡是唯一出路，时间线区域的重连/错误提示一律收起（见 photosTimelineChrome）。
-    val chrome = photosTimelineChrome(pairingLost, holder.state, error)
+    val chrome = photosTimelineChrome(connection, error)
 
     var viewer by remember { mutableStateOf<MediaViewerSession?>(null) }
     // T-080: 轻过滤器（设计稿：全部 / 仅本机 / 家人的）。
@@ -374,7 +376,7 @@ internal fun PhotosScreen(
 
         // 设计稿："和家里的电脑失去了联系"红色警示卡——配对被电脑端
         // 移除/吊销后，照片页也要露出（不能只藏在设置页才看得到）。
-        if (pairingLost) {
+        if (connection.needsRepair) {
             Surface(
                 color = PPColor.ActBg,
                 shape = RoundedCornerShape(PPSize.RadiusCard),
@@ -388,8 +390,8 @@ internal fun PhotosScreen(
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        if (daysUnreachable != null) {
-                            pluralStringResource(R.plurals.photos_lost_body_days, daysUnreachable, daysUnreachable)
+                        if (connection.daysUnreachable != null) {
+                            pluralStringResource(R.plurals.photos_lost_body_days, connection.daysUnreachable, connection.daysUnreachable)
                         } else {
                             stringResource(R.string.photos_lost_body_unknown)
                         },

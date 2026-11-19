@@ -134,6 +134,9 @@
     <string name="storage_detail_connected">Connected · %1$s</string>
     <string name="storage_detail_paired">Paired %1$s · %2$s photos backed up</string>
     <string name="storage_detail_lost">Pairing is no longer valid</string>
+    <!-- #1883: the desktop isn't reachable right now. The card states that fact instead of
+         claiming "Connected" off pairing validity alone (the photos tab says the same thing). -->
+    <string name="storage_detail_offline">Not connected · %1$s</string>
     <string name="hero_of_n">/ %1$s photos backed up</string>
     <string name="pending_count">%1$d to back up</string>
     <string name="triplet_unavailable">Couldn\'t read the album photo count.</string>

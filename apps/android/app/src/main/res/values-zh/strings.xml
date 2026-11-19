@@ -125,6 +125,8 @@
     <string name="storage_detail_connected">已连接 · %1$s</string>
     <string name="storage_detail_paired">%1$s 配对 · 已备份 %2$s 张照片</string>
     <string name="storage_detail_lost">配对已失效</string>
+    <!-- #1883：电脑此刻连不上。信息卡只陈述事实，不再凭「配对还有效」就说「已连接」（照片页说的是同一件事）。 -->
+    <string name="storage_detail_offline">未连接 · %1$s</string>
     <string name="hero_of_n">/ %1$s 张已备份</string>
     <string name="pending_count">待备份 %1$d 张</string>
     <string name="triplet_unavailable">无法读取相册里的照片数量</string>
