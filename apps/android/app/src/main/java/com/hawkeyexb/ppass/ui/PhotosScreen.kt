@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -937,7 +938,11 @@ internal fun ViewerAction(
 /** 设计稿的过滤胶囊：高 36,圆角 999,选中=墨底纸字,未选=亚麻底墨字。
  *  UI-13: 底层用 Material3 `FilterChip`（选中态/涟漪/a11y role 都是
  *  组件自带的），只定制 `colors`/`shape` 让视觉贴住设计稿——不再是一个
- *  重新发明的手写药丸。 */
+ *  重新发明的手写药丸。
+ *  #1886：36 是**最小**高度（`heightIn(min = 36.dp)`），不是固定高度——大字体下
+ *  标签换行时胶囊要能自己长高，否则换行后的第二行被底边裁掉（视觉只剩「Incl」）。
+ *  触控区不靠这个高度撑：Material 3 `FilterChip` 自带的
+ *  `minimumInteractiveComponentSize` 已把可点区撑到 48dp。 */
 @Composable
 internal fun PhotoFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
     androidx.compose.material3.FilterChip(
@@ -957,7 +962,7 @@ internal fun PhotoFilterChip(label: String, selected: Boolean, onClick: () -> Un
             selectedLabelColor = PPColor.Paper,
         ),
         border = null,
-        modifier = Modifier.height(36.dp),
+        modifier = Modifier.heightIn(min = 36.dp),
     )
 }
 
