@@ -11,6 +11,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,6 +33,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -51,13 +53,16 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hawkeyexb.ppass.R
@@ -1105,27 +1110,19 @@ private fun MorePage(
                     onClick = onOpenStorage,
                 )
                 HorizontalDivider(color = PPColor.Divider)
-                Row(
-                    Modifier.fillMaxWidth().height(CellRowHeight).padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        stringResource(R.string.setting_version),
-                        fontSize = 15.sp, color = PPColor.Ink,
-                        modifier = Modifier.weight(1f),
-                    )
-                    // #1820：本地开发包在版本号后追加构建时间（`MM-DD HH:MM`），方便分辨两个包谁新；
-                    // 正式/CI 构建 BUILD_STAMP 是空串，这一行与原来逐字相同。
-                    val buildStamp = BuildConfig.BUILD_STAMP
-                    Text(
-                        if (buildStamp.isBlank()) {
-                            "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
-                        } else {
-                            "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) $buildStamp"
-                        },
-                        fontSize = 14.sp, color = PPColor.Ink40,
-                    )
-                }
+                // #1820：本地开发包在版本号后追加构建时间（`MM-DD HH:MM`），方便分辨两个包谁新；
+                // 正式/CI 构建 BUILD_STAMP 是空串，这一行与原来逐字相同。
+                // #1881：走 CellRow，大字体下标签不再被版本值挤窄——放不下时值换到标签下一行（旧写法是
+                // 固定高度 + 标签 weight(1f)，1.5× 带 BUILD_STAMP 时标签折行被裁掉）。
+                val buildStamp = BuildConfig.BUILD_STAMP
+                CellRow(
+                    label = stringResource(R.string.setting_version),
+                    value = if (buildStamp.isBlank()) {
+                        "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+                    } else {
+                        "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) $buildStamp"
+                    },
+                )
                 // UPD-02：手动检查入口（不受 6h 节流门限）；下载/校验中点击
                 // 重新打开被「后台下载」收起的对话框。
                 if (onCheckUpdate != null) {
@@ -1494,6 +1491,21 @@ private fun RuleSwitchRow(
     }
 }
 
+/** #1881：设置页 cell 行「标签与摘要并排，还是摘要换到标签下一行」的判定——纯函数，
+ *  单测用三星 SM-S928N 实测像素钉住。
+ *
+ *  为什么需要判定：Compose 的 `Row` 先按自身需求量**没有** weight 的子项（摘要、4dp 间距、
+ *  箭头先占走宽度），标签只能吃剩下的；英文 1.5× 时标签只剩 143px，装不下「Backup range」，
+ *  被压成 4 行断词 `Bac / kup / rang / e`。这里按内容量宽：标签单行宽 + 摘要单行宽 + 末尾固定量
+ *  （箭头及其间距）超过整行可用宽，就把摘要换到标签下一行，两段都拿到可用的整行宽。
+ *  不设字号 / 屏幕宽 / 字数 / 百分比阈值；不截断、不省略、不压字。 */
+internal fun cellRowStacks(
+    labelWidthPx: Int,
+    valueWidthPx: Int,
+    availableWidthPx: Int,
+    trailingWidthPx: Int,
+): Boolean = labelWidthPx + valueWidthPx + trailingWidthPx > availableWidthPx
+
 /** 设计稿的 cell 行——label 左、可选的 value + "›" 右，整行可点。
  *
  *  MOB-100：`onClick == null` 的行是**账目**，不是入口——不可点，也不画
@@ -1501,23 +1513,60 @@ private fun RuleSwitchRow(
  *  （有按钮、按钮不做事）换一个地方重演。
  *  #1799：可点行带标准 `role = Role.Button`（TalkBack 报「按钮」）；行高
  *  例外保留——UI-13 评估过 `ListItem`（单行 56dp），比设计稿 52dp 高出
- *  4dp 且整卡变松散，量出的冲突仍在，故继续走 Row + role 的薄语义封装。 */
+ *  4dp 且整卡变松散，量出的冲突仍在，故继续走 Row + role 的薄语义封装。
+ *  #1881：并排放不下时摘要换到标签下一行（判定见 `cellRowStacks`）。 */
 @Composable
 private fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)? = null, heading: Boolean = false) {
-    Row(
+    val measurer = rememberTextMeasurer()
+    val clickable = onClick != null
+    val labelStyle = LocalTextStyle.current.copy(fontSize = 15.sp)
+    val valueStyle = LocalTextStyle.current.copy(fontSize = 14.sp)
+    val chevronStyle = LocalTextStyle.current.copy(fontSize = 16.sp)
+    val gapPx = with(LocalDensity.current) { 4.dp.roundToPx() }
+    BoxWithConstraints(
         Modifier.fillMaxWidth()
             .let { if (heading) it.semantics { heading() } else it }
             .let { if (onClick != null) it.clickable(role = Role.Button, onClick = onClick) else it }
             .heightIn(min = CellRowHeight)
             .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        contentAlignment = Alignment.CenterStart,
     ) {
-        Text(label, fontSize = 15.sp, color = PPColor.Ink, modifier = Modifier.weight(1f))
-        if (value != null) {
-            Text(value, fontSize = 14.sp, color = PPColor.Ink40)
-            if (onClick != null) Spacer(Modifier.width(4.dp))
+        val available = constraints.maxWidth
+        // 量的是渲染同一套样式（字号 + 当前字体 + 密度）下的真实单行宽；measurer 随密度变化重建，
+        // 所以大字体切换会重新量。键含 clickable：尾部宽度（箭头 + 间距）随它变，可点性变化要重判
+        // （如「已跳过的照片」行在 commandPending 时 onClick 由回调变 null）。
+        val stacked = remember(label, value, available, clickable, measurer, labelStyle, valueStyle, chevronStyle) {
+            if (value == null) {
+                false
+            } else {
+                val labelWidth = measurer.measure(AnnotatedString(label), labelStyle).size.width
+                val valueWidth = measurer.measure(AnnotatedString(value), valueStyle).size.width
+                val trailing = if (clickable) {
+                    measurer.measure(AnnotatedString("›"), chevronStyle).size.width + gapPx
+                } else {
+                    0
+                }
+                cellRowStacks(labelWidth, valueWidth, available, trailing)
+            }
         }
-        if (onClick != null) Text("›", fontSize = 16.sp, color = PPColor.Ink40)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            if (stacked) {
+                // 放不下：摘要下移成 supporting text（Material 列表条目形态），两段都拿整行宽。
+                Column(Modifier.weight(1f)) {
+                    Text(label, fontSize = 15.sp, color = PPColor.Ink)
+                    Text(value!!, fontSize = 14.sp, color = PPColor.Ink40)
+                }
+                // 账目行（onClick == null）不画「›」——有雪佛龙却点不动比没有更坏（见 MOB-100）。
+                if (clickable) Text("›", fontSize = 16.sp, color = PPColor.Ink40)
+            } else {
+                Text(label, fontSize = 15.sp, color = PPColor.Ink, modifier = Modifier.weight(1f))
+                if (value != null) {
+                    Text(value, fontSize = 14.sp, color = PPColor.Ink40)
+                    if (clickable) Spacer(Modifier.width(4.dp))
+                }
+                if (clickable) Text("›", fontSize = 16.sp, color = PPColor.Ink40)
+            }
+        }
     }
 }
 

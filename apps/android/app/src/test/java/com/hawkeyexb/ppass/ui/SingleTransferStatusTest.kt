@@ -245,6 +245,8 @@ class SingleTransferStatusTest {
      * 行高例外（UI-13：不套 ListItem 的量出理由）原样保留。
      * 反证：可点行退回无 role 的 clickable、或把 clickable 提出条件分支（无条件挂上、回调传空），
      * 第一条红；箭头或间距改成无条件显示，第二、三条红。
+     * #1881：CellRow 改按内容量宽后，尾部守卫统一用局部 `clickable = onClick != null`（remember 键也含它）；
+     * 「›」在并排与堆叠两个分支都要守——堆叠分支曾漏守卫（评审阻断项）。改断言保意图，不删测试。
      */
     @Test
     fun clickable_rows_carry_button_semantics_and_accounts_stay_inert() {
@@ -256,12 +258,13 @@ class SingleTransferStatusTest {
             row.contains(".let { if (onClick != null) it.clickable(role = Role.Button, onClick = onClick) else it }"),
         )
         assertTrue(
-            "账目行不画右侧间距（value 行的 Spacer 由 onClick != null 守卫）",
-            row.contains("if (onClick != null) Spacer(Modifier.width(4.dp))"),
+            "账目行不画右侧间距（value 行的 Spacer 由可点性守卫）",
+            row.contains("if (clickable) Spacer(Modifier.width(4.dp))"),
         )
-        assertTrue(
-            "账目行仍然不画「›」（箭头显隐由 onClick != null 守卫）",
-            row.contains("if (onClick != null) Text(\"›\""),
+        assertEquals(
+            "「›」只在可点时画，且并排与堆叠两个分支都守（#1881：堆叠分支曾漏守卫）",
+            2,
+            Regex(Regex.escape("if (clickable) Text(\"›\"")).findAll(row).count(),
         )
     }
 }

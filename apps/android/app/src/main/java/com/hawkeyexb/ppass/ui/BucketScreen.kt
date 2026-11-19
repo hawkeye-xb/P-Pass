@@ -16,6 +16,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -250,6 +252,18 @@ internal fun bucketScreenEmptyNoticeVisible(
  */
 internal fun albumNoAccessNoticeOpensSettings(canPrompt: Boolean): Boolean = !canPrompt
 
+/** #1886：范围页两个时间胶囊放不下、需要换行——纯函数，单测用三星 SM-S928N 实测像素钉住。
+ *
+ *  输入是两段胶囊的**自身宽度**（含内边距，px）与行可用宽、间距；两段自身宽 + 间距超过可用宽就换行。
+ *  这是两个胶囊容器（`FlowRow`）按内容换行的契约：不设宽度 / 字号 / 百分比阈值。旧写法（普通 `Row`）
+ *  里第二个胶囊只吃第一个剩下的宽度，会被挤窄到装不下标签、底边把换行后的第二行裁掉。 */
+internal fun scopeTimeChipsWrap(
+    firstChipWidthPx: Int,
+    secondChipWidthPx: Int,
+    gapPx: Int,
+    availableWidthPx: Int,
+): Boolean = firstChipWidthPx + gapPx + secondChipWidthPx > availableWidthPx
+
 data class FolderBucketUi(
     val key: String,
     val bucket: MediaScanner.Bucket,
@@ -257,6 +271,7 @@ data class FolderBucketUi(
     val needsPermission: Boolean = false,
 )
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun BucketScreen(
     buckets: List<MediaScanner.Bucket>,
@@ -317,7 +332,13 @@ fun BucketScreen(
                 )
             }
             Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+            // #1886：两个时间胶囊改放可换行的 FlowRow——普通 Row 里第二个胶囊只能吃第一个剩下的宽度，
+            // 英文 1.5× 时被挤成 145px（51.5dp），标签被硬裁成「Incl」。FlowRow 放不下时把第二个胶囊
+            // 整体落到下一行、各自保持自身宽度，不再互相挤；换行契约见 scopeTimeChipsWrap（纯函数，单测钉住）。
+            FlowRow(
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+            ) {
                 PhotoFilterChip(sinceLabel, time == ScopeTime.SINCE_TODAY) { time = ScopeTime.SINCE_TODAY }
                 PhotoFilterChip(stringResource(R.string.scope_time_all), time == ScopeTime.ALL) { time = ScopeTime.ALL }
             }

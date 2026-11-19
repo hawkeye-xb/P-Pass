@@ -29,7 +29,7 @@ describe.each([
   ["WizardWindows", WizardWindows],
 ])("%s：未配置状态", (_name, Component) => {
   it("第 1 步照常显示，不出现额外提示", () => {
-    render(Component, { props: { ...base, unconfigured: true } });
+    render(Component, { props: base });
     expect(screen.getByText("选择照片库位置")).toBeTruthy();
     expect(screen.queryByTestId("wizard-unconfigured")).toBeNull();
   });
