@@ -10,20 +10,18 @@
 // RuleSwitchRow 里单独给——不用 primary = Safe：那会让「取消」「去设置」
 // 这类没传色的 TextButton 也变绿，违反「绿色只表示安全」。
 //
-// 明暗两套在 ui/theme/PPColorSchemes.kt：tokens.json 没有暗色值，深色沿用同一套
-// 品牌外观（暖纸是产品设计，不是缺省主题）。也绝不用 dynamicColorScheme（三星会按
-// 壁纸取色）。
+// 本期不实现深色外观（#1872，产品负责人 2026-11-19 定「暂不支持」）：不跟随系统深色，
+// 暖纸是唯一外观，所以这里没有第二个配色入口，也不读 isSystemInDarkTheme——「跟随了
+// 却不变」比不跟随更像故障。也绝不用 dynamicColorScheme（三星会按壁纸取色）。
 //
 // 字体与圆角由同一个根 MaterialTheme 下发（ui/theme/PPTypography.kt、
 // ui/theme/PPShapes.kt）：没显式传字号/圆角的 M3 组件从这里取默认值。
 package com.hawkeyexb.ppass.ui
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import com.hawkeyexb.ppass.ui.theme.PPDarkColorScheme
 import com.hawkeyexb.ppass.ui.theme.PPShapes
 import com.hawkeyexb.ppass.ui.theme.PPTypography
 
@@ -71,11 +69,10 @@ val PPColorScheme: ColorScheme = lightColorScheme(
 
 @Composable
 fun PPTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
     MaterialTheme(
-        colorScheme = if (darkTheme) PPDarkColorScheme else PPColorScheme,
+        colorScheme = PPColorScheme,
         typography = PPTypography,
         shapes = PPShapes,
         content = content,
