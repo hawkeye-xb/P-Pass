@@ -11,7 +11,7 @@
 import { cleanup, render } from "@testing-library/svelte";
 import { createRawSnippet } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import Dialog from "./dialog.svelte";
+import Dialog, { FOCUSABLE } from "./dialog.svelte";
 import StackFixture from "./stack.fixture.svelte";
 
 const body = (html) => createRawSnippet(() => ({ render: () => `<div>${html}</div>` }));
@@ -64,6 +64,72 @@ describe("dialog 焦点管理", () => {
     expect(document.activeElement).toBe(a);
     tab(true);
     expect(document.activeElement).toBe(b);
+  });
+
+  // #1526（#1525 独立评审）：焦点序列要含原生媒体控件与可编辑区——大图查看器
+  // （App.svelte 的 `<video controls>`）漏了这几类，键盘用户 Tab 不到播放/暂停/
+  // 进度控件。jsdom 不认 video/audio 为可聚焦元素（focus() 空转），所以这里直接
+  // 查面板内按 FOCUSABLE 取到的元素，钉住选择器命中；面板自身 tabindex=-1，不在
+  // 序列里。
+  // tabindex="-1" 对整组候选一律排除（#1526 评审建议）：除裸的 `<div tabindex="-1">`，
+  // 还要钉住「命中了新分支、同时带 tabindex=-1」的组合——只靠最后那条 `[tabindex]`
+  // 排除管不到它们。
+  // 反证：FOCUSABLE 去掉 video[controls] / audio[controls] / iframe /
+  // [contenteditable] 四类中的任一类 ⇒ 本条红；去掉整组末尾的
+  // `:not([tabindex="-1"])` ⇒ 三个 neg-* 也进来，本条红。
+  it("焦点序列含 video/audio[controls]、contenteditable、iframe；仍排除 tabindex=-1", async () => {
+    opener();
+    render(Dialog, {
+      open: true,
+      children: body(
+        '<button id="a">甲</button><video id="v" controls></video><audio id="au" controls></audio>' +
+          '<div id="ce" contenteditable="true">可编辑</div><div id="ce-bare" contenteditable>裸写</div>' +
+          '<iframe id="fr" title="内嵌"></iframe><div id="neg" tabindex="-1">不参与</div>' +
+          '<div id="neg-ce" contenteditable tabindex="-1">不参与</div>' +
+          '<video id="neg-v" controls tabindex="-1"></video>',
+      ),
+    });
+    await Promise.resolve();
+    const panel = document.querySelector('[role="dialog"]');
+    expect(Array.from(panel.querySelectorAll(FOCUSABLE)).map((el) => el.id)).toEqual([
+      "a",
+      "v",
+      "au",
+      "ce",
+      "ce-bare",
+      "fr",
+    ]);
+  });
+
+  // #1526（CodeRabbit）：焦点跑到面板外时按 Tab / Shift+Tab，要把它拉回面板内，
+  // 不能留在外面；焦点在面板自身（tabindex=-1）上时同理。
+  // 反证：去掉 onKeydown 里的 `|| outside` 兜底 ⇒ 本条红（焦点停在面板外的元素
+  // 上 / 停在面板上）。jsdom 不执行 inert，所以能直接把焦点移到背景的触发按钮上。
+  it("焦点在面板外时，Tab / Shift+Tab 把它拉回面板", async () => {
+    const o = opener();
+    render(Dialog, {
+      open: true,
+      children: body('<button id="a">甲</button><button id="b">乙</button>'),
+    });
+    await Promise.resolve();
+    const a = document.getElementById("a");
+    const b = document.getElementById("b");
+    const panel = document.querySelector('[role="dialog"]');
+
+    o.focus();
+    expect(document.activeElement).toBe(o);
+    tab();
+    expect(document.activeElement).toBe(a);
+
+    o.focus();
+    expect(document.activeElement).toBe(o);
+    tab(true);
+    expect(document.activeElement).toBe(b);
+
+    panel.focus();
+    expect(document.activeElement).toBe(panel);
+    tab();
+    expect(document.activeElement).toBe(a);
   });
 
   // #1132 D1（WAI-ARIA APG Dialog 模式）：模态打开期间背景不可聚焦——

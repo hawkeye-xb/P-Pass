@@ -6,6 +6,20 @@
 	// 每个 Dialog 实例在自己打开期间标了 inert 的元素 → 标它的所有权凭据集合
 	//（谁标谁摘：先关的不能把别的 Dialog 还需要的 inert 摘掉）。
 	const inertOwners = new WeakMap<HTMLElement, Set<object>>();
+
+	/* 弹窗的焦点序列：打开时落第一个、Tab / Shift+Tab 在序列内循环（见实例 script）。
+	   原生媒体控件与可编辑区同样是键盘能到的元素——大图查看器里的
+	   `<video controls>`（App.svelte）漏了这条就 Tab 不到播放/暂停/进度控件
+	   （#1526）。`[contenteditable]` 判「不是 false」而不是 `="true"`：裸写的
+	   `contenteditable`（属性值为空串）与 `plaintext-only` 同样是可编辑区，
+	   tabbable 等标准实现也是这个写法。
+
+	   `tabindex="-1"` 是「可编程聚焦、不进 Tab 序列」：对整组候选统一排除，
+	   而不是只管最后那条 `[tabindex]`——否则 `<video controls tabindex="-1">`
+	   这类会从新分支漏进去（#1526 评审建议）。包一层 `:where()` 只为分组，
+	   querySelectorAll 不看优先级。 */
+	export const FOCUSABLE =
+		':where(a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), video[controls], audio[controls], iframe, [contenteditable]:not([contenteditable="false"]), [tabindex]):not([tabindex="-1"])';
 </script>
 
 <script lang="ts">
@@ -58,8 +72,6 @@
 	   - 焦点只在「自己关闭后没有别的 Dialog 还开着」时才恢复到触发元素；自己
 	     之上还有 Dialog 时把焦点交还给最上层那个，后关的弹窗不抢走新弹窗的焦点，
 	     也绝不把焦点落在 body。 */
-	const FOCUSABLE =
-		'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 	let panel: HTMLElement | undefined = $state();
 	let backdrop: HTMLElement | undefined = $state();
