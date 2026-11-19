@@ -107,6 +107,24 @@ class ScopeTimeChipLayoutTest {
         )
     }
 
+    /** 反证：把照片页筛选条改回普通 Row、或把 ViewerAction 改回固定高度，本条即红。 */
+    @Test
+    fun photos_timeline_chips_wrap_and_viewer_actions_grow() {
+        val photos = source("PhotosScreen.kt")
+        val body = flowRowLambdaBody(photos)
+        for (chip in listOf("chip_all", "chip_local", "chip_family")) {
+            assertTrue("照片页筛选胶囊 $chip 要在可换行的 FlowRow 里", body.contains("R.string.$chip"))
+        }
+        assertTrue(
+            "查看页按钮要只有最小高度（换行时自己长高）",
+            photos.contains("modifier = modifier.heightIn(min = height)"),
+        )
+        assertFalse(
+            "写死固定高度会让换行后的标签被裁掉",
+            photos.contains("modifier = modifier.height(height)"),
+        )
+    }
+
     /** 取 `FlowRow(` 后第一个 `{` 到配对 `}` 之间的内容（lambda 正文）。 */
     private fun flowRowLambdaBody(source: String): String {
         val call = source.indexOf("FlowRow(")
