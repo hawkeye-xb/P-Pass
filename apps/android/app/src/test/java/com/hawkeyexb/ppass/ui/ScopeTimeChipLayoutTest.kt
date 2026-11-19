@@ -128,7 +128,7 @@ class ScopeTimeChipLayoutTest {
     /** 取 `FlowRow(` 后第一个 `{` 到配对 `}` 之间的内容（lambda 正文）。 */
     private fun flowRowLambdaBody(source: String): String {
         val call = source.indexOf("FlowRow(")
-        require(call >= 0) { "BucketScreen.kt 里找不到 FlowRow(" }
+        require(call >= 0) { "源码里找不到 FlowRow(" }
         val open = source.indexOf('{', call)
         require(open >= 0) { "FlowRow 没有 lambda" }
         var depth = 0
