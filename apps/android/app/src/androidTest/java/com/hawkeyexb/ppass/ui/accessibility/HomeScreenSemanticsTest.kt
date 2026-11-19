@@ -8,8 +8,9 @@
 //     a11y 体现是 className Button），不是勾选项，名称合并在行子树里。
 //   - 英雄区单次传输状态行：进度「Sending x/y」与结果「Delivered N」是可读的文本节点，
 //     且带 liveRegion=polite——文案会变，TalkBack 变化后要主动报（#1801 阻断 1）。
-//   - 分组标题：四个固定分组不贴标签（2026-09-14 用户拍板，组名即首行），首行标 heading
-//     语义——a11y 边界的体现是 isHeading=true（#1801 阻断 1）。
+//   - 分组标题：三个固定分组不贴标签（2026-09-14 用户拍板，组名即首行），首行标 heading
+//     语义——a11y 边界的体现是 isHeading=true（#1801 阻断 1）。#1889 起「更多」并入「通知」
+//     所在组，不再是分组首行，也就没有 heading 语义。
 //   - 触控目标：开关行与入口行高 ≥48dp（round3 实测 51.9dp）。
 //
 // 反证（卡上验收「至少一条删掉语义后变红」的第二条）：把 RuleSwitchRow 行本体的
@@ -163,7 +164,9 @@ class HomeScreenSemanticsTest {
         }
     }
 
-    /** 分组标题：四个固定分组不贴标签（组名即首行，2026-09-14 用户拍板），首行带 heading 语义。 */
+    /** 分组标题：三个固定分组不贴标签（组名即首行，2026-09-14 用户拍板），首行带 heading 语义。
+     *  #1889：「更多」并入「通知」所在组后不再是分组首行，它的 heading 语义随之下线——
+     *  由 more_row_joins_the_notify_group 单独钉住，这里只留三个真正的分组首行。 */
     @Test
     fun group_first_rows_carry_heading_semantics() {
         host {
@@ -172,7 +175,6 @@ class HomeScreenSemanticsTest {
                 R.string.auto_backup_rule_label,
                 R.string.pick_from_photos_label,
                 R.string.setting_wifi_only,
-                R.string.more_label,
             )) {
                 val label = testContext.getString(labelRes)
                 val textNode = awaitNode("分组首行文本「$label」") { it.text?.toString() == label }
@@ -186,6 +188,42 @@ class HomeScreenSemanticsTest {
                 }
             }
             saveTree("homescreen-headings.txt", a11yRoot())
+        }
+    }
+
+    /** #1889：设置页「更多」并入「通知」所在的那一组——不再单独分组。
+     *  两件事一起判：① 它不再是分组首行（不带 heading 语义，撤掉生产改动这条就红）；
+     *  ② 它紧跟在「通知」下面、中间只有一条分隔线，不是隔了 18dp 组间距的另一张卡。
+     *  行序与间距在真机上是分组的唯一可见边界（组内不贴 section 标签，2026-09-14 用户拍板）。 */
+    @Test
+    fun more_row_joins_the_notify_group() {
+        host {
+            val notifyLabel = testContext.getString(R.string.rule_notify)
+            val moreLabel = testContext.getString(R.string.more_label)
+            val notifyRow = awaitNode("「通知」开关行文本") { it.text?.toString() == notifyLabel }
+                .checkableSelfOrAncestor()
+                ?: throw AssertionError("「通知」必须是开关行；树：\n${describeTree()}")
+            val moreRow = awaitNode("「更多」行文本") { it.text?.toString() == moreLabel }
+                .clickableSelfOrAncestor()
+                ?: throw AssertionError("「更多」必须整行可点；树：\n${describeTree()}")
+            val notifyBounds = Rect().also { notifyRow.getBoundsInScreen(it) }
+            val moreBounds = Rect().also { moreRow.getBoundsInScreen(it) }
+            assertTrue(
+                "「更多」必须排在「通知」下面（并入同一组）",
+                moreBounds.top >= notifyBounds.bottom,
+            )
+            val gapDp = (moreBounds.top - notifyBounds.bottom) / density
+            assertTrue(
+                "「更多」与「通知」之间只隔一条分隔线（实测 ${gapDp}dp），不是隔了组间距的另一张卡",
+                gapDp <= 12.0,
+            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                assertFalse(
+                    "「更多」已并入「通知」所在组，不再是分组首行（不该带 heading 语义）",
+                    moreRow.isHeading,
+                )
+            }
+            saveTree("homescreen-more-group.txt", a11yRoot())
         }
     }
 
