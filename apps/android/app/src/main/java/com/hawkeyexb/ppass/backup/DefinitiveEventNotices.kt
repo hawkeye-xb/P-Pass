@@ -30,10 +30,13 @@ package com.hawkeyexb.ppass.backup
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.core.content.ContextCompat
 import com.hawkeyexb.ppass.backup.flow.PairingId
 import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
+import com.hawkeyexb.ppass.backup.folder.FolderAccess
+import com.hawkeyexb.ppass.backup.folder.SafFolderTree
 import com.hawkeyexb.ppass.battery.isIgnoringBatteryOptimizations
 import com.hawkeyexb.ppass.io.atomicReplace
 import com.hawkeyexb.ppass.log.PLog
@@ -70,6 +73,8 @@ data class DefinitiveFacts(
     val batteryWhitelisted: Boolean,
     /** #1272：「自动备份」规则开着。没开自动备份时照片权限变差是正常状态，不发通知。 */
     val autoBackupRuleOn: Boolean = true,
+    /** 本次是否还有可用备份来源；只在相册权限非完整时用于降级通知。 */
+    val hasUsableSource: Boolean,
 )
 
 @Serializable
@@ -119,7 +124,7 @@ fun decideDefinitiveNotices(prev: DefinitiveNoticeState, facts: DefinitiveFacts)
 
     // 2. 相册权限：变差才发，回到 FULL 复位；没有基线只记不发；没配对时只记（没有要备份的东西）。
     val lastAccess = prev.lastMediaAccess?.let { name -> MediaAccess.entries.firstOrNull { it.name == name } }
-    if (lastAccess != null && rankOf(facts.mediaAccess) < rankOf(lastAccess) && paired && facts.autoBackupRuleOn) {
+    if (lastAccess != null && rankOf(facts.mediaAccess) < rankOf(lastAccess) && paired && facts.autoBackupRuleOn && !facts.hasUsableSource) {
         post += DefinitiveNotice.MediaAccessRevoked(facts.mediaAccess)
     }
     if (lastAccess != null && lastAccess != MediaAccess.FULL && facts.mediaAccess == MediaAccess.FULL) {
@@ -217,16 +222,36 @@ fun currentMediaAccess(context: Context): MediaAccess = mediaAccessOf(
 /** 这一次运行的事实。阻塞（读文件 + binder），调用方放到非主线程。 */
 internal fun definitiveFactsOf(context: Context): DefinitiveFacts {
     val dir = context.filesDir
-    val pid = PairingStore(dir).load()?.pairingId
+    val pairing = PairingStore(dir).load()
+    val pid = pairing?.pairingId
     val health = BackupHealthPrefs(dir).load()
+    val mediaAccess = currentMediaAccess(context)
+    val autoRuleOn = autoBackupRulePrefs(context).enabled()
+    val hasUsableSource = if (pairing != null && autoRuleOn && mediaAccess != MediaAccess.FULL) {
+        val store = BackupScopeStore(context, pairing.daemonNodeId)
+        // 目录仍登记不代表仍有授权；轻查根目录，不枚举素材。
+        val readableFolders = FolderAccess.registry(context).allRecords().filter { folder ->
+            runCatching { SafFolderTree(context, Uri.parse(folder.treeUri)).checkReadable() }.isSuccess
+        }.mapTo(HashSet()) { it.bucketId }
+        SourceAvailability.usableSource(
+            selected = store.selectedBucketIds(),
+            known = store.knownBucketIds().orEmpty(),
+            existingFolders = readableFolders,
+            existingAlbums = null,
+            photoAccess = mediaAccess,
+        )
+    } else {
+        false
+    }
     return DefinitiveFacts(
         pairingId = pid,
         pairingLost = pid != null && flowDeliveryPairingLoss.isLost(PairingId(pid)),
-        mediaAccess = currentMediaAccess(context),
+        mediaAccess = mediaAccess,
         backgroundRequested = AutoBackupPrefs(dir).requested(),
         interruptionDetectedAt = health.detectedAt.takeIf { health.interruptedUnacknowledged },
         batteryWhitelisted = isIgnoringBatteryOptimizations(context),
-        autoBackupRuleOn = autoBackupRulePrefs(context).enabled(),
+        autoBackupRuleOn = autoRuleOn,
+        hasUsableSource = hasUsableSource,
     )
 }
 
