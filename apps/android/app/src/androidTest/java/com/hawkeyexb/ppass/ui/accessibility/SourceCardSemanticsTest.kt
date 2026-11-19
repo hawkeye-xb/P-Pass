@@ -16,6 +16,7 @@ import android.os.Build
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.hawkeyexb.ppass.R
+import com.hawkeyexb.ppass.ui.BucketScreen
 import com.hawkeyexb.ppass.ui.components.AddSourceCard
 import com.hawkeyexb.ppass.ui.components.SourceCard
 import com.hawkeyexb.ppass.ui.components.SourceKind
@@ -124,6 +125,30 @@ class SourceCardSemanticsTest {
             assertNotNull("卡上要有动作 desc", subtree.firstOrNull { it.contentDescription?.toString() == addDesc })
             assertFalse("添加卡不是勾选项", row.isCheckable)
             saveTree("sourcecard-add.txt", a11yRoot())
+        }
+    }
+
+    /** 范围页标题「备份范围」带 heading 语义（#1801：页标题 TalkBack 按标题导航直达）。 */
+    @Test
+    fun bucket_screen_title_carries_heading_semantics() {
+        hostCompose(
+            {
+                BucketScreen(
+                    buckets = emptyList(),
+                    selected = emptySet(),
+                    sinceLabel = "Today onward",
+                    firstTime = false,
+                    onDone = { _, _, _ -> },
+                    onCancel = {},
+                )
+            },
+        ) {
+            val title = testContext.getString(R.string.backup_scope)
+            val titleNode = awaitNode("范围页标题「$title」") { it.text?.toString() == title }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                assertTrue("范围页标题「$title」必须带 heading 语义", titleNode.isHeading)
+            }
+            saveTree("sourcecard-scope-title.txt", a11yRoot())
         }
     }
 }

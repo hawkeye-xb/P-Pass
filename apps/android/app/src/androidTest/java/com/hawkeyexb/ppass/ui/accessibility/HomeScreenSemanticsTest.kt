@@ -6,16 +6,23 @@
 //     不单独暴露 checkable 子节点；点整行切换开关（TalkBack 双击走同一个 ACTION_CLICK）。
 //   - 单次入口两行（CellRow 从相册选择 / 从文件选择）：整行可点（Role.Button 的
 //     a11y 体现是 className Button），不是勾选项，名称合并在行子树里。
-//   - 英雄区单次传输状态行：进度「Sending x/y」与结果「Delivered N」是可读的文本节点。
+//   - 英雄区单次传输状态行：进度「Sending x/y」与结果「Delivered N」是可读的文本节点，
+//     且带 liveRegion=polite——文案会变，TalkBack 变化后要主动报（#1801 阻断 1）。
+//   - 分组标题：四个固定分组不贴标签（2026-09-14 用户拍板，组名即首行），首行标 heading
+//     语义——a11y 边界的体现是 isHeading=true（#1801 阻断 1）。
 //   - 触控目标：开关行与入口行高 ≥48dp（round3 实测 51.9dp）。
 //
 // 反证（卡上验收「至少一条删掉语义后变红」的第二条）：把 RuleSwitchRow 行本体的
 // .toggleable(...) 删掉（退回 #1799 之前「行无语义 + Switch 自带 onCheckedChange」
-// 的旧写法），本类开关行三条全红。
+// 的旧写法），本类开关行三条全红；heading/liveRegion 两条各自把生产里的
+// .semantics { heading() } / { liveRegion = … } 删掉也红（group_first_rows… /
+// hero_status_line_announces…）。
 
 package com.hawkeyexb.ppass.ui.accessibility
 
 import android.graphics.Rect
+import android.os.Build
+import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.compose.runtime.mutableStateOf
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -156,6 +163,32 @@ class HomeScreenSemanticsTest {
         }
     }
 
+    /** 分组标题：四个固定分组不贴标签（组名即首行，2026-09-14 用户拍板），首行带 heading 语义。 */
+    @Test
+    fun group_first_rows_carry_heading_semantics() {
+        host {
+            // 语言随宿主 App；按资源 id 取当前语言的组名文本。
+            for (labelRes in intArrayOf(
+                R.string.auto_backup_rule_label,
+                R.string.pick_from_photos_label,
+                R.string.setting_wifi_only,
+                R.string.more_label,
+            )) {
+                val label = testContext.getString(labelRes)
+                val textNode = awaitNode("分组首行文本「$label」") { it.text?.toString() == label }
+                val row = textNode.clickableSelfOrAncestor()
+                    ?: throw AssertionError("分组首行必须可点（$label）；树：\n${describeTree()}")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    assertTrue(
+                        "分组首行「$label」必须带 heading 语义（TalkBack 按标题在分组间导航）",
+                        row.isHeading,
+                    )
+                }
+            }
+            saveTree("homescreen-headings.txt", a11yRoot())
+        }
+    }
+
     /** 英雄区状态行（进行中）：open>0 时报「Sending x/y」，与 round3「正在传 2/2」同口径。 */
     @Test
     fun hero_line_reads_single_transfer_progress() {
@@ -191,7 +224,12 @@ class HomeScreenSemanticsTest {
                 val line = SingleTransferStatus.heroLine(batch)
                     ?: throw AssertionError("heroLine(batch.total=${batch.total}) 必须非空")
                 val expected = expectedText(line)
-                awaitNode("英雄区状态行「$expected」") { it.text?.toString() == expected }
+                val node = awaitNode("英雄区状态行「$expected」") { it.text?.toString() == expected }
+                assertEquals(
+                    "英雄区单次传输状态行会变文案，必须 liveRegion=polite（TalkBack 变化后主动播报）",
+                    View.ACCESSIBILITY_LIVE_REGION_POLITE,
+                    node.liveRegion,
+                )
                 saveTree("homescreen-hero.txt", a11yRoot())
             }
         } finally {

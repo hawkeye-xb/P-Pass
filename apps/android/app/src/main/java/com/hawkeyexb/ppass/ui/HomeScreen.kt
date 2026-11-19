@@ -46,7 +46,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.pluralStringResource
@@ -718,10 +722,13 @@ fun HomeScreen(
                 //（iOS HeroCard 同一闸门），否则用户从文件选择发起的传输在 blocked 时完全看不见。
                 SingleTransferStatus.heroLine(pickedBatch)?.let { picked ->
                     Spacer(Modifier.height(8.dp))
+                    // #1801：这一行会随传输进度/结算变文案——标 liveRegion=polite，TalkBack
+                    // 在变化后主动报一句，不用用户来回找。只加语义标注，不改视觉与行为。
                     when (picked) {
                         is SingleTransferStatus.Line.Progress -> Text(
                             stringResource(R.string.picked_progress, picked.done, picked.total),
                             fontSize = 13.sp, color = PPColor.Ink60,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                         )
                         is SingleTransferStatus.Line.Result -> {
                             val head = picked.delivered?.let { stringResource(R.string.picked_result_delivered, it) }
@@ -729,6 +736,7 @@ fun HomeScreen(
                             Text(
                                 listOfNotNull(head, tail).joinToString(" · "),
                                 fontSize = 13.sp, color = PPColor.Ink60,
+                                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                             )
                         }
                     }
@@ -879,6 +887,8 @@ fun HomeScreen(
         // 从相册选择 / 仅 Wi-Fi / 更多）就是这组的名字，标签是信息增量为 0 的重复。
         Spacer(Modifier.height(18.dp))
         // ── #1789 固定分组 1/4「自动备份」：开关、范围与它的条件行（取消剩余 / 已跳过 / 源已删除账目）。
+        // #1801：组内仍不贴 section 标签（2026-09-14 用户拍板，组名即首行）——首行标 heading 语义，
+        // TalkBack 按标题导航就能在这四组间跳；不增不减任何文字，视觉与点击行为不变。
         Surface(
             color = PPColor.Paper,
             shape = RoundedCornerShape(PPSize.RadiusCard),
@@ -892,6 +902,7 @@ fun HomeScreen(
                     onCheckedChange = onToggleAutoBackupRule,
                     hint = autoBackupRuleHintRes?.let { stringResource(it) },
                     hintColor = PPColor.Waiting,
+                    heading = true,
                 )
                 // #1794：「备份范围」入口常驻（对齐 iOS）——自动备份关着、没有照片权限也进得去管理文件夹。
                 HorizontalDivider(color = PPColor.Divider)
@@ -991,6 +1002,7 @@ fun HomeScreen(
                 CellRow(
                     label = stringResource(R.string.pick_from_photos_label),
                     onClick = onPickPhotos,
+                    heading = true,
                 )
                 HorizontalDivider(color = PPColor.Divider)
                 CellRow(
@@ -1013,6 +1025,7 @@ fun HomeScreen(
                     label = stringResource(R.string.setting_wifi_only),
                     checked = wifiOnly,
                     onCheckedChange = onWifiOnlyChange,
+                    heading = true,
                 )
                 HorizontalDivider(color = PPColor.Divider)
                 RuleSwitchRow(
@@ -1035,6 +1048,7 @@ fun HomeScreen(
                 CellRow(
                     label = stringResource(R.string.more_label),
                     onClick = { showMore = true; onStorageDetailOpenChange(true) },
+                    heading = true,
                 )
             }
         }
@@ -1391,9 +1405,11 @@ private fun RuleSwitchRow(
     hint: String? = null,
     hintColor: Color = PPColor.Ink40,
     onHintClick: (() -> Unit)? = null,
+    heading: Boolean = false,
 ) {
     Row(
         Modifier.fillMaxWidth()
+            .let { if (heading) it.semantics { heading() } else it }
             .toggleable(
                 value = checked,
                 onValueChange = onCheckedChange,
@@ -1441,9 +1457,10 @@ private fun RuleSwitchRow(
  *  例外保留——UI-13 评估过 `ListItem`（单行 56dp），比设计稿 52dp 高出
  *  4dp 且整卡变松散，量出的冲突仍在，故继续走 Row + role 的薄语义封装。 */
 @Composable
-private fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)? = null) {
+private fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)? = null, heading: Boolean = false) {
     Row(
         Modifier.fillMaxWidth()
+            .let { if (heading) it.semantics { heading() } else it }
             .let { if (onClick != null) it.clickable(role = Role.Button, onClick = onClick) else it }
             .heightIn(min = CellRowHeight)
             .padding(horizontal = 16.dp),
