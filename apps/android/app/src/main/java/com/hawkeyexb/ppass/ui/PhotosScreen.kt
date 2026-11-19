@@ -20,6 +20,8 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -289,6 +292,7 @@ internal fun photosTimelineChrome(
         )
     }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun PhotosScreen(
     holder: TimelineSubscriptionHolder,
@@ -427,9 +431,12 @@ internal fun PhotosScreen(
         // 之前跟框架组件撞名字纯属巧合式重新发明轮子，见 PhotoFilterChip
         // 的 wrapper（保留私有壳只是为了封装 colors，不算"手写控件"）。
         // 提示条、筛选条、照片网格左右同一条线，都用 page-gutter（#1405，产品负责人 11-05 验收）。
-        Row(
+        // #1886：与范围页同因——普通 Row 里后面的胶囊只能吃前面剩下的宽度，大字体下会被挤窄硬裁；
+        // 换成可换行的 FlowRow，放不下时整体落到下一行、各自保持自身宽度。
+        FlowRow(
             Modifier.fillMaxWidth().padding(PPSize.PageGutter, 0.dp, PPSize.PageGutter, 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             PhotoFilterChip(stringResource(R.string.chip_all), filter == TimelineFilter.All) {
                 filter = TimelineFilter.All
@@ -898,7 +905,9 @@ private fun PhotoViewer(
 
 /** RET-01: 查看页动作按钮（纸底墨字胶囊，与 FilterChip 同族）。
  *  #1800：底层换 Material3 `Button`——点击涟漪、`enabled` 的禁用语义与
- *  role=Button 都交给组件，只保留品牌配色与胶囊形状；不再手写 clickable。 */
+ *  role=Button 都交给组件，只保留品牌配色与胶囊形状；不再手写 clickable。
+ *  #1886：`height` 是**最小**高度（`heightIn(min = ...)`）——大字体下标签换行时按钮要能自己长高，
+ *  写死固定高度会把换行后的第二行裁掉。 */
 @Composable
 internal fun ViewerAction(
     label: String,
@@ -911,7 +920,7 @@ internal fun ViewerAction(
     Button(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.height(height),
+        modifier = modifier.heightIn(min = height),
         shape = RoundedCornerShape(999.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = PPColor.Paper,
@@ -937,7 +946,11 @@ internal fun ViewerAction(
 /** 设计稿的过滤胶囊：高 36,圆角 999,选中=墨底纸字,未选=亚麻底墨字。
  *  UI-13: 底层用 Material3 `FilterChip`（选中态/涟漪/a11y role 都是
  *  组件自带的），只定制 `colors`/`shape` 让视觉贴住设计稿——不再是一个
- *  重新发明的手写药丸。 */
+ *  重新发明的手写药丸。
+ *  #1886：36 是**最小**高度（`heightIn(min = 36.dp)`），不是固定高度——大字体下
+ *  标签换行时胶囊要能自己长高，否则换行后的第二行被底边裁掉（视觉只剩「Incl」）。
+ *  触控区不靠这个高度撑：Material 3 `FilterChip` 自带的
+ *  `minimumInteractiveComponentSize` 已把可点区撑到 48dp。 */
 @Composable
 internal fun PhotoFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
     androidx.compose.material3.FilterChip(
@@ -957,7 +970,7 @@ internal fun PhotoFilterChip(label: String, selected: Boolean, onClick: () -> Un
             selectedLabelColor = PPColor.Paper,
         ),
         border = null,
-        modifier = Modifier.height(36.dp),
+        modifier = Modifier.heightIn(min = 36.dp),
     )
 }
 
