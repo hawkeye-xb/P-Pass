@@ -1255,20 +1255,36 @@ internal fun storageDetailDotColor(status: ConnectionState.Status): Color = when
     ConnectionState.Status.Offline, ConnectionState.Status.Unknown -> PPColor.Idle
 }
 
-/** M11 信息卡第一行说哪句——只由唯一连接状态决定（#1883）。
- *  纯函数，JVM 可测：「已连接」只在那一个状态出现，其余状态一律只说「未连接」。 */
-internal fun storageDetailStatusRes(status: ConnectionState.Status): Int = when (status) {
-    ConnectionState.Status.PairingLost -> R.string.storage_detail_lost
-    ConnectionState.Status.Connected -> R.string.storage_detail_connected
+/**
+ * M11 信息卡正文的裁决——纯函数，JVM 可测（#1883）。
+ *
+ * 第一行说哪句只由唯一连接状态决定：「已连接」只在那一个状态出现，其余状态一律只说「未连接」。
+ * 配对已失效时正文**只有一行**（旧写法是早返回）：那张卡已经说「配对已失效」，
+ * 再拼一行「配对 X · 已备份 N 张」就是同一张卡自相矛盾。
+ */
+internal data class StorageDetailLines(
+    val statusRes: Int,
+    /** 第一行是否带「最近同步 X」这个参数（「配对已失效」不带）。 */
+    val statusTakesLastSuccess: Boolean,
+    /** 是否再拼第二行「配对 X · 已备份 N 张」（配对日期未知时字段是 0，不硬凑）。 */
+    val showPairedLine: Boolean,
+)
+
+internal fun storageDetailLines(status: ConnectionState.Status, pairedAt: Long): StorageDetailLines = when (status) {
+    ConnectionState.Status.PairingLost ->
+        StorageDetailLines(R.string.storage_detail_lost, statusTakesLastSuccess = false, showPairedLine = false)
+    ConnectionState.Status.Connected ->
+        StorageDetailLines(R.string.storage_detail_connected, statusTakesLastSuccess = true, showPairedLine = pairedAt > 0)
     ConnectionState.Status.Reconnecting,
     ConnectionState.Status.Offline,
-    ConnectionState.Status.Unknown -> R.string.storage_detail_offline
+    ConnectionState.Status.Unknown ->
+        StorageDetailLines(R.string.storage_detail_offline, statusTakesLastSuccess = true, showPairedLine = pairedAt > 0)
 }
 
 /** M11 信息卡正文——#1883：连接表述从唯一状态 [ConnectionState] 取，与照片页同一个事实源。
  *  配对已失效直接说失效；真的连上了才说「已连接」；其余（断开 / 重连中 / 还没连上）
  *  只说「未连接」+ 最近同步——不再把「配对还有效」当成「电脑连得上」。
- *  配对日期未知（老 pairing 升级上来，字段是 0）就不硬凑第二行，不编数据。 */
+ *  行数与参数由 [storageDetailLines] 裁决，本函数只做资源映射。 */
 @Composable
 internal fun storageDetailBody(
     connection: ConnectionState,
@@ -1276,13 +1292,13 @@ internal fun storageDetailBody(
     pairedAt: Long,
     confirmedCount: Long,
 ): String {
-    val statusRes = storageDetailStatusRes(connection.status)
-    val line1 = if (connection.needsRepair) {
-        stringResource(statusRes)
+    val lines = storageDetailLines(connection.status, pairedAt)
+    val line1 = if (lines.statusTakesLastSuccess) {
+        stringResource(lines.statusRes, lastSuccessText(lastSuccessAt))
     } else {
-        stringResource(statusRes, lastSuccessText(lastSuccessAt))
+        stringResource(lines.statusRes)
     }
-    if (pairedAt <= 0) return line1
+    if (!lines.showPairedLine) return line1
     val line2 = stringResource(R.string.storage_detail_paired, pairedDateText(pairedAt), groupThousands(confirmedCount))
     return "$line1\n$line2"
 }

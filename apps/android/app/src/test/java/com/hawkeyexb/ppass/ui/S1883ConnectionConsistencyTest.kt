@@ -26,7 +26,7 @@ class S1883ConnectionConsistencyTest {
 
     /** 详情页第一行是不是在声称「已连接」。 */
     private fun detailClaimsConnected(c: ConnectionState) =
-        storageDetailStatusRes(c.status) == R.string.storage_detail_connected
+        storageDetailLines(c.status, pairedAt = 0L).statusRes == R.string.storage_detail_connected
 
     /** 照片页是不是在说「连接已中断」+ 给「重试」。 */
     private fun photosClaimsDisconnected(c: ConnectionState) =
@@ -79,7 +79,7 @@ class S1883ConnectionConsistencyTest {
         val c = connectionStateOf(pairingLost = false, state = exhausted())
         assertEquals(ConnectionState.Status.Offline, c.status)
         assertFalse("详情页不得再说「已连接」（旧写法 pairingLost=false 就给已连接）", detailClaimsConnected(c))
-        assertEquals(R.string.storage_detail_offline, storageDetailStatusRes(c.status))
+        assertEquals(R.string.storage_detail_offline, storageDetailLines(c.status, pairedAt = 0L).statusRes)
         assertTrue("照片页同一时刻说「连接已中断」+「重试」", photosClaimsDisconnected(c))
     }
 
@@ -89,7 +89,7 @@ class S1883ConnectionConsistencyTest {
     fun pairingRevokedSendsBothPagesToRepair() {
         val c = connectionStateOf(pairingLost = true, state = exhausted())
         assertTrue(c.needsRepair)
-        assertEquals(R.string.storage_detail_lost, storageDetailStatusRes(c.status))
+        assertEquals(R.string.storage_detail_lost, storageDetailLines(c.status, pairedAt = 0L).statusRes)
         // 照片页：红卡是唯一出路，时间线区域的重连 / 重试 / 原始错误三处全部收起。
         val chrome = photosTimelineChrome(c, error = "timeline: err.not_authorized")
         assertFalse(chrome.showReconnecting)
@@ -115,6 +115,34 @@ class S1883ConnectionConsistencyTest {
         assertEquals(7, connectionStateOf(pairingLost = true, state = exhausted(), daysUnreachable = 7).daysUnreachable)
         // 从未确认可达过 → null，不编天数（照片页红卡改用不带天数的兜底文案）。
         assertNull(connectionStateOf(pairingLost = true, state = exhausted()).daysUnreachable)
+    }
+
+    // ── 配对已失效那张卡只有一行（旧写法是早返回，改状态源时不能把这条丢掉） ──
+
+    @Test
+    fun pairingLostCardCarriesNoPairedLine() {
+        val pairedAt = 1_700_000_000_000L
+        val lost = storageDetailLines(ConnectionState.Status.PairingLost, pairedAt)
+        assertFalse(
+            "配对已失效时不得再拼「配对 X · 已备份 N 张」——同一张卡不能既说失效又说还配着",
+            lost.showPairedLine,
+        )
+        assertFalse("「配对已失效」那行不带「最近同步」参数", lost.statusTakesLastSuccess)
+        assertEquals(R.string.storage_detail_lost, lost.statusRes)
+    }
+
+    @Test
+    fun otherStatesCarryThePairedLineOnlyWhenTheDateIsKnown() {
+        for (status in listOf(
+            ConnectionState.Status.Connected,
+            ConnectionState.Status.Reconnecting,
+            ConnectionState.Status.Offline,
+            ConnectionState.Status.Unknown,
+        )) {
+            assertTrue("$status 配对日期已知时要拼第二行", storageDetailLines(status, pairedAt = 1L).showPairedLine)
+            assertFalse("$status 配对日期未知（0）时不硬凑第二行", storageDetailLines(status, pairedAt = 0L).showPairedLine)
+            assertTrue("$status 第一行带「最近同步」参数", storageDetailLines(status, pairedAt = 0L).statusTakesLastSuccess)
+        }
     }
 
     // ── 逐状态：两页不可能给出相反结论 ──
