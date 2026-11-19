@@ -71,8 +71,12 @@ describe("dialog 焦点管理", () => {
   // 进度控件。jsdom 不认 video/audio 为可聚焦元素（focus() 空转），所以这里直接
   // 查面板内按 FOCUSABLE 取到的元素，钉住选择器命中；面板自身 tabindex=-1，不在
   // 序列里。
+  // tabindex="-1" 对整组候选一律排除（#1526 评审建议）：除裸的 `<div tabindex="-1">`，
+  // 还要钉住「命中了新分支、同时带 tabindex=-1」的组合——只靠最后那条 `[tabindex]`
+  // 排除管不到它们。
   // 反证：FOCUSABLE 去掉 video[controls] / audio[controls] / iframe /
-  // [contenteditable] 四类中的任一类 ⇒ 本条红。
+  // [contenteditable] 四类中的任一类 ⇒ 本条红；去掉整组末尾的
+  // `:not([tabindex="-1"])` ⇒ 三个 neg-* 也进来，本条红。
   it("焦点序列含 video/audio[controls]、contenteditable、iframe；仍排除 tabindex=-1", async () => {
     opener();
     render(Dialog, {
@@ -80,7 +84,9 @@ describe("dialog 焦点管理", () => {
       children: body(
         '<button id="a">甲</button><video id="v" controls></video><audio id="au" controls></audio>' +
           '<div id="ce" contenteditable="true">可编辑</div><div id="ce-bare" contenteditable>裸写</div>' +
-          '<iframe id="fr" title="内嵌"></iframe><div id="neg" tabindex="-1">不参与</div>',
+          '<iframe id="fr" title="内嵌"></iframe><div id="neg" tabindex="-1">不参与</div>' +
+          '<div id="neg-ce" contenteditable tabindex="-1">不参与</div>' +
+          '<video id="neg-v" controls tabindex="-1"></video>',
       ),
     });
     await Promise.resolve();

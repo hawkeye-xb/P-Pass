@@ -12,9 +12,14 @@
 	   `<video controls>`（App.svelte）漏了这条就 Tab 不到播放/暂停/进度控件
 	   （#1526）。`[contenteditable]` 判「不是 false」而不是 `="true"`：裸写的
 	   `contenteditable`（属性值为空串）与 `plaintext-only` 同样是可编辑区，
-	   tabbable 等标准实现也是这个写法。 */
+	   tabbable 等标准实现也是这个写法。
+
+	   `tabindex="-1"` 是「可编程聚焦、不进 Tab 序列」：对整组候选统一排除，
+	   而不是只管最后那条 `[tabindex]`——否则 `<video controls tabindex="-1">`
+	   这类会从新分支漏进去（#1526 评审建议）。包一层 `:where()` 只为分组，
+	   querySelectorAll 不看优先级。 */
 	export const FOCUSABLE =
-		'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), video[controls], audio[controls], iframe, [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex="-1"])';
+		':where(a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), video[controls], audio[controls], iframe, [contenteditable]:not([contenteditable="false"]), [tabindex]):not([tabindex="-1"])';
 </script>
 
 <script lang="ts">
