@@ -12,6 +12,7 @@
 package com.hawkeyexb.ppass.ui
 
 import com.hawkeyexb.ppass.R
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -143,6 +144,64 @@ class S1883ConnectionConsistencyTest {
             assertFalse("$status 配对日期未知（0）时不硬凑第二行", storageDetailLines(status, pairedAt = 0L).showPairedLine)
             assertTrue("$status 第一行带「最近同步」参数", storageDetailLines(status, pairedAt = 0L).statusTakesLastSuccess)
         }
+    }
+
+    // ── 连上之后照片页不再整页说「无法连接电脑」（独立评审 #1898 建议 1） ──
+
+    @Test
+    fun photosPageStopsClaimingUnreachableOnceTheConnectionIsLive() {
+        // 初始整页加载失败留下 error，订阅随后连上——onSubscriptionConnected 不清 error，
+        // 要等下一次刷新信号才清。这段里详情页说「已连接」，照片页不能再整页说「无法连接电脑」。
+        val connected = connectionStateOf(pairingLost = false, state = live())
+        assertTrue(connected.isConnected)
+        assertFalse(
+            "连上了就不再显「无法连接电脑」",
+            photosTimelineChrome(connected, error = "timeline: boom").showTimelineError,
+        )
+        // 没连上时照旧显错——错误仍要有人负责。
+        for (s in listOf(exhausted(), reconnecting(), SubscriptionSessionState())) {
+            val c = connectionStateOf(pairingLost = false, state = s)
+            assertTrue("${c.status} 未连上时仍显原始错误", photosTimelineChrome(c, error = "boom").showTimelineError)
+        }
+        // 配对已失效时本来就不显（红卡是唯一出路）。
+        val lost = connectionStateOf(pairingLost = true, state = live())
+        assertFalse(photosTimelineChrome(lost, error = "boom").showTimelineError)
+    }
+
+    // ── 接线门禁（源文本）：裁决算对了但正文没用它 = 白做（独立评审 #1898 建议 2） ──
+
+    /** 剥注释行：正向 contains 会被「把那行注释掉」骗过。 */
+    private fun homeScreenSource(): String {
+        var dir = File(System.getProperty("user.dir"))
+        while (!File(dir, "apps/android").isDirectory) {
+            dir = dir.parentFile ?: error("apps/android not found")
+        }
+        return File(dir, "apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt").readText()
+            .lines()
+            .filterNot {
+                val t = it.trimStart()
+                t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+            }
+            .joinToString("\n")
+    }
+
+    @Test
+    fun storageDetailBodyActuallyUsesTheVerdict() {
+        // 把正文改回「非失效一律已连接」而留着 helper，上面那些纯函数断言仍会全绿——所以钉接线。
+        val body = homeScreenSource().substringAfter("internal fun storageDetailBody(")
+        assertTrue(
+            "正文必须由 storageDetailLines 裁决行数与文案",
+            body.contains("storageDetailLines(connection.status, pairedAt)"),
+        )
+        assertTrue("正文必须用裁决出的资源", body.contains("stringResource(lines.statusRes"))
+        assertTrue("第二行必须受裁决门控", body.contains("if (!lines.showPairedLine) return line1"))
+    }
+
+    @Test
+    fun storageDetailScreenPassesTheOneStateToTheBodyAndTheDot() {
+        val detail = homeScreenSource().substringAfter("private fun StorageComputerDetail(")
+        assertTrue("详情页正文必须吃唯一连接状态", detail.contains("storageDetailBody(connection,"))
+        assertTrue("状态点必须吃同一份状态", detail.contains("storageDetailDotColor(connection.status)"))
     }
 
     // ── 逐状态：两页不可能给出相反结论 ──

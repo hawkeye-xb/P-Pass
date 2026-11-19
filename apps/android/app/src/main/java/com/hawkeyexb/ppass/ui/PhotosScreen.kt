@@ -287,7 +287,10 @@ internal fun photosTimelineChrome(
             // SYNC-04：跟「耗尽」互斥（耗尽之后不会再是「重连中」）。
             showReconnecting = connection.status == ConnectionState.Status.Reconnecting,
             showExhaustedRetry = connection.status == ConnectionState.Status.Offline,
-            showTimelineError = error != null,
+            // #1883：整页加载失败留下的 error 在订阅连上后不会自己消失（onSubscriptionConnected 不清它，
+            // 要等下一次刷新信号）。真的连上了就不能再说「无法连接电脑」——那句话跟详情页的
+            // 「已连接 · 最近同步 X」正是卡要消掉的相反结论。连上即不再显；页面内容由 60s 兜底轮询补齐。
+            showTimelineError = error != null && !connection.isConnected,
         )
     }
 
