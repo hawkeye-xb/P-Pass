@@ -352,8 +352,13 @@ build-stamp-check:
         { print strip($0) }
       ' "$1"
     }
+    # 从 stdin 找字面量 / 正则。读完整输入，不用 grep -q：-q 一命中就关掉管道读端，
+    # 生产者（awk/sed/grep）还在往下写就吃 SIGPIPE 死在 141，本 recipe 的 set -o pipefail
+    # 于是把整条管道报成失败——文件一大就被误判成「找不到」（#1890）。
+    stdin_has() { grep -F -- "$1" >/dev/null; }
+    stdin_has_re() { grep -E -- "$1" >/dev/null; }
     has_literal() { # <file> <literal>：只在非注释行里找字面量
-      noncomment "$1" | grep -Fq -- "$2"
+      noncomment "$1" | stdin_has "$2"
     }
     need() { # <file> <literal> <说明>
       if has_literal "$1" "$2"; then ok "$3"; else ko "$3（$1 里找不到「$2」）"; fi
@@ -362,12 +367,12 @@ build-stamp-check:
       sed -n "/^$2/,/^[a-z][a-z0-9-]*[ :]/p" "$1"
     }
     has_dev_stamp() { # 时间戳注入只在 dev 配方正文里找（缩进注释不算）
-      recipe_body "$1" 'dev \*args:' | grep -Ev '^[[:space:]]*#' | grep -Fq 'export PPF_BUILD_STAMP=' &&
-        recipe_body "$1" 'dev \*args:' | grep -Ev '^[[:space:]]*#' | grep -Fq "date '+%m-%d %H:%M'"
+      recipe_body "$1" 'dev \*args:' | grep -Ev '^[[:space:]]*#' | stdin_has 'export PPF_BUILD_STAMP=' &&
+        recipe_body "$1" 'dev \*args:' | grep -Ev '^[[:space:]]*#' | stdin_has "date '+%m-%d %H:%M'"
     }
     has_keep_apks() { # 设备测试命令与参数只在 android-instrumented 正文里找（缩进注释不算）
-      recipe_body "$1" 'android-instrumented \*args:' | grep -Ev '^[[:space:]]*#' | grep -Fq -- 'connectedDebugAndroidTest' &&
-        recipe_body "$1" 'android-instrumented \*args:' | grep -Ev '^[[:space:]]*#' | grep -Fq -- 'android.injected.androidTest.leaveApksInstalledAfterRun=true'
+      recipe_body "$1" 'android-instrumented \*args:' | grep -Ev '^[[:space:]]*#' | stdin_has 'connectedDebugAndroidTest' &&
+        recipe_body "$1" 'android-instrumented \*args:' | grep -Ev '^[[:space:]]*#' | stdin_has 'android.injected.androidTest.leaveApksInstalledAfterRun=true'
     }
     ios_stamp_script() { # <project.yml>：只取「Stamp build time」脚本正文（按缩进判定，注释/Delete 行在外面）
       awk '
@@ -381,16 +386,16 @@ build-stamp-check:
         }
       ' "$1"
     }
-    ios_has_env() { ios_stamp_script "$1" | grep -Ev '^[[:space:]]*#' | grep -Fq 'PPF_BUILD_STAMP'; }
+    ios_has_env() { ios_stamp_script "$1" | grep -Ev '^[[:space:]]*#' | stdin_has 'PPF_BUILD_STAMP'; }
     ios_has_add() { # 真正的（非注释）Add 命令行
-      ios_stamp_script "$1" | grep -Eq '^[[:space:]]*/usr/libexec/PlistBuddy -c "Add :PPassBuildStamp string'
+      ios_stamp_script "$1" | stdin_has_re '^[[:space:]]*/usr/libexec/PlistBuddy -c "Add :PPassBuildStamp string'
     }
     ios_has_trim() { # tr -d 与首尾 trim 三段都在（注释行不算，与 ios_has_env 同一口径）
       local b
       b="$(ios_stamp_script "$1" | grep -Ev '^[[:space:]]*#')"
-      printf '%s\n' "$b" | grep -Fq 'tr -d' &&
-        printf '%s\n' "$b" | grep -Fq 's/^[[:space:]]*//' &&
-        printf '%s\n' "$b" | grep -Fq 's/[[:space:]]*$//'
+      printf '%s\n' "$b" | stdin_has 'tr -d' &&
+        printf '%s\n' "$b" | stdin_has 's/^[[:space:]]*//' &&
+        printf '%s\n' "$b" | stdin_has 's/[[:space:]]*$//'
     }
     remove_seg() { # <file> <literal>：删掉第一处字面量（反证用）
       awk -v seg="$2" '{ i = index($0, seg); if (i > 0) $0 = substr($0, 1, i-1) substr($0, i+length(seg)); print }' "$1"
@@ -420,7 +425,7 @@ build-stamp-check:
     if ios_has_env apps/ios/project.yml; then ok "iOS 构建脚本读 PPF_BUILD_STAMP"; else ko "iOS 构建脚本没读 PPF_BUILD_STAMP"; fi
     if ios_has_add apps/ios/project.yml; then ok "iOS 构建脚本真正 Add PPassBuildStamp（非注释）"; else ko "iOS 构建脚本没有非注释的 Add :PPassBuildStamp 行"; fi
     if ios_has_trim apps/ios/project.yml; then ok "iOS 写入前 trim 换行/首尾空白（tr -d + 两段 sed）"; else ko "iOS 写入前 trim 不完整"; fi
-    if printf '%s\n' "$ios_body" | grep -Fq '[ -n "$stamp" ]'; then ok "stamp 为空时不写 PPassBuildStamp"; else ko "stamp 为空时的判断缺失"; fi
+    if printf '%s\n' "$ios_body" | stdin_has '[ -n "$stamp" ]'; then ok "stamp 为空时不写 PPassBuildStamp"; else ko "stamp 为空时的判断缺失"; fi
     need apps/ios/PPass/Diagnostics/AppVersion.swift 'info["PPassBuildStamp"]' "AppVersion 读 PPassBuildStamp"
     need apps/ios/PPass/Diagnostics/AppVersion.swift 'let stamp = buildStamp.trimmingCharacters(in: .whitespaces)' "空/空白 stamp 归一处理"
     need apps/ios/PPass/Diagnostics/AppVersion.swift 'stamp.isEmpty ? base :' "空 stamp 只显示 base、非空追加"
@@ -444,7 +449,7 @@ build-stamp-check:
 
     # 4) 设备测试：只看 android-instrumented 正文；just android-test（JVM 单测）语义不变。
     if has_keep_apks justfile; then ok "android-instrumented 跑 connected 并带 keep-apks 参数"; else ko "android-instrumented 缺少 connected 命令或 keep-apks 参数"; fi
-    if sed -n '/^android-test:/,/^[a-z][a-z0-9-]*[ :]/p' justfile | grep -Fq -- 'connectedDebugAndroidTest'; then
+    if sed -n '/^android-test:/,/^[a-z][a-z0-9-]*[ :]/p' justfile | stdin_has 'connectedDebugAndroidTest'; then
       ko "just android-test 仍是 JVM 单测，不该跑 connectedDebugAndroidTest"
     else
       ok "just android-test 仍是 JVM 单测（未跑 connectedDebugAndroidTest）"
@@ -536,6 +541,17 @@ build-stamp-check:
     else
       ok "反证：注释掉真正带 trim 的行 → 判红"
     fi
+
+    # 6) #1890 回归：has_literal 走的是「读完整输入」的路径，大文件里真实存在的字面量必须判绿。
+    #    旧写法（管道喂 grep -q + pipefail）在 38KB 以上必假红——下面两对就是那个假红的判据。
+    check_large() { # <file> <该文件里一定有的字面量>
+      local size
+      size="$(wc -c <"$1" | tr -d ' ')"
+      if has_literal "$1" "$2"; then ok "大文件不假红：$1（${size} 字节）"; else ko "大文件假红：$1（${size} 字节）里明明有「$2」"; fi
+      if has_literal "$1" 'zzz-1890-这个字面量不存在'; then ko "反证：$1 里不存在的字面量被判成有"; else ok "反证：$1 里不存在的字面量 → 判红"; fi
+    }
+    check_large AGENTS.md 'just doctor'
+    check_large apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt 'BuildConfig.BUILD_STAMP'
 
     exit "$fail"
 
