@@ -128,6 +128,7 @@ import com.hawkeyexb.ppass.ui.TimelineLoader
 import com.hawkeyexb.ppass.ui.TimelineSubscriptionHolder
 import com.hawkeyexb.ppass.ui.connectionStateOf
 import com.hawkeyexb.ppass.ui.TwoTabs
+import com.hawkeyexb.ppass.ui.twoTabsBackground
 import com.hawkeyexb.ppass.transport.disconnectAndNotifyInBackground
 import com.hawkeyexb.ppass.transport.sendUnpairNoticeOnce
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
@@ -1396,6 +1397,7 @@ fun PPassApp() {
             TwoTabs(
                 tab = tab,
                 onTab = { tab = it },
+                background = twoTabsBackground(viewerOpen = photoViewerOpen),
                 showTabBar = !photoViewerOpen && !storageDetailOpen,
                 // M13 哨兵态：长期失联时设置图标角标红点，跟照片页的失联
                 // 红卡同一个信号源（holder.pairingLost），不额外判天数。

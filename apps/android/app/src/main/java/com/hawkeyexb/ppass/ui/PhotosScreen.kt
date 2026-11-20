@@ -346,6 +346,9 @@ internal fun PhotosScreen(
     val shown = filterAssetsBySource(items, filter, localNodeId)
     val currentViewer = viewer
     LaunchedEffect(currentViewer) { onViewerOpenChange(currentViewer != null) }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose { onViewerOpenChange(false) }
+    }
     if (currentViewer != null && loader != null) {
         // Android 系统边缘返回先到这里；HorizontalPager 只处理内容区域横滑。
         // 查看器关闭后本 Handler 不在 composition，根页面的系统返回继续由 Activity 接管。
@@ -812,7 +815,9 @@ private fun PhotoViewer(
         }
     }
 
-    PPScreen(background = PPColor.SurfaceDark) {
+    // #1926：整屏底色、安全区 inset 与系统栏图标明暗已由外层 TwoTabs 唯一顶层 PPScreen
+    // 按 photoViewerOpen 切到 SurfaceDark；这里不再嵌套第二层 PPScreen。
+    Box(Modifier.fillMaxSize().background(PPColor.SurfaceDark)) {
         androidx.compose.material3.ProvideTextStyle(
             androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
         ) {

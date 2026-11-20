@@ -42,17 +42,58 @@ class PPScreenWiringTest {
     fun entry_home_picker_onboarding_and_viewer_all_go_through_ppscreen() {
         // 函数签名 → 所在文件。判据：该函数体里必须有 PPScreen 调用——按函数体判，
         // 避免整文件 contains 扫到同文件里另一个页面的调用（Onboarding.kt 有 WelcomeScreen 和 PairStatusScreen 两个调用点）。
+        // #1926：PhotoViewer / VideoScreen 运行在 TwoTabs 的唯一顶层 PPScreen 内，不再单独套 PPScreen；
+        // 由下方 two_tabs_is_the_single_top_level_ppscreen_for_home_and_viewer 锁定查看器走 TwoTabs(background = ...)。
         val required = mapOf(
             "入口 WelcomeScreen" to ("ui/Onboarding.kt" to "fun WelcomeScreen("),
-            "双 tab 首页" to ("ui/TwoTabs.kt" to "fun TwoTabs("),
+            "双 tab 首页与查看器宿主" to ("ui/TwoTabs.kt" to "fun TwoTabs("),
             "相册选择" to ("ui/BucketScreen.kt" to "fun BucketScreen("),
             "onboarding 决定页" to ("ui/DecisionScreen.kt" to "fun DecisionScreen("),
-            "查看器" to ("ui/PhotosScreen.kt" to "private fun PhotoViewer("),
         )
         val missing = required.filterValues { (path, funSig) ->
             !topLevelBody(path, funSig).contains("PPScreen")
         }
         assertTrue("这些页面没有经过 PPScreen：$missing", missing.isEmpty())
+    }
+
+    @Test
+    fun two_tabs_is_the_single_top_level_ppscreen_for_home_and_viewer() {
+        // #1926：一个 Window 同一时刻只能有一个顶层 PPScreen 控制整屏底色、安全区 inset 与系统栏外观。
+        // PhotoViewer / VideoScreen 在 TwoTabs 子树内，禁止再嵌套调用 PPScreen（否则外层 Paper 消费
+        // safeDrawingPadding 后顶部露出 97px 浅色白条，且退出查看器时外层不重组导致状态栏图标卡死变白）。
+        val photoViewerBody = topLevelBody("ui/PhotosScreen.kt", "private fun PhotoViewer(")
+        val videoScreenBody = topLevelBody("ui/VideoScreen.kt", "fun VideoScreen(")
+        val twoTabsBody = topLevelBody("ui/TwoTabs.kt", "fun TwoTabs(")
+        val mainActivity = File(sourceRoot, "MainActivity.kt").readText()
+        val tabsCall = mainActivity.substringAfter("TwoTabs(").substringBefore("photos = {")
+
+        assertTrue(
+            "PhotoViewer 在 TwoTabs 内，不得嵌套调用 PPScreen",
+            !photoViewerBody.contains("PPScreen(") && !photoViewerBody.contains("PPScreen {"),
+        )
+        assertTrue(
+            "VideoScreen 在 TwoTabs 内，不得嵌套调用 PPScreen",
+            !videoScreenBody.contains("PPScreen(") && !videoScreenBody.contains("PPScreen {"),
+        )
+        assertTrue(
+            "TwoTabs 必须把 background 参数透传给唯一顶层 PPScreen",
+            twoTabsBody.contains("PPScreen(background = background)"),
+        )
+        assertTrue(
+            "MainActivity 必须按 photoViewerOpen 切换 TwoTabs 背景色",
+            tabsCall.contains("background = twoTabsBackground(viewerOpen = photoViewerOpen)"),
+        )
+    }
+
+    @Test
+    fun ppscreen_tracks_nesting_and_restores_system_bar_appearance_on_background_change() {
+        val ppscreen = File(sourceRoot, "ui/PPScreen.kt").readText()
+        // #1926：显式守卫禁止运行时嵌套 PPScreen，同时用 DisposableEffect(window, view, lightAppearance)
+        // 同步系统栏明暗，保证背景切换或重新进入时立即更新窗口系统栏外观。
+        assertTrue("PPScreen 必须检测禁止嵌套", ppscreen.contains("LocalInsidePPScreen"))
+        assertTrue("PPScreen 必须校验非嵌套前置条件", ppscreen.contains("check(!LocalInsidePPScreen.current)"))
+        assertTrue("PPScreen 必须提供嵌套标记", ppscreen.contains("CompositionLocalProvider(LocalInsidePPScreen provides true)"))
+        assertTrue("PPScreen 必须按 lightAppearance 同步系统栏外观", ppscreen.contains("DisposableEffect(view, lightAppearance)"))
     }
 
     @Test
