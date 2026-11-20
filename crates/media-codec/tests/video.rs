@@ -98,3 +98,184 @@ fn make_thumbs_without_ffmpeg_uses_video_decoder() {
     );
     assert_non_flat(&image::open(&r.paths.t256).unwrap());
 }
+
+/// 解析 PE（PE32 / PE32+）的 Import Directory，返回所有静态导入的 DLL 名（小写）。
+/// 纯字节解析、不调平台 API，任何宿主都能跑解析器自测。
+fn pe_imported_dlls(pe: &[u8]) -> Result<Vec<String>, String> {
+    let u16_at = |off: usize| -> Result<u16, String> {
+        let s = pe
+            .get(off..off.checked_add(2).ok_or("u16 offset overflow")?)
+            .ok_or_else(|| format!("PE truncated at {off:#x} (need 2 bytes)"))?;
+        Ok(u16::from_le_bytes([s[0], s[1]]))
+    };
+    let u32_at = |off: usize| -> Result<u32, String> {
+        let s = pe
+            .get(off..off.checked_add(4).ok_or("u32 offset overflow")?)
+            .ok_or_else(|| format!("PE truncated at {off:#x} (need 4 bytes)"))?;
+        Ok(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+    };
+
+    if pe.get(0..2) != Some(b"MZ".as_slice()) {
+        return Err("missing MZ signature".into());
+    }
+    let e_lfanew = u32_at(0x3c)? as usize;
+    if pe.get(e_lfanew..e_lfanew.saturating_add(4)) != Some(b"PE\0\0".as_slice()) {
+        return Err("missing PE\\0\\0 signature".into());
+    }
+    let num_sections = u16_at(e_lfanew + 6)? as usize;
+    let opt_hdr_size = u16_at(e_lfanew + 20)? as usize;
+    let opt_off = e_lfanew + 24;
+    if pe
+        .get(opt_off..opt_off.saturating_add(opt_hdr_size))
+        .is_none()
+    {
+        return Err("optional header truncated".into());
+    }
+    let magic = u16_at(opt_off)?;
+    // DataDirectory[1] = Import Table (RVA + Size)：PE32+ 在 OptionalHeader+120，PE32 在 +104。
+    let import_dd_rel = match magic {
+        0x020b => 120usize,
+        0x010b => 104usize,
+        other => return Err(format!("unsupported PE optional header magic {other:#06x}")),
+    };
+    if opt_hdr_size < import_dd_rel + 8 {
+        return Ok(Vec::new());
+    }
+    let import_rva = u32_at(opt_off + import_dd_rel)?;
+    let import_size = u32_at(opt_off + import_dd_rel + 4)?;
+    if import_rva == 0 || import_size == 0 {
+        return Ok(Vec::new());
+    }
+
+    let sec_table_off = opt_off + opt_hdr_size;
+    let mut sections = Vec::with_capacity(num_sections);
+    for i in 0..num_sections {
+        let sh = sec_table_off
+            .checked_add(i * 40)
+            .ok_or("section offset overflow")?;
+        let virtual_size = u32_at(sh + 8)?;
+        let virtual_addr = u32_at(sh + 12)?;
+        let raw_size = u32_at(sh + 16)?;
+        let raw_ptr = u32_at(sh + 20)?;
+        sections.push((virtual_addr, virtual_size.max(raw_size), raw_size, raw_ptr));
+    }
+
+    let rva_to_off = |rva: u32| -> Result<usize, String> {
+        for &(va, span, raw_size, raw_ptr) in &sections {
+            if rva >= va && rva - va < span {
+                let delta = rva - va;
+                if delta >= raw_size {
+                    return Err(format!("RVA {rva:#x} falls in uninitialized section tail"));
+                }
+                return (raw_ptr as usize)
+                    .checked_add(delta as usize)
+                    .ok_or_else(|| "file offset overflow".into());
+            }
+        }
+        Err(format!("RVA {rva:#x} not mapped by any section"))
+    };
+
+    let mut desc_off = rva_to_off(import_rva)?;
+    let mut dlls = Vec::new();
+    loop {
+        let orig_first_thunk = u32_at(desc_off)?;
+        let name_rva = u32_at(desc_off + 12)?;
+        let first_thunk = u32_at(desc_off + 16)?;
+        if orig_first_thunk == 0 && name_rva == 0 && first_thunk == 0 {
+            break;
+        }
+        if name_rva == 0 {
+            return Err("import descriptor has zero Name RVA".into());
+        }
+        let name_off = rva_to_off(name_rva)?;
+        let tail = pe
+            .get(name_off..)
+            .ok_or_else(|| format!("DLL name offset {name_off:#x} out of bounds"))?;
+        let nul = tail
+            .iter()
+            .position(|&b| b == 0)
+            .ok_or("unterminated DLL name in import table")?;
+        let name = std::str::from_utf8(&tail[..nul])
+            .map_err(|e| format!("non-utf8 DLL name: {e}"))?
+            .to_ascii_lowercase();
+        dlls.push(name);
+        desc_off = desc_off
+            .checked_add(20)
+            .ok_or("descriptor offset overflow")?;
+    }
+    Ok(dlls)
+}
+
+#[test]
+fn pe_import_parser_extracts_dll_names_and_rejects_truncation() {
+    // 构造最小 PE32+ 镜像：1 个 .rdata 节（VA=0x1000, RawPtr=0x200），含两条导入描述符与结尾全 0 描述符。
+    let mut pe = vec![0u8; 0x300];
+    pe[0..2].copy_from_slice(b"MZ");
+    pe[0x3c..0x40].copy_from_slice(&0x40u32.to_le_bytes()); // e_lfanew = 0x40
+    pe[0x40..0x44].copy_from_slice(b"PE\0\0");
+    pe[0x46..0x48].copy_from_slice(&1u16.to_le_bytes()); // NumberOfSections = 1
+    pe[0x54..0x56].copy_from_slice(&0xf0u16.to_le_bytes()); // SizeOfOptionalHeader = 240 (PE32+)
+    let opt = 0x58usize;
+    pe[opt..opt + 2].copy_from_slice(&0x020bu16.to_le_bytes()); // PE32+ magic
+    pe[opt + 120..opt + 124].copy_from_slice(&0x1000u32.to_le_bytes()); // Import RVA
+    pe[opt + 124..opt + 128].copy_from_slice(&60u32.to_le_bytes()); // Import Size (3 descriptors)
+    let sh = opt + 0xf0; // 0x148
+    pe[sh..sh + 6].copy_from_slice(b".rdata");
+    pe[sh + 8..sh + 12].copy_from_slice(&0x100u32.to_le_bytes()); // VirtualSize
+    pe[sh + 12..sh + 16].copy_from_slice(&0x1000u32.to_le_bytes()); // VirtualAddress
+    pe[sh + 16..sh + 20].copy_from_slice(&0x100u32.to_le_bytes()); // SizeOfRawData
+    pe[sh + 20..sh + 24].copy_from_slice(&0x200u32.to_le_bytes()); // PointerToRawData
+                                                                   // Descriptor 0 @ file 0x200 (RVA 0x1000) -> Name RVA 0x1040 (file 0x240)
+    pe[0x200 + 12..0x200 + 16].copy_from_slice(&0x1040u32.to_le_bytes());
+    pe[0x200 + 16..0x200 + 20].copy_from_slice(&0x1080u32.to_le_bytes());
+    // Descriptor 1 @ file 0x214 (RVA 0x1014) -> Name RVA 0x1050 (file 0x250)
+    pe[0x214 + 12..0x214 + 16].copy_from_slice(&0x1050u32.to_le_bytes());
+    pe[0x214 + 16..0x214 + 20].copy_from_slice(&0x1088u32.to_le_bytes());
+    // Descriptor 2 @ file 0x228 全 0 终止。
+    pe[0x240..0x240 + 10].copy_from_slice(b"OLE32.dll\0");
+    pe[0x250..0x250 + 12].copy_from_slice(b"combase.dll\0");
+
+    assert_eq!(
+        pe_imported_dlls(&pe).unwrap(),
+        vec!["ole32.dll".to_string(), "combase.dll".to_string()]
+    );
+    assert!(pe_imported_dlls(&pe[..0x80]).is_err(), "截断镜像必须报错");
+}
+
+/// #1934 根因契约：Windows 服务形态（`LocalSystem` Session 0 + `AppContainer`）下，
+/// 服务窗口站 `Service-0x0-3e7$` 的 DACL 不授予 `ALL APPLICATION PACKAGES` 访问权；
+/// 一旦 `ppf-video-decoder.exe` 静态导入 `ole32.dll`（其静态依赖 `gdi32.dll` / `user32.dll`）
+/// 或直接导入 `user32.dll` / `gdi32.dll` / `gdi32full.dll`，加载器在 `main()` 之前连接窗口站
+/// 就会失败并以 `0xC0000142` (`STATUS_DLL_INIT_FAILED`) 秒退。
+///
+/// 反证：将 `video_decode.rs` 的 `CoInitializeEx` / `CreateStreamOnHGlobal` 改回 `windows` crate
+/// 默认的 `ole32.dll` 绑定 → 本测试在任何会话（含交互桌面 CI）下均稳定判红。
+#[test]
+fn video_decoder_binary_avoids_win32k_and_ole32_imports() {
+    if skip_if_no_video_decode() {
+        return;
+    }
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::remove_var("PPF_VIDEO_DECODE_WORKER");
+    let worker = platform::isolated::video_decoder_worker_path()
+        .expect("Windows 测试前应已编译出 ppf-video-decoder.exe");
+    let bytes =
+        std::fs::read(&worker).unwrap_or_else(|e| panic!("读取 {} 失败: {e}", worker.display()));
+    let dlls = pe_imported_dlls(&bytes)
+        .unwrap_or_else(|e| panic!("解析 {} 的 PE 导入表失败: {e}", worker.display()));
+
+    for expected in ["mfplat.dll", "mfreadwrite.dll"] {
+        assert!(
+            dlls.iter().any(|d| d == expected),
+            "{} 的 PE 导入表应包含 {expected}，实际导入: {dlls:?}",
+            worker.display()
+        );
+    }
+    for forbidden in ["ole32.dll", "user32.dll", "gdi32.dll", "gdi32full.dll"] {
+        assert!(
+            !dlls.iter().any(|d| d == forbidden),
+            "{} 静态导入了 {forbidden}（Session 0 服务 + AppContainer 下会在 main() 前以 0xC0000142 秒退），实际导入: {dlls:?}",
+            worker.display()
+        );
+    }
+}

@@ -52,6 +52,7 @@ pub fn decode_video_frame(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), VideoDeco
 fn decode_video_frame_windows(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), VideoDecodeError> {
     use std::time::Duration;
 
+    use windows::core::{Interface as _, HRESULT};
     use windows::Win32::Media::MediaFoundation::{
         IMFMediaBuffer, IMFMediaType, IMFSourceReader, MFCreateMFByteStreamOnStream,
         MFCreateMediaType, MFCreateSourceReaderFromByteStream, MFMediaType_Video, MFStartup,
@@ -60,14 +61,28 @@ fn decode_video_frame_windows(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), Video
         MF_MT_VIDEO_ROTATION, MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
         MF_VERSION,
     };
-    use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
-    use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+    use windows::Win32::System::Com::{IStream, COINIT_MULTITHREADED};
     use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+
+    // OneCore 无头 COM（#1934）：`windows` crate 默认把这两个函数绑在传统桌面 `ole32.dll` 上，
+    // 而 `ole32.dll` 静态依赖 `gdi32.dll` / `user32.dll`——在 Windows 服务（Session 0）+
+    // AppContainer 下，服务窗口站 `Service-0x0-3e7$` 的 DACL 不含 `ALL APPLICATION PACKAGES`，
+    // `DllMain` 连接窗口站被拒导致子进程在 `main()` 前以 `0xC0000142` (`STATUS_DLL_INIT_FAILED`)
+    // 秒退。改链 Windows 8+ OneCore 的 `combase.dll` 同名导出，彻底切断对 `ole32.dll` 的静态依赖。
+    #[link(name = "combase", kind = "raw-dylib")]
+    extern "system" {
+        fn CoInitializeEx(pv_reserved: *const core::ffi::c_void, dw_co_init: u32) -> i32;
+        fn CreateStreamOnHGlobal(
+            h_global: *mut core::ffi::c_void,
+            f_delete_on_release: i32,
+            ppstm: *mut *mut core::ffi::c_void,
+        ) -> i32;
+    }
 
     const FIRST_VIDEO: u32 = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
 
     // COM（MTA）+ MF 初始化。进程用完即弃，不做对称的 CoUninitialize / MFShutdown。
-    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    let _ = unsafe { CoInitializeEx(std::ptr::null(), COINIT_MULTITHREADED.0 as u32) };
     unsafe { MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET) }
         .map_err(|e| failed(format!("MFStartup: {}", e.message())))?;
 
@@ -80,8 +95,17 @@ fn decode_video_frame_windows(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), Video
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast::<u8>(), bytes.len()) };
         let _ = unsafe { GlobalUnlock(hglobal) };
     }
-    let stream = unsafe { CreateStreamOnHGlobal(hglobal, true) }
+    let mut raw_stream: *mut core::ffi::c_void = std::ptr::null_mut();
+    // SAFETY: `hglobal` 由 `GlobalAlloc` 分配并已解锁；`1` (`TRUE`) 让 `IStream` 释放时回收内存。
+    let hr = unsafe { CreateStreamOnHGlobal(hglobal.0, 1, &mut raw_stream) };
+    HRESULT(hr)
+        .ok()
         .map_err(|e| failed(format!("CreateStreamOnHGlobal: {}", e.message())))?;
+    if raw_stream.is_null() {
+        return Err(failed("CreateStreamOnHGlobal returned null stream"));
+    }
+    // SAFETY: `CreateStreamOnHGlobal` 返回 S_OK 且指针非空，所有权移交给 `IStream`。
+    let stream = unsafe { IStream::from_raw(raw_stream) };
     let byte_stream: windows::Win32::Media::MediaFoundation::IMFByteStream =
         unsafe { MFCreateMFByteStreamOnStream(&stream) }
             .map_err(|e| failed(format!("MFCreateMFByteStreamOnStream: {}", e.message())))?;
