@@ -1318,7 +1318,7 @@ mod tests {
     fn missing_peer_facts_refuse_the_selection() {
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("PPASS_STORAGE");
-        let complete = platform::UserDirFacts::from_home(PathBuf::from("/h"));
+        let complete = platform::UserDirFacts::from_home(tmp.path().join("owner-home"));
         // 逐个挖掉一个关键事实：每一个都足以拒绝本次选择。
         let mut cases = vec![platform::UserDirFacts::default()];
         for field in [

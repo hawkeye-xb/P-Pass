@@ -298,6 +298,10 @@ fn server_side_peer_dirs(
     }
 }
 
+/// #1918：`client_user` 打开客户端线程令牌请求的最小权限——只读 `TokenUser`（SID），
+/// 绝不向 Identification 级令牌请求 `TOKEN_IMPERSONATE` 或 `TOKEN_DUPLICATE`。
+const CLIENT_USER_TOKEN_ACCESS: u32 = windows_sys::Win32::Security::TOKEN_QUERY;
+
 /// 服务端：按**这条连接**模拟客户端，只用最小权限 `TOKEN_QUERY` 取它的用户 SID。
 ///
 /// 调用线程在模拟期间换了身份，所以无论成败都先 `RevertToSelf` 再返回；恢复失败
@@ -310,7 +314,7 @@ fn server_side_peer_dirs(
 /// 桌面进程随请求提供并经服务端校验。
 pub(crate) fn client_user(handle: RawHandle) -> io::Result<PeerUser> {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows_sys::Win32::Security::{RevertToSelf, TOKEN_QUERY};
+    use windows_sys::Win32::Security::RevertToSelf;
     use windows_sys::Win32::System::Pipes::ImpersonateNamedPipeClient;
     use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
 
@@ -323,7 +327,8 @@ pub(crate) fn client_user(handle: RawHandle) -> io::Result<PeerUser> {
     // OpenAsSelf = TRUE：按进程自己的身份做访问检查（客户端令牌为 Identification 级）。
     // 只需要 TOKEN_QUERY 读 TokenUser（SID），不请求模拟/复制权限。
     // SAFETY: GetCurrentThread 是伪句柄；token 是出参。
-    let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) };
+    let opened =
+        unsafe { OpenThreadToken(GetCurrentThread(), CLIENT_USER_TOKEN_ACCESS, 1, &mut token) };
     let open_err = io::Error::last_os_error();
     // SAFETY: 无参数；失败意味着本线程仍顶着客户端身份。
     if unsafe { RevertToSelf() } == 0 {
@@ -865,6 +870,18 @@ mod tests {
     fn pipe_client_sync_connect_reports_missing_pipe_as_not_found() {
         let err = connect_identification_sync(&unique("missing")).expect_err("没有这个管道");
         assert_eq!(err.kind(), io::ErrorKind::NotFound, "{err:?}");
+    }
+
+    /// #1918：锁定 `client_user` 请求的令牌权限为最小集 `TOKEN_QUERY`，不得回退加入
+    /// `TOKEN_IMPERSONATE` 或 `TOKEN_DUPLICATE`。
+    /// 反证：把 `CLIENT_USER_TOKEN_ACCESS` 改回 `TOKEN_QUERY | TOKEN_IMPERSONATE | TOKEN_DUPLICATE` ⇒ 红。
+    #[test]
+    fn client_user_only_requests_token_query() {
+        use windows_sys::Win32::Security::{TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_QUERY};
+
+        assert_eq!(CLIENT_USER_TOKEN_ACCESS, TOKEN_QUERY);
+        assert_eq!(CLIENT_USER_TOKEN_ACCESS & TOKEN_IMPERSONATE, 0);
+        assert_eq!(CLIENT_USER_TOKEN_ACCESS & TOKEN_DUPLICATE, 0);
     }
 
     /// #1918：服务端与连接方同用户（计划任务/直跑）时直接取当前用户目录事实；

@@ -590,8 +590,13 @@ mod floor_tests {
         use super::{PeerUser, UserDirFacts};
         use std::path::PathBuf;
 
-        let posix = UserDirFacts::from_home(PathBuf::from("/Users/alice"));
-        assert!(posix.selection_ready(), "合法 POSIX 事实应就绪");
+        let host_home = if cfg!(windows) {
+            PathBuf::from(r"C:\Users\alice")
+        } else {
+            PathBuf::from("/Users/alice")
+        };
+        let host_facts = UserDirFacts::from_home(host_home);
+        assert!(host_facts.selection_ready(), "合法宿主绝对路径事实应就绪");
 
         let win = UserDirFacts {
             home: Some(PathBuf::from(r"C:\Users\alice")),
@@ -605,6 +610,15 @@ mod floor_tests {
         };
         assert!(win.selection_ready(), "合法 Windows 盘符路径应就绪");
 
+        // Windows 下不带盘符的 `/Users/alice` 是驱动器相对路径，必须拒绝。
+        if cfg!(windows) {
+            let drive_rel = UserDirFacts::from_home(PathBuf::from("/Users/alice"));
+            assert!(
+                !drive_rel.selection_ready(),
+                "Windows 下无盘符路径 /Users/alice 必须被拒"
+            );
+        }
+
         for bad in [
             "",
             "   ",
@@ -614,11 +628,11 @@ mod floor_tests {
             "/Users/alice/../bob",
             r"C:\Users\..\Public",
         ] {
-            let mut f = posix.clone();
+            let mut f = host_facts.clone();
             f.desktop = Some(PathBuf::from(bad));
             assert!(!f.selection_ready(), "非法 desktop 路径 {bad:?} 必须被拒");
 
-            let mut f_lib = posix.clone();
+            let mut f_lib = host_facts.clone();
             f_lib.library = Some(PathBuf::from(bad));
             assert!(
                 !f_lib.selection_ready(),
