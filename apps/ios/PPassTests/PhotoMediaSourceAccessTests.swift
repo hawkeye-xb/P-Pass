@@ -283,4 +283,112 @@ final class PhotoMediaSourceAccessTests: XCTestCase {
                        "非完整授权：不读范围，直接关")
         XCTAssertEqual(partialPrefs.stored(), false)
     }
+
+    /// #1933 缺陷 1：曾授予照片权限（inbox.db 已有 token）后系统改回 .denied / .restricted 时，
+    /// PhotoMediaSource 不再碰 PhotoKit inbox（不抛 UNEXPECTED_ERROR），混合范围下目录来源仍可正常扫描。
+    /// 反证：恢复默认 accessDecided 为 `currentLevel() != .notDetermined`，.denied/.restricted 返回 true 并调用 inbox 抛错，本用例红。
+    func testDeniedOrRestrictedPhotoAccessDoesNotTouchInboxAndLetsFolderScanContinue() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("media-denied-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // 先用一次有效历史在 inbox.db 写下旧 token（模拟曾经授予完整照片权限）
+        final class SeedHistory: ChangeHistoryReading, @unchecked Sendable {
+            func currentToken() throws -> ChangeToken { ChangeToken(archived: Data("seed-token".utf8)) }
+            func changes(since token: ChangeToken) throws -> [ChangeRecord] { [] }
+        }
+        let inboxPath = dir.appendingPathComponent("inbox.db").path
+        let seededInbox = try Inbox(path: inboxPath, history: SeedHistory())
+        _ = try seededInbox.currentPosition()
+
+        // 切回 .denied / .restricted 后，底层 PhotoKit 历史一旦被调就会抛错（真实系统报 UNEXPECTED_ERROR）
+        for level in [PhotoAccessLevel.denied, .restricted] {
+            let history = RecordingHistory()
+            let inbox = try Inbox(path: inboxPath, history: history)
+            let photo = PhotoMediaSource(
+                selected: { ["album-1", "folder:f1"] },
+                since: { .all },
+                inbox: inbox,
+                accessDecided: { PhotoMediaSource.canReadPhotoKit(level) },
+                absenceTrusted: { level == .full },
+                log: { _ in }
+            )
+
+            // 混合范围里的目录来源
+            let folderDir = dir.appendingPathComponent("folder-\(level.rawValue)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folderDir, withIntermediateDirectories: true)
+            try Data([0xFF, 0xD8, 0xFF, 0xD9]).write(to: folderDir.appendingPathComponent("shot.jpg"))
+            let registryDir = dir.appendingPathComponent("reg-\(level.rawValue)", isDirectory: true)
+            try FileManager.default.createDirectory(at: registryDir, withIntermediateDirectories: true)
+            let registry = FolderRegistry(directory: registryDir, logger: NoopLogger())
+            let sourceId = try registry.addFolder(at: folderDir, displayName: "Samples")
+            let folderBucket = FolderMediaSource.bucketId(sourceId: sourceId)
+            let folderSource = FolderMediaSource(
+                registry: registry,
+                sourceId: sourceId,
+                directory: registryDir,
+                logger: NoopLogger(),
+                scope: { (["album-1", folderBucket], ["album-1", folderBucket], .all) }
+            )
+            let composite = CompositeMediaSource(library: photo, others: [folderSource])
+
+            let pos = try await composite.currentPosition()
+            let changed = try await composite.changes(after: pos, limit: 10)
+            XCTAssertEqual(changed, [], "\(level) 下 PhotoKit 增量不抛错且为空")
+            let scanned = try await composite.inScope(after: nil, limit: 10)
+            XCTAssertEqual(scanned.count, 1, "\(level) 下混合范围的文件夹条目仍可正常扫描")
+            XCTAssertTrue(scanned[0].mediaId.hasPrefix("folder:\(sourceId):"))
+            XCTAssertEqual(history.calls, 0, "\(level) 下不得触碰 PhotoKit inbox")
+        }
+    }
+
+    /// #1933 缺陷 2：folder-only（仅选文件夹、未选任何相册）且照片权限非完整时，inScopeTotal 应返回文件夹实际总数，
+    /// 不再返回 nil 导致首页投影落入 .unreadable（「无法读取相册里的照片数量」）；
+    /// 同时保留含相册且照片未完整授权时返回 nil 的原行为。
+    /// 反证：恢复 inScopeTotal 开头写死 `guard access() == .full else { return nil }`，folder-only 在 denied/limited/notDetermined 下返回 nil，本用例红。
+    func testInScopeTotalCountsFolderOnlyWithoutFullPhotoAccess() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("folder-total-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let folderDir = dir.appendingPathComponent("Samples", isDirectory: true)
+        try FileManager.default.createDirectory(at: folderDir, withIntermediateDirectories: true)
+        try Data([0xFF, 0xD8, 0xFF, 0xD9]).write(to: folderDir.appendingPathComponent("a.jpg"))
+        try Data([0xFF, 0xD8, 0xFF, 0xD9]).write(to: folderDir.appendingPathComponent("b.jpg"))
+
+        let registry = FolderRegistry(directory: dir, logger: NoopLogger())
+        let sourceId = try registry.addFolder(at: folderDir, displayName: "Samples")
+        let folderBucket = FolderMediaSource.bucketId(sourceId: sourceId)
+
+        let store = BackupScopeStore(directory: dir, daemonNodeId: "folder-only-total")
+        try store.saveScope(selected: [folderBucket], allCurrent: [folderBucket], since: .all)
+
+        for level in [PhotoAccessLevel.denied, .limited, .notDetermined, .restricted] {
+            let library = LiveMediaLibrary(scopeStore: { store }, auth: FakeAuthorization(level))
+            let total = await library.inScopeTotal(folderCount: { selected, since in
+                await LiveBackend.folderInScopeCount(selected: selected, since: since,
+                                                     known: library.knownAlbums(),
+                                                     registry: registry, directory: dir, logger: NoopLogger())
+            })
+            XCTAssertEqual(total, 2, "folder-only 在 \(level) 下应返回文件夹实际总数，不返回 nil")
+
+            let facts = FlowFacts(view: EngineSnapshot(state: .idle, pending: 0), confirmed: 2, inScopeTotal: total)
+            let triplet = HomeProjection.triplet(facts, scopeSaved: true)
+            XCTAssertNotNil(triplet, "folder-only 应产出有效 triplet")
+            XCTAssertEqual(
+                HomeProjection.heroRender(LiveMediaLibrary.map(level), triplet, countsReadable: true, scopeSaved: true,
+                                          hasUsableSource: true, hasSelectedAlbum: false, mixedAlbumIncomplete: false),
+                .triplet,
+                "folder-only 在 \(level) 下首页英雄区应渲染进度数字，不得落入 .unreadable"
+            )
+        }
+
+        // 含相册且照片未完整授权时，保留原行为（返回 nil）
+        try store.saveScope(selected: ["album-1", folderBucket], allCurrent: ["album-1", folderBucket], since: .all)
+        for level in [PhotoAccessLevel.denied, .limited, .notDetermined] {
+            let library = LiveMediaLibrary(scopeStore: { store }, auth: FakeAuthorization(level))
+            let total = await library.inScopeTotal(folderCount: { _, _ in 2 })
+            XCTAssertNil(total, "含相册且照片未完整授权（\(level)）时仍应返回 nil")
+        }
+    }
 }

@@ -604,6 +604,34 @@ final class LiveBackend: @unchecked Sendable {
         }
     }
 
+    /// #1933：统计已选目录来源在当前时间档内的总条目数。任一选中目录不可读（授权失效/枚举失败）返回 nil（宁可未知，不给假数字）。
+    static func folderInScopeCount(selected: Set<String>, since: BackupSince, known: Set<String>,
+                                   registry: FolderRegistry, directory: URL, logger: CoreLogger) async -> Int64? {
+        let records = registry.allRecords()
+        let effective = engineSelectedScope(saved: selected, known: known, records: records)
+        var total: Int64 = 0
+        for record in records where record.status != FolderMediaSource.pendingScopeStatus {
+            let bucket = FolderMediaSource.bucketId(sourceId: record.id)
+            guard effective.contains(bucket) else { continue }
+            let source = FolderMediaSource(registry: registry, sourceId: record.id, directory: directory, logger: logger,
+                                           scope: { (effective, known, since) })
+            do {
+                var after: String? = nil
+                let pageSize = 500
+                while true {
+                    let page = try await source.inScope(after: after, limit: pageSize)
+                    total += Int64(page.count)
+                    guard page.count == pageSize, let lastId = page.last?.mediaId else { break }
+                    after = lastId
+                }
+            } catch {
+                logger.log("folder \(record.id): in-scope count unreadable: \(error)")
+                return nil
+            }
+        }
+        return total
+    }
+
     /// 首页事实：引擎视图在第一次精确计数（pendingKnown）之前不给（对位 Android visibleEngineView / UI21）。
     func refreshFacts() async {
         mediaWatcher.start() // 幂等；相册授权晚于启动（首次授权）时在这里补注册（#978）
@@ -613,9 +641,14 @@ final class LiveBackend: @unchecked Sendable {
         // #973：账本读失败不许落成 0（会被首页读成「都存好了」）——记日志，事实标「计数不可读」，投影层不给完成度结论。
         let counts = Result { try OrderCounts.read(from: orders, missingSourceAckAt: control.missingSourceAckAt(), nowMs: nowMs) }
         if case .failure(let error) = counts { logger.log("home-facts: order counts unreadable: \(error)") }
+        let folderCount: (Set<String>, BackupSince) async -> Int64? = { [media, folders, root, logger] selected, since in
+            await Self.folderInScopeCount(selected: selected, since: since, known: media.knownAlbums(),
+                                          registry: folders, directory: root.url, logger: logger)
+        }
+        let inScopeTotal = await media.inScopeTotal(folderCount: folderCount)
         let facts = FlowFacts(
             view: known ? EngineSnapshot(view) : nil,
-            inScopeTotal: media.inScopeTotal(),
+            inScopeTotal: inScopeTotal,
             lastReachableAt: sentinel.load().lastReachableAt
         ).applying(counts: counts)
         if pairingLoss.changeCount > 0, let e = pairingStore.load()?.pairingId, pairingLoss.isLost(pairingId: e) {

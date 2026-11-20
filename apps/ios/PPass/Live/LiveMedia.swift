@@ -86,9 +86,11 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
         }
     }
 
-    /// 范围内总数 = 所选相册的**并集**去重（一张照片可以在多个相册里，不能按相册相加），再按时间档筛（#1263，首页分母跟着范围走）。
-    func inScopeTotal() -> Int64? {
-        guard access() == .full else { return nil }
+    /// 范围内总数 = 所选相册的**并集**去重（一张照片可以在多个相册里，不能按相册相加），再按时间档筛（#1263，首页分母跟着范围走）；
+    /// 已选文件夹按同一时间档计入（#1933）。
+    /// - 仅选文件夹（folder-only）时不依赖照片库权限，即使照片权限为 denied/limited/notDetermined/restricted 也能返回真实总数；
+    /// - 只要包含相册且照片未完整授权，返回 nil（保留原有权限闸门，不给假数字）。
+    func inScopeTotal(folderCount: ((Set<String>, BackupSince) async -> Int64?)? = nil) async -> Int64? {
         let selected: Set<String>
         let since: BackupSince
         do {
@@ -99,8 +101,22 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
             AppLog.log("backup-scope: unreadable, in-scope total unknown: \(error)")
             return nil
         }
-        let ids = AlbumScope(library: PhotoKitLibrary()).assetIdentifiers(inAlbums: selected)
-        return Int64(PhotoMediaSource.inTime(ids, since: since).count)
+        let selectedAlbums = selected.filter { !$0.hasPrefix("folder:") }
+        let hasSelectedAlbum = !selectedAlbums.isEmpty
+        let hasSelectedFolder = selected.contains { $0.hasPrefix("folder:") }
+        if hasSelectedAlbum {
+            guard access() == .full else { return nil }
+            let ids = AlbumScope(library: PhotoKitLibrary()).assetIdentifiers(inAlbums: selectedAlbums)
+            let albumTotal = Int64(PhotoMediaSource.inTime(ids, since: since).count)
+            guard let folderCount else { return albumTotal }
+            guard let folderTotal = await folderCount(selected, since) else { return nil }
+            return albumTotal + folderTotal
+        }
+        if hasSelectedFolder {
+            return await folderCount?(selected, since)
+        }
+        guard access() == .full else { return nil }
+        return 0
     }
 }
 
@@ -124,8 +140,18 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     private let inbox: Inbox
     private let log: @Sendable (String) -> Void
 
+    /// 只有已获得可读照片权限（full / limited）才允许触碰 PhotoKit（含 inbox 变更历史）。
+    /// - notDetermined：碰 PhotoKit 会抢先弹系统授权框（#1259）；
+    /// - denied / restricted：曾授过权留有旧 token 时调 inbox 会抛错导致 UNEXPECTED_ERROR，拖垮混合范围里的目录来源（#1933）。
+    static func canReadPhotoKit(_ level: PhotoAccessLevel) -> Bool {
+        switch level {
+        case .full, .limited: return true
+        case .notDetermined, .denied, .restricted: return false
+        }
+    }
+
     init(selected: @escaping @Sendable () -> Set<String>, since: @escaping @Sendable () -> BackupSince, inbox: Inbox,
-         accessDecided: @escaping @Sendable () -> Bool = { PhotoKitAuthorization().currentLevel() != .notDetermined },
+         accessDecided: @escaping @Sendable () -> Bool = { PhotoMediaSource.canReadPhotoKit(PhotoKitAuthorization().currentLevel()) },
          absenceTrusted: @escaping @Sendable () -> Bool = { PhotoKitAuthorization().currentLevel() == .full },
          log: @escaping @Sendable (String) -> Void) {
         self.selected = selected
@@ -181,8 +207,8 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     }
 
     func inScope(after: String?, limit: Int) async throws -> [MediaSnapshot] {
-        let chosen = selected()
-        // 范围空集不发查询（对位 AlbumScope / FIX-T6）；没问过照片权限不碰 PhotoKit（#1259）。
+        let chosen = selected().filter { !$0.hasPrefix("folder:") }
+        // 范围空集不发查询（对位 AlbumScope / FIX-T6）；无可读照片权限不碰 PhotoKit（#1259 / #1933）。
         guard !chosen.isEmpty, accessDecided() else { return [] }
         let members = membership.all()
         // 时间档要在截取 limit 之前筛：一页全被筛掉会被扫描当成读完（ScopeCursor：不足一页 = 到底）。
@@ -199,7 +225,7 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     func changes(after position: DiscoveryPosition, limit: Int) async throws -> [MediaSnapshot] {
         var after = Inbox.seq(fromPosition: position.raw)
         var out: [MediaSnapshot] = []
-        let chosen = selected()
+        let chosen = selected().filter { !$0.hasPrefix("folder:") }
         guard !chosen.isEmpty, accessDecided() else { return [] }
         let window = since()
         while out.count < limit {
@@ -228,6 +254,7 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     func libraryIdentity() async throws -> String? { nil }
 
     func lookup(_ mediaId: String) async throws -> MediaDetails? {
+        guard accessDecided() else { return nil }
         guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [mediaId], options: nil).firstObject else { return nil }
         guard let snap = await snapshots([mediaId], members: membership.of([mediaId])).first else { return nil }
         let resources = PHAssetResource.assetResources(for: asset)
