@@ -2013,7 +2013,12 @@
                       <!-- T-091: 哨兵行 ACT 色 + 「需要看看」；T-092: 连接态点色
                            （direct=safe 绿，relay=wait 琥珀）——语义色仅此四种 -->
                       <span class="h-[9px] w-[9px] flex-none rounded-full {DOT_BG[row.dot]}"></span>
-                      <span class="flex flex-1 flex-col items-start gap-[2px] min-w-0">
+                      <!-- #1924 / #1132 D9：设备名列给非零 min-w 与 basis，避免
+                           flex-wrap 在 200% 缩放的中间宽度下不触发换行却把名称列压到
+                           几十像素、让按钮文字横向溢出盖住右侧 #ID；改名按钮与输入框
+                           各自受容器宽度约束（truncate 落在按钮内层 span，不在外层
+                           设 overflow-hidden 以免裁掉 focus-visible:ring-3）。 -->
+                      <span class="flex flex-1 basis-[160px] flex-col items-start gap-[2px] min-w-[min(100%,160px)]">
                         {#if renameTarget?.nodeId === d.node_id}
                           <!-- NAME-01: 改名输入框——回车保存 / Esc 取消 /
                                失焦保存（空名与未改动不提交）。
@@ -2024,7 +2029,7 @@
                                （审计原发现）。 -->
                           <input
                             aria-label={t("ui.rename")}
-                            class="max-w-[260px] flex-none self-start rounded-sm border-[1.5px] border-border-strong bg-paper px-[6px] py-[2px] font-sans text-[16px] font-semibold text-ink focus:border-safe"
+                            class="w-full max-w-[260px] flex-none self-start rounded-sm border-[1.5px] border-border-strong bg-paper px-[6px] py-[2px] font-sans text-[16px] font-semibold text-ink focus:border-safe"
                             value={renameValue}
                             oninput={(e) => (renameValue = e.currentTarget.value)}
                             onkeydown={(e) => {
@@ -2043,10 +2048,10 @@
                                self-start + justify-start 双保险钉死左对齐。 -->
                           <Button
                             variant="link"
-                            class="-ml-[6px] h-auto min-h-0 flex-none self-start justify-start rounded-sm border-0 border-none px-[6px] py-[2px] text-left text-[16px] leading-[1.38] font-semibold text-ink hover:bg-linen hover:underline hover:underline-offset-[3px]"
+                            class="-ml-[6px] h-auto min-h-0 max-w-full min-w-0 flex-none self-start justify-start rounded-sm border-0 border-none px-[6px] py-[2px] text-left text-[16px] leading-[1.38] font-semibold text-ink hover:bg-linen hover:underline hover:underline-offset-[3px]"
                             title={t("ui.rename")}
                             onclick={() => startRename(d)}
-                          >{displayName(d)}</Button>
+                          ><span class="truncate">{displayName(d)}</span></Button>
                         {/if}
                         <!-- #1071：协议版本不符的一端要更新才能互通；daemon 在
                              devices.list 每行给 needs_update（"phone" | "desktop" | null）。 -->
