@@ -793,12 +793,19 @@ fn windows_resident_daemon_serves_on_the_user_pipe_without_any_token_file() {
     };
     assert_eq!(answered["result"]["unconfigured"], true, "{answered}");
     let lib = dir.path().join("Lib Pipe");
+    // #1918 / #1929：子进程覆写了 USERPROFILE，Windows 注册表里的 Known Folder 指向
+    // `%USERPROFILE%\...` 会找不到（0x80070002），服务端侧 PeerUser.dirs 不全；按真实桌面壳
+    // 方案 A 口径由已通过管道 SID 鉴权的父进程随请求传入 `user_dirs`。
+    let user_dirs = platform::UserDirFacts::for_current_user();
     let resp = rt
         .block_on(call(
             &endpoint,
             serde_json::json!({
                 "id": "x", "method": "config.set_library",
-                "params": { "library": lib.to_str().unwrap() }
+                "params": {
+                    "library": lib.to_str().unwrap(),
+                    "user_dirs": user_dirs,
+                }
             }),
         ))
         .expect("set_library");
