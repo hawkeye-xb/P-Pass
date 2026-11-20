@@ -26,4 +26,22 @@ class PPScreenTest {
         assertTrue(isAppearanceLightFor(SYSTEM_BAR_LIGHT_APPEARANCE_THRESHOLD))
         assertFalse(isAppearanceLightFor(SYSTEM_BAR_LIGHT_APPEARANCE_THRESHOLD - 0.0001f))
     }
+
+    @Test
+    fun opening_and_closing_viewer_switches_top_level_background_and_restores_light_status_bars() {
+        // #1926：首页（浅色）→ 打开查看器（深色）→ 退出查看器（恢复浅色）。
+        // 唯一顶层 PPScreen 的 background 随 viewerOpen 切换，从而触发系统栏明暗同步：
+        // 首页 true（深色图标）→ 查看器 false（浅色图标）→ 退出后必须恢复 true（深色图标）。
+        val homeBg = twoTabsBackground(viewerOpen = false)
+        val viewerBg = twoTabsBackground(viewerOpen = true)
+        val restoredBg = twoTabsBackground(viewerOpen = false)
+
+        org.junit.Assert.assertEquals(PPColor.Paper, homeBg)
+        org.junit.Assert.assertEquals(PPColor.SurfaceDark, viewerBg)
+        org.junit.Assert.assertEquals(PPColor.Paper, restoredBg)
+
+        assertTrue("浅色首页必须使用深色状态栏图标", isAppearanceLightFor(homeBg))
+        assertFalse("深色查看器必须使用浅色状态栏图标", isAppearanceLightFor(viewerBg))
+        assertTrue("退出查看器回到首页后必须恢复深色状态栏图标", isAppearanceLightFor(restoredBg))
+    }
 }

@@ -49,12 +49,21 @@ import com.hawkeyexb.ppass.R
  * "是否正在看大图"传入，`photos`/`backup` 内容区不受影响，只是底部
  * 那一整条 tab 栏 Row 在 showTabBar=false 时不进组合树。
  */
+/**
+ * #1926：首页（照片/设置双 tab）与全屏媒体查看器共用 `TwoTabs` 唯一顶层 [PPScreen]。
+ * 查看器打开时整屏（含顶部状态栏与底部导航栏安全区）切到 [PPColor.SurfaceDark]（浅色图标），
+ * 退出查看器时立即切回 [PPColor.Paper]（深色图标），不再在子树里嵌套第二层 [PPScreen]。
+ */
+internal fun twoTabsBackground(viewerOpen: Boolean): Color =
+    if (viewerOpen) PPColor.SurfaceDark else PPColor.Paper
+
 @Composable
 fun TwoTabs(
     tab: Int,
     onTab: (Int) -> Unit,
     photos: @Composable () -> Unit,
     backup: @Composable () -> Unit,
+    background: Color = PPColor.Paper,
     showTabBar: Boolean = true,
     // M13 哨兵态：长期失联时设置图标角标一个红点（不是文字变色/变红——
     // 那个方案照的是过时设计稿快照，已在 798b7ae 里被官方最新稿否掉）。
@@ -65,7 +74,7 @@ fun TwoTabs(
     // 「中断提示不再只有总览」的最小实现：一个宿主，而不是各页各拼一个。
     notice: (@Composable () -> Unit)? = null,
 ) {
-    PPScreen {
+    PPScreen(background = background) {
         Column(Modifier.fillMaxSize()) {
             if (notice != null) {
                 Box(Modifier.fillMaxWidth().padding(PPSize.PageGutter, 12.dp, PPSize.PageGutter, 0.dp)) { notice() }

@@ -137,7 +137,9 @@ fun VideoScreen(
         }
     }
 
-    PPScreen(background = PPColor.SurfaceDark) {
+    // #1926：整屏底色、安全区 inset 与系统栏图标明暗已由外层 TwoTabs 唯一顶层 PPScreen
+    // 按 photoViewerOpen 切到 SurfaceDark；这里不再嵌套第二层 PPScreen。
+    Box(Modifier.fillMaxSize().background(PPColor.SurfaceDark)) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
             Row(
                 Modifier.fillMaxWidth(),

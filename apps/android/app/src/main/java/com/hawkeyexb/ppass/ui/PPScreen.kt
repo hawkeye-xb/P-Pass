@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
@@ -35,27 +37,42 @@ internal fun isAppearanceLightFor(luminance: Float): Boolean =
 internal fun isAppearanceLightFor(background: Color): Boolean =
     isAppearanceLightFor(background.luminance())
 
+/**
+ * #1926：一个 Window 同一时刻只能有一个顶层 [PPScreen] 控制整屏底色、安全区 inset 与系统栏外观。
+ * 嵌套调用会二次消费 safeDrawingPadding（深色页顶部露出外层浅色白条），且内层卸载时外层不重组
+ * 导致系统栏图标明暗永久卡死。运行时通过 CompositionLocal 强制拦截任何嵌套调用。
+ */
+internal val LocalInsidePPScreen = compositionLocalOf { false }
+
 @Composable
 fun PPScreen(
     background: Color = PPColor.Paper,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
+    check(!LocalInsidePPScreen.current) {
+        "PPScreen must not be nested; switch the top-level PPScreen background instead."
+    }
     val view = LocalView.current
+    val lightAppearance = isAppearanceLightFor(background)
     if (!view.isInEditMode) {
-        SideEffect {
-            val window = (view.context as? Activity)?.window ?: return@SideEffect
-            val lightAppearance = isAppearanceLightFor(background)
-            WindowCompat.getInsetsController(window, view).apply {
-                isAppearanceLightStatusBars = lightAppearance
-                isAppearanceLightNavigationBars = lightAppearance
+        DisposableEffect(view, lightAppearance) {
+            val window = (view.context as? Activity)?.window
+            if (window != null) {
+                WindowCompat.getInsetsController(window, view).apply {
+                    isAppearanceLightStatusBars = lightAppearance
+                    isAppearanceLightNavigationBars = lightAppearance
+                }
             }
+            onDispose {}
         }
     }
-    Box(
-        modifier
-            .fillMaxSize()
-            .background(background)
-            .safeDrawingPadding(),
-    ) { content() }
+    CompositionLocalProvider(LocalInsidePPScreen provides true) {
+        Box(
+            modifier
+                .fillMaxSize()
+                .background(background)
+                .safeDrawingPadding(),
+        ) { content() }
+    }
 }
