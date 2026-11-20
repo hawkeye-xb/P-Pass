@@ -412,6 +412,19 @@ pub fn check_library_path(
             return Err(config::ui_err("ui.err_library_user_dirs", &[]));
         }
     }
+    // #1918：在任何 `canonicalize()` 之前先拒绝 UNC 网络共享与 Windows 设备/非盘符
+    // 命名空间路径，防止服务端以 `NT SERVICE\P-Pass` 身份向网络位置发起 SMB/NTLM 连接
+    // 或访问设备对象（与 `user_dirs` 共用同一份判据）。
+    if platform::UserDirFacts::is_unc_or_device_path(target) {
+        tracing::warn!(
+            "#1918: 拒绝 UNC 或设备命名空间路径作为照片库位置：{}",
+            target.display()
+        );
+        return Err(config::ui_err(
+            "ui.err_library_target_missing",
+            &[("dir", &target.display())],
+        ));
+    }
     let Some(real) = resolve_components(target) else {
         tracing::info!("#1826: 选择的位置解析不出真实路径：{}", target.display());
         return Err(config::ui_err(
@@ -1353,6 +1366,37 @@ mod tests {
         let ok = platform::PeerUser::new("S-1-5-21-1".into(), complete);
         check_library_path(&target, &tmp.path().join("platform"), Some(&ok))
             .unwrap_or_else(|e| panic!("事实齐全时普通目录不该被拒：{e}"));
+    }
+
+    /// #1918：目标照片库路径若是 UNC 网络共享或 Windows 设备/非盘符命名空间，必须在
+    /// 任何 `canonicalize()` 之前直接拒绝（`ui.err_library_target_missing`），防止服务账户
+    /// 外连 SMB/NTLM 或访问设备对象。
+    /// 反证：去掉 `check_library_path` 里的 `is_unc_or_device_path` 早退 ⇒ 下列路径在
+    /// `resolve_components` 里被当成普通路径放行（返回 Ok），红。
+    #[test]
+    fn unc_and_device_library_targets_are_refused_before_canonicalize() {
+        let tmp = tempfile::tempdir().unwrap();
+        let platform_dir = tmp.path().join("platform");
+        let peer = platform::PeerUser::new(
+            "S-1-5-21-1".into(),
+            platform::UserDirFacts::from_home(tmp.path().join("owner-home")),
+        );
+        for bad in [
+            r"\\attacker\share\photos",
+            "//attacker/share/photos",
+            r"\\?\UNC\attacker\share\photos",
+            r"\\.\pipe\ppf-svc",
+            r"\\.\PhysicalDrive0",
+            r"\\?\GlobalRoot\Device\HarddiskVolume1\photos",
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\photos",
+        ] {
+            let err = check_library_path(Path::new(bad), &platform_dir, Some(&peer))
+                .expect_err(&format!("UNC/设备路径 {bad:?} 必须在 canonicalize 前被拒"));
+            assert!(
+                err.contains("ui.err_library_target_missing"),
+                "{bad:?}: {err}"
+            );
+        }
     }
 
     /// 默认库自己是指向桌面的链接：拒绝（默认库的例外是**词法位置**，不 canonicalize

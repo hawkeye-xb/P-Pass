@@ -76,10 +76,11 @@ pub struct UserDirFacts {
 ///
 /// 跨平台判据（不依赖 `cfg`）：
 /// - 含 NUL 或任一段为 `..` ⇒ 拒绝；
+/// - UNC（`\\server\...`、`//server/...`、`\\?\UNC\...`）与设备/非盘符命名空间
+///   （`\\.\...`、`\\?\GlobalRoot\...`、`\\?\Volume{...}`）⇒ 由
+///   [`UserDirFacts::is_unc_or_device_path`] 统一拒绝；
 /// - Windows 盘符绝对路径：`<盘符>:\`、`<盘符>:/`、以及 `canonicalize()` 产出的本地盘符
 ///   扩展路径 `\\?\<盘符>:\` ⇒ 放行；
-/// - UNC（`\\server\...`、`//server/...`、`\\?\UNC\...`）与设备/非盘符命名空间
-///   （`\\.\...`、`\\?\GlobalRoot\...`、`\\?\Volume{...}`）⇒ 一律拒绝；
 /// - POSIX 绝对路径：非 Windows 宿主上以单个 `/` 开头（排除 `//`）⇒ 放行；
 ///   Windows 宿主上无盘符的 `/...` 属于驱动器相对路径，由 `path.is_absolute()` 自然拒绝。
 fn is_valid_dir_fact_path(path: &std::path::Path) -> bool {
@@ -88,7 +89,7 @@ fn is_valid_dir_fact_path(path: &std::path::Path) -> bool {
         return false;
     }
     let s = raw.to_string_lossy();
-    if s.trim().is_empty() || s.contains('\0') {
+    if s.trim().is_empty() || UserDirFacts::is_unc_or_device_path(path) {
         return false;
     }
     // 任一路径段出现 `..` 一律拒绝（兼容 `/` 与 `\` 两种分隔符）。
@@ -109,7 +110,6 @@ fn is_valid_dir_fact_path(path: &std::path::Path) -> bool {
         return true;
     }
     // 2. Windows `canonicalize()` 产出的本地盘符 verbatim 路径：`\\?\C:\...`。
-    //    显式只放行盘符，拒绝 `\\?\UNC\...`、`\\?\Volume{...}`、`\\?\GlobalRoot\...` 等。
     if bytes.len() >= 7
         && bytes.starts_with(br"\\?\")
         && bytes[4].is_ascii_alphabetic()
@@ -118,18 +118,37 @@ fn is_valid_dir_fact_path(path: &std::path::Path) -> bool {
     {
         return true;
     }
-    // 3. 显式拒绝一切 UNC / 设备命名空间前缀（`\\...`、`//...`、`\/...`、`/\...`）。
-    if bytes.len() >= 2
-        && (bytes[0] == b'\\' || bytes[0] == b'/')
-        && (bytes[1] == b'\\' || bytes[1] == b'/')
-    {
-        return false;
-    }
-    // 4. POSIX 本地绝对路径（单个 `/` 开头；在 Windows 宿主上 `is_absolute()` 为 false）。
+    // 3. POSIX 本地绝对路径（单个 `/` 开头；在 Windows 宿主上 `is_absolute()` 为 false）。
     bytes[0] == b'/' && path.is_absolute()
 }
 
 impl UserDirFacts {
+    /// #1918：路径是否指向 UNC 网络共享或 Windows 设备/非盘符命名空间（如 `\\server\share`、
+    /// `//server/share`、`\\?\UNC\...`、`\\.\...`、`\\?\GlobalRoot\...`、`\\?\Volume{...}`），
+    /// 或含 NUL 字节。`canonicalize()` 产出的本地盘符 verbatim 路径（`\\?\<盘符>:\...`）不算。
+    ///
+    /// `user_dirs` 校验与照片库目标路径（`check_library_path`）共用这一份判据：必须在任何
+    /// `canonicalize()` / 文件系统访问之前拒绝，防止服务账户触发外连 SMB/NTLM 或设备访问。
+    pub fn is_unc_or_device_path(path: &std::path::Path) -> bool {
+        let s = path.as_os_str().to_string_lossy();
+        if s.contains('\0') {
+            return true;
+        }
+        let bytes = s.as_bytes();
+        // `canonicalize()` 产出的本地盘符 verbatim 路径 `\\?\C:\...` 放行。
+        if bytes.len() >= 7
+            && bytes.starts_with(br"\\?\")
+            && bytes[4].is_ascii_alphabetic()
+            && bytes[5] == b':'
+            && bytes[6] == b'\\'
+        {
+            return false;
+        }
+        bytes.len() >= 2
+            && (bytes[0] == b'\\' || bytes[0] == b'/')
+            && (bytes[1] == b'\\' || bytes[1] == b'/')
+    }
+
     /// 给定家目录、按各平台的标准名字算全套事实（测试与无 KF 机制的平台的口径）。
     pub fn from_home(home: std::path::PathBuf) -> Self {
         let at = |name: &str| Some(home.join(name));
