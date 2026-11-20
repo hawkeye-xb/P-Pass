@@ -537,6 +537,10 @@ final class LiveBackend: @unchecked Sendable {
                                   onPaired: { [weak self] record, known in self?.paired(record, knownDesktop: known) ?? false },
                                   onDisconnect: { [weak self] in await self?.disconnect() }, logger: logger,
                                   localNodeId: { [plane] in try plane.nodeId() })
+        let localOriginals = LocalFirstOriginals(
+            reader: IOSOriginalReader(folders: folders, logger: logger),
+            loadIndex: { [orders] in LocalSourceIndex.read(from: orders) }
+        )
         let timeline = LiveTimeline(client: { [pairingStore, plane] in
             guard let r = pairingStore.load() else { return nil }
             return ProtoClient(transport: PeerCtrlTransport(plane: plane, peerToken: r.peerToken))
@@ -544,7 +548,7 @@ final class LiveBackend: @unchecked Sendable {
         fetchBlob: { [plane] ticket, dest, progress in
             let scratch = FileManager.default.temporaryDirectory.appendingPathComponent(OriginalCachePaths.fetchScratchDirName)
             return try await plane.fetchBlob(ticket: ticket, scratch: scratch, dest: dest, progress: progress)
-        }, logger: logger)
+        }, logger: logger, localOriginals: localOriginals)
         timelineLock.lock(); liveTimeline = timeline; timelineLock.unlock()
         return Backend(isDemo: false, timeline: timeline, live: timelineLive, media: media, pairing: pairing,
                        engine: LiveEngineAdapter(backend: self))
@@ -556,6 +560,7 @@ final class LiveBackend: @unchecked Sendable {
         // #935：换了一台电脑就清旧账（已确认计数不能算给新电脑）；同一台重新配对不动。失败要暴露，不静默沿用旧账。
         do { _ = try adoptDesktop(orders, daemonNodeId: record.daemonNodeId, nowMs: Int64(Date().timeIntervalSince1970 * 1000)) }
         catch { logger.log("adoptDesktop failed: \(error)") }
+        clearThumbnailMemoryCache() // #1935：换电脑可能清过账本，同步清空缩略图与本机来源内存快照
         // 「连过这台电脑」不在这里记：要等用户在决定页做出选择（范围保存成功 / 单张选完）才落盘（#1323 onboarding 闸门，对位 Android markOnboarded）。
         let settingSaveFailed = applyAutoBackupOnPairing(autoPrefs, knownDesktop: knownDesktop, logger: logger)
         mediaWatcher.start() // 断开时注销了；重新配对后恢复（#978）

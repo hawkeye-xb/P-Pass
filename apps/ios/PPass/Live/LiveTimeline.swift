@@ -13,15 +13,19 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
     private let logger: CoreLogger
     /// 下载视频前查的剩余空间（字节）；测试里换成固定值。
     private let freeBytes: () -> Int64?
+    /// #1935：本机已备份照片/视频的优先读取入口（丙案：内存映射 + 版本核对；nil = 未启用，只走远端）。
+    private let localOriginals: LocalFirstOriginals?
 
     init(client: @escaping () -> ProtoClient?, myNodeId: @escaping () -> String?,
          fetchBlob: @escaping (String, URL, @escaping @Sendable (UInt64) -> Void) async throws -> String,
-         logger: CoreLogger, freeBytes: @escaping () -> Int64? = LiveTimeline.systemFreeBytes) {
+         logger: CoreLogger, freeBytes: @escaping () -> Int64? = LiveTimeline.systemFreeBytes,
+         localOriginals: LocalFirstOriginals? = nil) {
         self.client = client
         self.myNodeId = myNodeId
         self.fetchBlob = fetchBlob
         self.logger = logger
         self.freeBytes = freeBytes
+        self.localOriginals = localOriginals
     }
 
     /// #987：照片页每次请求一行——方法、结果（成功或错误类别）、耗时；不记哈希、文件名、照片内容。
@@ -88,6 +92,10 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
     func thumbnail(_ item: TimelineItem, large: Bool) async throws -> UIImage {
         let key = "\(item.id)-\(large ? 1024 : 256)" as NSString
         if let hit = cache.object(forKey: key) { return hit }
+        if item.isMine == true, let local = await localOriginals?.thumb(hash: item.id, isVideo: item.isVideo, maxPx: large ? 1024 : 256) {
+            cache.setObject(local, forKey: key)
+            return local
+        }
         let image = try await logged("thumb.get size=\(large ? 1024 : 256)", { (_: UIImage) in "" }) {
             guard let client = client() else { throw Failure.notPaired }
             let data = try await client.call(Methods.thumbGet, ThumbGet(hash: item.id, size: large ? .s1024 : .s256), as: ThumbData.self)
@@ -104,8 +112,11 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(OriginalCachePaths.videosDirName, isDirectory: true)
     }
 
-    /// 清空缩略图的内存缓存（断开清单的 `thumbnailMemoryCache` 行，#1119）。
-    func clearMemoryCache() { cache.removeAllObjects() }
+    /// 清空缩略图的内存缓存与本机来源索引快照（断开清单的 `thumbnailMemoryCache` 行，#1119 / #1935）。
+    func clearMemoryCache() {
+        cache.removeAllObjects()
+        localOriginals?.invalidate()
+    }
 
     /// #1149：桌面给的内容 hash 先验格式再拼本地路径——必须正好 64 位 hex（BLAKE3）。空串、`../`、
     /// 路径分隔符、别的长度都不是 hash；拼进路径之前挡掉，缓存目录一个字节都不碰。
@@ -127,6 +138,25 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
         let dir = item.isVideo ? Self.videoCacheDir : Self.shareDir
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         if item.isVideo, let hit = Self.completeCached(item, in: dir) { return hit }
+
+        // #1935：本机来源先查内存映射并核对版本，命中则直接从本机相册或授权目录导出，失败静默回退远端。
+        if item.isMine == true, let localOriginals {
+            let localRaw = dir.appendingPathComponent("\(item.id).\(UUID().uuidString).part")
+            let copied = await localOriginals.copy(hash: item.id, isVideo: item.isVideo, dest: localRaw) { p in progress(p) }
+            if copied, !Task.isCancelled {
+                let actualSize = (try? localRaw.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
+                let sizeMatches = (item.bytes == nil || (item.bytes ?? 0) <= 0 || actualSize == item.bytes)
+                if sizeMatches {
+                    let named = dir.appendingPathComponent(item.id).appendingPathExtension(Self.fileExtension(of: localRaw, isVideo: item.isVideo))
+                    try? fm.removeItem(at: named)
+                    if (try? fm.moveItem(at: localRaw, to: named)) != nil {
+                        return named
+                    }
+                }
+            }
+            try? fm.removeItem(at: localRaw)
+            try Task.checkCancellation()
+        }
 
         // 视频：先确认电脑给了大小、手机放得下，再去要票据（对位 Android VideoPlayback）。
         if item.isVideo { try checkVideoStart(item) }
