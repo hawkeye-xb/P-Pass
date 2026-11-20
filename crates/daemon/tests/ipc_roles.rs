@@ -345,6 +345,148 @@ async fn unconfigured_set_library_judges_with_the_peer_facts() {
     assert!(store.0.lock().unwrap().as_deref() == Some(ordinary.to_str().unwrap().as_bytes()));
 }
 
+/// #1918（方案 A）：未配置状态（首启向导）在 Windows 服务形态下（连接方有 SID，但服务端
+/// 侧 `dirs` 为空）通过 `params.user_dirs` 接收主人目录事实：
+/// - 未传 / 残缺 `user_dirs` ⇒ 返回 `ui.err_library_user_dirs`，不建目录、不写正本；
+/// - 传完整合法 `user_dirs` ⇒ 敏感目录（桌面）拒绝，默认库位置与普通目录放行；
+/// - 库找不到态的 `library.relocate` 同样遵循同一校验链路。
+/// 反证：去掉 `resolve_peer_with_client_dirs` ⇒ 下方默认库与普通目录两条均报 `ui.err_library_user_dirs`，红。
+#[tokio::test]
+async fn unconfigured_service_peer_accepts_validated_client_user_dirs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = MemStore::default();
+    let loc = Arc::new(LibraryLocation::with(
+        Some(Box::new(store.clone())),
+        tmp.path().join("platform"),
+    ));
+    let home = tmp.path().join("owner-home");
+    std::fs::create_dir_all(home.join("Pictures")).unwrap();
+    let facts = platform::UserDirFacts::from_home(daemon::library_location::real_path(&home));
+    let service_peer =
+        platform::PeerUser::new("S-1-5-21-1".into(), platform::UserDirFacts::default());
+
+    let desktop = home.join("Desktop").join("ppass-1918");
+    let default_lib = home
+        .join("Pictures")
+        .join(daemon::library_location::DEFAULT_LIBRARY_DIR_NAME);
+    let ordinary = home.join("PPASS_STORAGE");
+
+    // 1. 不带 user_dirs ⇒ ui.err_library_user_dirs，不建目录、不写正本。
+    let r = unconfigured_dispatch(
+        &req(
+            "config.set_library",
+            serde_json::json!({ "library": ordinary.to_str().unwrap() }),
+        ),
+        IpcClient::Shell,
+        "1.0.0",
+        0,
+        &loc,
+        Some(&service_peer),
+    )
+    .await;
+    assert!(!r.ok, "{r:?}");
+    assert!(
+        r.error
+            .as_ref()
+            .unwrap()
+            .params()
+            .get("ui_error")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .contains("ui.err_library_user_dirs"),
+        "{r:?}"
+    );
+    assert!(!ordinary.exists());
+    assert!(store.0.lock().unwrap().is_none());
+
+    // 2. 带完整 user_dirs，目标为桌面 ⇒ ui.err_library_sensitive，不建目录、不写正本。
+    let r = unconfigured_dispatch(
+        &req(
+            "config.set_library",
+            serde_json::json!({
+                "library": desktop.to_str().unwrap(),
+                "user_dirs": &facts,
+            }),
+        ),
+        IpcClient::Shell,
+        "1.0.0",
+        0,
+        &loc,
+        Some(&service_peer),
+    )
+    .await;
+    assert!(!r.ok, "{r:?}");
+    assert!(
+        r.error
+            .as_ref()
+            .unwrap()
+            .params()
+            .get("ui_error")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .contains("ui.err_library_sensitive"),
+        "{r:?}"
+    );
+    assert!(!desktop.exists());
+    assert!(store.0.lock().unwrap().is_none());
+
+    // 3. 带完整 user_dirs，目标为默认库位置 ⇒ 放行并落盘。
+    let r = unconfigured_dispatch(
+        &req(
+            "config.set_library",
+            serde_json::json!({
+                "library": default_lib.to_str().unwrap(),
+                "user_dirs": &facts,
+            }),
+        ),
+        IpcClient::Shell,
+        "1.0.0",
+        0,
+        &loc,
+        Some(&service_peer),
+    )
+    .await;
+    assert!(r.ok, "服务形态带 user_dirs 选默认库应放行：{:?}", r.error);
+    assert_eq!(
+        store.0.lock().unwrap().as_deref(),
+        Some(default_lib.to_str().unwrap().as_bytes())
+    );
+
+    // 4. 库找不到态的 library.relocate 预检也走同一条客户端 user_dirs 校验。
+    let missing_resp = daemon::ipc::library_missing_dispatch(
+        &req(
+            "library.relocate",
+            serde_json::json!({
+                "target": desktop.to_str().unwrap(),
+                "dry_run": true,
+                "user_dirs": &facts,
+            }),
+        ),
+        IpcClient::Shell,
+        "1.0.0",
+        0,
+        daemon::ipc::MissingFacts {
+            dir: &ordinary,
+            local_base: tmp.path(),
+            picked_count: None,
+        },
+        Some(&service_peer),
+    );
+    assert!(
+        !missing_resp.ok
+            && missing_resp
+                .error
+                .as_ref()
+                .unwrap()
+                .params()
+                .get("ui_error")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .contains("ui.err_library_sensitive"),
+        "库找不到态 relocate 带 user_dirs 仍要拒敏感目录：{missing_resp:?}"
+    );
+}
+
 /// 令牌连接上调 `config.set_library`：测试沙盒（没有 library_location）拒绝；常驻 daemon
 /// （令牌模式 = Windows / Linux 的窗口程序）照写。
 #[tokio::test(flavor = "multi_thread")]

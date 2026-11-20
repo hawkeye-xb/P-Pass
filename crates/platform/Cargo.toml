@@ -17,6 +17,8 @@ semver = "1"
 # #1150：IPC 对端版本下限按项目统一的版本语义比（预发布 < 正式版；2026.10.10 > 2026.10.9）。
 version-cmp = { path = "../version-cmp" }
 thiserror.workspace = true
+# #1918：UserDirFacts 随本机 IPC 请求（config.set_library / library.relocate）传递。
+serde.workspace = true
 # #1260：Windows 推出前审批的几条日志写进 daemon.log（与 daemon 同一个 tracing）。
 tracing.workspace = true
 # #1047：停止信号（SIGTERM / Windows 控制台事件）。只开 signal + 运行时，

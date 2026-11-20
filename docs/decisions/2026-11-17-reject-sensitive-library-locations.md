@@ -1,8 +1,8 @@
 # 照片库位置直接拒绝敏感目录
 
-- 状态：已采纳（产品负责人 2026-11-17，[定案](https://github.com/hawkeye-xb/P-Pass/issues/1826#issuecomment-6942699574)）
-- 日期：2026-11-17
-- 关联：#1826、#1828
+- 状态：已采纳（产品负责人 2026-11-17，[定案](https://github.com/hawkeye-xb/P-Pass/issues/1826#issuecomment-6942699574)；2026-11-20 修订 Windows 服务形态目录事实传递方案 A，[定案](https://github.com/hawkeye-xb/P-Pass/issues/1918#issuecomment-7029525887)）
+- 日期：2026-11-17（2026-11-20 修订）
+- 关联：#1826、#1828、#1918
 - 代码基线：`92d02e9b`
 
 ## 结论
@@ -25,14 +25,14 @@
 
 ## Windows 服务形态的目录事实
 
-服务形态下 daemon 以 `NT SERVICE\P-Pass` 运行：`home_dir()` 在主人记录落下前是 `None`，`pictures_dir()` 答的是服务账户自己的 Known Folder，都不是主人的。所以不能拿适配器（服务账户）的目录代答，也不按 `C:\Users\<名字>\Desktop` 这类路径形状猜。
+服务形态下 daemon 以 `NT SERVICE\P-Pass` 运行：`home_dir()` 在主人记录落下前是 `None`，`pictures_dir()` 答的是服务账户自己的 Known Folder，都不是主人的。同时，服务账户刻意禁止 `SeImpersonatePrivilege`（`crates/platform/src/service_privileges.rs`），且客户端连接命名管道刻意使用 `SECURITY_IDENTIFICATION`（`crates/platform/src/windows_pipe.rs`），因此服务端无法用标识级令牌代调 `SHGetKnownFolderPath`。所以不能拿适配器（服务账户）的目录代答，也不按 `C:\Users\<名字>\Desktop` 这类路径形状猜，也**不**给服务加高危特权、**不**放宽管道 `SECURITY_IDENTIFICATION` 边界。
 
-修法用 Windows 标准机制，不自己造：
+修法采用方案 A（产品负责人 2026-11-20 拍板，#1918）：
 
-- 命名管道服务端已按连接 `ImpersonateNamedPipeClient` + `OpenThreadToken` 取客户端令牌；按 Microsoft Learn 对指定用户 `SHGetKnownFolderPath` 的要求，令牌开 `TOKEN_QUERY | TOKEN_IMPERSONATE`，并保留部分场景需要的 `TOKEN_DUPLICATE`。
-- 用该令牌调 `SHGetKnownFolderPath`（profile 与各用户标准目录的 Known Folder，第三个参数传该用户 hToken；该用户 hive 必须已挂载——正在连接的交互桌面用户总是已挂载）。
-- 结果随 `PeerUser` 携带（SID + 家目录 + 各用户标准目录真实位置），由常驻与未配置两条会话路径显式传到 `config.set_library` 与 `library.relocate`。不设全局「当前用户」，不把这些路径写日志。
-- 有连接方（`peer`）时只用它的目录事实；连接方存在但目录事实缺失 ⇒ 拒绝本次设置并回 `ui.err_library_user_dirs`，**不**退回服务账户、不按形状放行。没有连接方（macOS 签名 socket、令牌模式）才问平台适配器。
+- **客户端（本机主人桌面进程）取事实**：桌面进程跑在主人的交互会话里，在发起 `config.set_library` 与 `library.relocate`（含预检与落计划）时，直接调用 Windows 标准 API `SHGetKnownFolderPath`（`platform::UserDirFacts::for_current_user()`）获取主人的家目录与各用户标准目录真实位置，随请求参数 `user_dirs` 传给 daemon。
+- **服务端管道仅做 SID 鉴权**：命名管道服务端 `ImpersonateNamedPipeClient` + `OpenThreadToken(TOKEN_QUERY)` 只取客户端 SID（不请求 `TOKEN_IMPERSONATE` / `TOKEN_DUPLICATE`，不再用标识级令牌徒劳调 `SHGetKnownFolderPath`）。同用户直跑/计划任务形态（服务端 SID == 客户端 SID）直接用服务端当前用户事实（不接受客户端覆盖）；跨用户服务形态（`NT SERVICE\P-Pass` ≠ 客户端 SID）服务端侧 `PeerUser.dirs` 初始为空，绝不拿服务账户目录代答。
+- **服务端校验后执行敏感目录判定**：收到已通过管道 SID 鉴权的 `config.set_library` / `library.relocate` 请求时，若服务端侧目录事实未就绪，必须解析并校验请求里的 `user_dirs`（家目录 + 除 macOS `library` 外的 6 项标准目录均非空、为本机盘符绝对路径且不含 `..`，拒绝 UNC 网络路径与 `\\.\` / `\\?\` 非盘符设备命名空间以防服务账户外连或设备访问，可选 `library` 若存在亦同）；目标照片库路径本身（`library` / `target`）在 `check_library_path` 进入任何 `canonicalize()` 之前同样共用该判据拒绝 UNC 与设备命名空间。校验通过后绑定到 `PeerUser` 执行既有敏感目录拒绝规则；缺失（如老版本客户端）、格式非法、残缺或非法路径一律拒绝并回 `ui.err_library_user_dirs`，**不**退回服务账户、不按形状放行。不设全局「当前用户」，不把这些路径写日志。
+- 没有连接方（macOS 签名 socket、令牌模式）仍按平台当前用户事实判，不受影响。
 
 ## 搬迁计划的提交
 
