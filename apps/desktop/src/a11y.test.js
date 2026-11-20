@@ -544,6 +544,57 @@ describe("#1132 逐项断言", () => {
     expect(new Set(names).size).toBe(2);
   });
 
+  // D9 / #1924：200% 缩放与窄窗重排（WCAG 1.4.10）——设备行 flex-wrap 下，
+  // 名称容器原先只带 flex-1 min-w-0（flex-basis: 0%），中间宽度下不触发
+  // 换行反而被压到 ~24px，内部 whitespace-nowrap 按钮横向溢出盖住右侧 #ID。
+  // 反证：把名称容器改回 flex-1 min-w-0 或去掉按钮的 max-w-full / 文字截断 ⇒ 本条红。
+  it("D9 设备行名称列有最小宽度保护且名称按钮/改名框不会溢出盖住 #ID", async () => {
+    daemon({ devices: [device("a", "Galaxy S24 Ultra")] });
+    await open("#/devices");
+    await settle();
+
+    const nameBtn = screen.getByRole("button", { name: "Galaxy S24 Ultra" });
+    const row = nameBtn.closest("li");
+    expect(row).toBeTruthy();
+    const rowClasses = (row.getAttribute("class") || "").split(/\s+/);
+    expect(rowClasses).toContain("flex-wrap");
+
+    // 名称容器必须带足够的最小宽度与 basis 保护（≥ 160px），迫使右侧固定列
+    // 在放不下时折行，不能退回 min-w-0 + flex-basis:0% 或过小数值被挤到几十像素。
+    const nameCol = nameBtn.parentElement;
+    const colClasses = (nameCol.getAttribute("class") || "").split(/\s+/);
+    expect(colClasses).toContain("flex-1");
+    expect(colClasses).not.toContain("min-w-0");
+    const pxOf = (cls) => {
+      const m = cls.match(/(\d+)px/);
+      return m ? Number(m[1]) : 0;
+    };
+    const minW = colClasses.find((c) => /^min-w-\[/.test(c));
+    const basis = colClasses.find((c) => /^basis-\[/.test(c));
+    expect(minW).toBeTruthy();
+    expect(basis).toBeTruthy();
+    expect(pxOf(minW)).toBeGreaterThanOrEqual(160);
+    expect(pxOf(basis)).toBeGreaterThanOrEqual(160);
+
+    // 按钮自身受容器宽度约束，文字由内部 truncate 截断（不把 overflow-hidden 放父级，
+    // 避免裁掉按钮外圈 focus-visible:ring-3）。
+    const btnClasses = (nameBtn.getAttribute("class") || "").split(/\s+/);
+    expect(btnClasses).toContain("max-w-full");
+    expect(btnClasses).toContain("min-w-0");
+    const labelSpan = nameBtn.querySelector("span");
+    expect(labelSpan).toBeTruthy();
+    expect((labelSpan.getAttribute("class") || "").split(/\s+/)).toContain("truncate");
+    expect(labelSpan.textContent).toBe("Galaxy S24 Ultra");
+
+    // 点击进入改名态：输入框同样受名称列宽度约束（w-full + max-w-[260px]），不压过 #ID。
+    await fireEvent.click(nameBtn);
+    await settle();
+    const input = screen.getByRole("textbox", { name: "改名" });
+    const inputClasses = (input.getAttribute("class") || "").split(/\s+/);
+    expect(inputClasses).toContain("w-full");
+    expect(inputClasses).toContain("max-w-[260px]");
+  });
+
   // CodeRabbit（Major）：大图查看器开着时来了配对申请——确认弹窗自动打开，
   // 但两个遮罩同 z-50，查看器还盖在上面又被 inert，用户看到的是一层点不动的
   // 查看器，可操作的确认弹窗反而在底下。修法：确认弹窗打开时把查看器关掉。
