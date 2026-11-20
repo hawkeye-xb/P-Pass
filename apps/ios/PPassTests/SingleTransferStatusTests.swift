@@ -73,6 +73,12 @@ final class SingleTransferStatusTests: XCTestCase {
         }
     }
 
+    func testBackupScopeRowRequiresAutoBackupRule() throws {
+        let settings = try source("apps/ios/PPass/Home/SettingsScreen.swift")
+        let first = try XCTUnwrap(group(settings, "1/3"))
+        XCTAssertNotNil(first.range(of: #"if app\.autoRule \{\s*row\(L\.s\("backup_scope"\)"#, options: .regularExpression))
+    }
+
     /// #1784：单次传输下固定为「从相册选择」「从文件选择」，两行只发起选择，不显示进度、结果或最近一批。
     /// 评审 Cy：逐个按钮核对标签与动作的配对——把两个按钮的动作互换，按「组里存在两个标签 + 两个动作」判的写法仍会通过。
     func testTheTwoSingleTransferEntriesOnlyInitiateSelection() throws {
@@ -80,9 +86,9 @@ final class SingleTransferStatusTests: XCTestCase {
         let group = self.group(source, "2/3")
         XCTAssertNotNil(group, "缺「单次传输」分组")
         if let group {
-            // 按 Button 切开：每个入口块内，标签与动作必须一一配对。
-            let buttons = group.components(separatedBy: "Button {").dropFirst()
-            XCTAssertTrue(buttons.count >= 2, "单次传输组固定两行入口")
+            // 每个入口块内，标签与动作必须一一配对。
+            let buttons = group.components(separatedBy: "SingleTransferSelectionRow(").dropFirst()
+            XCTAssertEqual(buttons.count, 2, "单次传输组固定两行入口")
             XCTAssertTrue(
                 buttons.contains { $0.contains("app.pickerRequested = true") && $0.contains("pick_from_photos_label") },
                 "「从相册选择」必须配发起相册选择器（app.pickerRequested = true）",

@@ -1,10 +1,13 @@
-# #1321 onboarding 闸门（docs/decisions/2026-11-03-onboarding-gate.md）：
-# 全新安装 → 配对 → 决定页；杀进程重开仍是决定页；主按钮被拒 → 系统选图，取消回决定页；
-# 次入口选一张 → 落「连过」进照片页；清数据重来，主按钮全部允许 → 选范围页 → 开始备份 → 落「连过」进照片页；
+# #1321 onboarding 闸门 + #1902 新交互（docs/decisions/2026-11-03-onboarding-gate.md）：
+# 全新安装 → 配对 → 决定页；杀进程重开仍是决定页；主按钮「开启自动备份」→ 范围页（决定页不弹系统权限框）
+# → 页内「允许访问照片」被拒 → 仍停范围页、单次登记为零 → 返回决定页；
+# 次入口选一张 → 落「连过」进照片页；清数据重来，主按钮 → 范围页 → 页内允许 →「开始备份」→ 落「连过」进照片页；
 # 断开后连回同一台电脑 → 不再出决定页。
-# 判据只读日志（logcat 里 `onboarding: decision shown` / `onboarding: marked onboarded via=…`）、界面文字与前台窗口。
-# 部分照片权限（Android 14「选择照片」）由 JVM 单测 decision_main_button_lands_by_photo_permission 钉，真机不造。
-DESC="配对后先进决定页；两个出口各自落「连过」；杀进程仍回决定页；连回同一台不再问"
+# 判据只读日志（logcat 里 `onboarding: decision shown` / `onboarding: marked onboarded via=…` /
+# `scope: photo access after prompt=…`）、界面文字与前台窗口。
+# 部分照片权限（Android 14「选择照片」）由 JVM 单测 OnboardingGateTest 钉
+# （decision_enables_auto_backup_before_opening_scope / scope_permission_result_does_not_start_a_transfer_or_redirect），真机不造。
+DESC="配对后进决定页；主按钮进范围页、页内申请权限；次入口落「连过」；杀进程仍回决定页；连回同一台不再问"
 COUNTER=off
 TAG="E3OG"
 
@@ -24,6 +27,22 @@ picker_up() {
     sleep 1
   done
   return 1
+}
+
+# perm_up：系统权限框在前台
+perm_up() {
+  local end=$((SECONDS + ${1:-20}))
+  while [ $SECONDS -lt $end ]; do
+    fg | grep -q permissioncontroller && return 0
+    sleep 1
+  done
+  return 1
+}
+
+# picked_rows <库文件>：手选登记表里还有几行。文件不存在/读不出按 0——连库都还没建就是一次都没登记。
+picked_rows() {
+  [ -s "$1" ] || { echo 0; return; }
+  python3 -I -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("select count(*) from picked").fetchone()[0])' "$1" 2>/dev/null || echo unreadable
 }
 
 setup() {
@@ -48,18 +67,30 @@ act() {
   app_stop; sleep 1; app_start
   wait_text "选择要自动备份的照片" 20
   step 2-decision-after-kill
-  # ③ 主按钮 → 权限框拒绝 → 系统选图 → 返回取消 → 回到决定页
-  tap_text "选择备份范围"
-  sleep 3
+  # ③ 主按钮「开启自动备份」→ 范围页（决定页不弹系统权限框）→ 页内点「允许访问照片」→ 拒绝
+  #    → 仍停在范围页、单次登记为零 → 返回决定页
+  tap_text "开启自动备份"
+  wait_text "开始备份" 20
+  step 3-scope-page
+  tap_text "允许访问照片"
+  perm_up 20 || true
+  step 3-permission-prompt
   tap_text "不允许" || tap_text "Don't allow" || true
-  picker_up 20
+  sleep 3
   step 3-after-deny
+  logcat_save "$OUT/logcat-scope-deny.txt"
+  # 单次登记为零：拒绝后没有手选批次（库可能还没建，读不到按 0；连同 -wal 一起拉）。
+  local f
+  for f in "" -wal -shm; do
+    runas cat "databases/picked-uploads.db$f" >"$OUT/picked-after-deny.db$f" 2>/dev/null
+    [ -s "$OUT/picked-after-deny.db$f" ] || rm -f "$OUT/picked-after-deny.db$f"
+  done
   A shell input keyevent KEYCODE_BACK
   sleep 3
   wait_text "选择要自动备份的照片" 15
   step 3-after-cancel
-  # ④ 次入口「先挑几张试试」→ 选一张 → 照片页
-  tap_text "先挑几张试试"
+  # ④ 次入口「从相册选择」（#1902 前叫「先挑几张试试」）→ 选一张 → 照片页
+  tap_text "从相册选择" || tap_text "先挑几张试试"
   picker_up 20
   sleep 2
   ui_dump && tap_xy "$(first_cell_xy)"
@@ -70,16 +101,21 @@ act() {
   step 4-after-pick
   logcat_save "$OUT/logcat-pick.txt"
 
-  # ⑤ 清数据重来（新身份）：主按钮 → 全部允许 → 选范围页 → 开始备份 → 照片页
+  # ⑤ 清数据重来（新身份）：主按钮 → 范围页（不弹权限框）→ 页内允许 →「开始备份」→ 照片页
   app_stop
   A shell pm clear "$PKG" >/dev/null
   logcat_clear
   app_start
   pair_enter_code "$OUT" || return 1
   wait_text "选择要自动备份的照片" 30
-  tap_text "选择备份范围"
-  sleep 3
+  tap_text "开启自动备份"
+  wait_text "开始备份" 20
+  step 5-scope-before-allow
+  tap_text "允许访问照片"
+  perm_up 20 || true
+  step 5-permission-prompt
   tap_text "全部允许" || tap_text "Allow all" || true
+  sleep 3
   wait_text "开始备份" 20
   step 5-scope-page
   tap_text "开始备份"
@@ -111,18 +147,29 @@ act() {
 }
 
 judge() {
-  local d="$1" desk
+  local d="$1" desk picked
   # 记录按桌面 daemon node id 记；取 ⑤ 落盘日志里的 desktop=<前 8 位>
   desk=$(sed -n 's/.*marked onboarded via=scope desktop=\([0-9a-f]*\).*/\1/p' "$d/logcat-scope.txt" 2>/dev/null | head -1)
+  picked=$(picked_rows "$d/picked-after-deny.db")
   check "① 配对后进决定页" has_line "$d/1-decision.txt" '选择要自动备份的照片'
   check "① 日志：onboarding: decision shown" has_line "$d/logcat-pick.txt" 'onboarding: decision shown'
   check "② 杀进程重开仍是决定页" has_line "$d/2-decision-after-kill.txt" '选择要自动备份的照片'
-  check "③ 主按钮被拒 → 系统选图" has_line "$d/3-after-deny.fg" 'photopicker|providers\.media'
-  check "③ 选图取消 → 回决定页" has_line "$d/3-after-cancel.txt" '选择要自动备份的照片'
+  check "③ 主按钮 → 范围页（开始备份）" has_line "$d/3-scope-page.txt" '开始备份'
+  check "③ 主按钮后仍在 App（P-Pass 在前台）" has_line "$d/3-scope-page.fg" 'com\.hawkeyexb\.ppass'
+  check "③ 主按钮之后不弹系统权限框" no_line "$d/3-scope-page.fg" 'permissioncontroller'
+  check "③ 页内「允许访问照片」→ 系统权限框" has_line "$d/3-permission-prompt.fg" 'permissioncontroller'
+  check "③ 拒绝后仍停在范围页" has_line "$d/3-after-deny.txt" '开始备份'
+  check "③ 拒绝后照片权限=none" has_line "$d/logcat-scope-deny.txt" 'scope: photo access after prompt=NONE'
+  check "③ 拒绝后单次登记为零（picked 表 0 行，实际 ${picked}）" [ "$picked" = 0 ]
+  check "③ 返回 → 回决定页" has_line "$d/3-after-cancel.txt" '选择要自动备份的照片'
   check "④ 次入口选完 → 落盘（via=pick）" has_line "$d/logcat-pick.txt" 'onboarding: marked onboarded via=pick'
   check "④ 次入口选完 → 进照片页（底栏在）" has_line "$d/4-after-pick.txt" '^设置$'
   check "④ 次入口选完 → 离开决定页" no_line "$d/4-after-pick.txt" '选择要自动备份的照片'
-  check "⑤ 全部允许 → 首次选范围页（开始备份）" has_line "$d/5-scope-page.txt" '开始备份'
+  check "⑤ 主按钮 → 范围页（开始备份）" has_line "$d/5-scope-before-allow.txt" '开始备份'
+  check "⑤ 主按钮后仍在 App（P-Pass 在前台）" has_line "$d/5-scope-before-allow.fg" 'com\.hawkeyexb\.ppass'
+  check "⑤ 主按钮之后不弹系统权限框" no_line "$d/5-scope-before-allow.fg" 'permissioncontroller'
+  check "⑤ 页内允许 → 照片权限=full" has_line "$d/logcat-scope.txt" 'scope: photo access after prompt=FULL'
+  check "⑤ 页内允许 → 首次选范围页（开始备份）" has_line "$d/5-scope-page.txt" '开始备份'
   check "⑤ 开始备份 → 落盘（via=scope）" has_line "$d/logcat-scope.txt" 'onboarding: marked onboarded via=scope'
   check "⑤ 开始备份 → 进照片页（底栏在）" has_line "$d/5-after-start.txt" '^设置$'
   check "⑤ 开始备份 → 离开决定页" no_line "$d/5-after-start.txt" '选择要自动备份的照片'

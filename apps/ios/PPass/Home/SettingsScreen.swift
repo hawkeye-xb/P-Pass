@@ -127,9 +127,8 @@ struct SettingsScreen: View {
         // ── #1789 固定分组 1/3「自动备份」：开关、范围与它的条件行（取消剩余 / 已跳过 / 源已删除账目）。
         Section {
             ruleRow
-            // 范围入口常开：关闭自动备份或拒绝照片权限时，也能管理已有目录授权。
-            row(L.s("backup_scope"), value: scopeValue, route: .bucket)
             if app.autoRule {
+                row(L.s("backup_scope"), value: scopeValue, route: .bucket)
                 // 「App 关着也传」（原「后台备份」）：只在自动备份开着时出现。
                 Toggle(L.s("auto_backup_pause"), isOn: Binding(get: { app.autoBackup }, set: { app.setAutoBackup($0) }))
                     .font(Self.labelFont).tint(PPColor.safe)
@@ -168,20 +167,10 @@ struct SettingsScreen: View {
         // ── #1789 固定分组 2/3「单次传输」：固定两行「从相册选择」「从文件选择」，
         // 两行只发起选择，不显示进度、结果或最近一批——状态只在英雄区出现（#1784）。
         Section {
-            Button { app.pickerRequested = true } label: {
-                HStack(spacing: 12) {
-                    Text(L.s("pick_from_photos_label")).font(Self.labelFont).foregroundStyle(PPColor.ink)
-                    Spacer(minLength: 8)
-                }
-            }
-            .accessibilityIdentifier("pickPhotosRow")
-            Button { showFilePicker = true } label: {
-                HStack(spacing: 12) {
-                    Text(L.s("pick_from_files_label")).font(Self.labelFont).foregroundStyle(PPColor.ink)
-                    Spacer(minLength: 8)
-                }
-            }
-            .accessibilityIdentifier("pickFilesRow")
+            SingleTransferSelectionRow(title: L.s("pick_from_photos_label")) { app.pickerRequested = true }
+                .accessibilityIdentifier("pickPhotosRow")
+            SingleTransferSelectionRow(title: L.s("pick_from_files_label")) { showFilePicker = true }
+                .accessibilityIdentifier("pickFilesRow")
         }
         .ppTinted(PPUI.Surface.settingsCard)
 

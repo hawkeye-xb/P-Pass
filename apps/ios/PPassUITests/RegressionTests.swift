@@ -11,6 +11,7 @@ final class RegressionTests: UIRegressCase {
         let answer = inverted ? SystemButton.dontAllow : SystemButton.photosFull
         launchFreshAndPair(resetPhotos: true, photoAnswer: answer)
         tapApp("decisionChooseScope", app.buttons["decisionChooseScope"])
+        tapApp("bucketRequestAccess", app.buttons["bucketRequestAccess"])
         answerSystemAlert(answer, what: "photos")
         settle()
     }
@@ -66,6 +67,7 @@ final class RegressionTests: UIRegressCase {
         tapApp("decisionChooseScope", app.buttons["decisionChooseScope"])
         // 照片框可能在配对阶段就弹、已经在清场里按同一答案点过（那时选照片那一页也当场选好了），
         // 这种情况下这里不再等框、也不再选第二次（重复导入会让 n=0）。
+        tapApp("bucketRequestAccess", app.buttons["bucketRequestAccess"])
         let tappedNow = answerSystemAlert(answer, what: "photos")
         guard !inverted else { settle(2); return }
         if tappedNow {
@@ -73,9 +75,11 @@ final class RegressionTests: UIRegressCase {
             pickOnePhotoInLimitedSheet()
         }
         settle(2)
-        openSettingsTab()
+        saveFirstScopeAndOpenSettings()
         let rule = toggle(id: "autoBackupRuleToggle")
-        flip(rule) // 部分权限下开规则：App 不预写开关，带用户去系统设置
+        flip(rule) // 首次进入范围时已打开规则，先关闭。
+        settle(1)
+        flip(rule) // 部分权限下重新开启：App 不预写开关，带用户去系统设置
         settle(2)
         app.activate() // 从系统设置回前台（不改权限）：登记过的照片发一次，开关保持关
         settle(5)
@@ -102,8 +106,15 @@ final class RegressionTests: UIRegressCase {
     private func prepareScopeAndOpenSettings() {
         launchFreshAndPair(resetPhotos: true)
         tapApp("decisionChooseScope", app.buttons["decisionChooseScope"])
-        answerSystemAlert(SystemButton.photosFull, what: "photos")
+        if app.buttons["bucketRequestAccess"].exists {
+            tapApp("bucketRequestAccess", app.buttons["bucketRequestAccess"])
+            answerSystemAlert(SystemButton.photosFull, what: "photos")
+        }
         settle(2)
+        saveFirstScopeAndOpenSettings()
+    }
+
+    private func saveFirstScopeAndOpenSettings() {
         let save = app.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "Start backup", "开始备份")).firstMatch
         XCTAssertTrue(save.waitForExistence(timeout: 15), "没有找到范围保存按钮")
         tapWhenVisible(save)

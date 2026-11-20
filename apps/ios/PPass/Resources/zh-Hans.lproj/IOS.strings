@@ -7,7 +7,6 @@
 "bucket_no_access_body" = "相册不会自动备份。可以只备份文件夹，或先挑几张传。";
 "bucket_no_access_action" = "去设置";
 "bucket_request_access_action" = "允许访问";
-"bucket_no_selection" = "未选择任何来源。";
 
 /* 失败通知（#981）：iOS 点通知只打开 App、不会直达系统设置，指路写 iOS 设置项名字；电池优化在 iOS 上不存在，对位的是「后台 App 刷新」。 */
 "notif_media_partial_body" = "照片权限已改为部分照片，自动备份暂时无法继续。可随时在「设置 › 隐私与安全性 › 照片 › P-Pass」改为「完全访问」。";

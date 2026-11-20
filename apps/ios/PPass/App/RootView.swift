@@ -55,6 +55,9 @@ struct RootView: View {
             }
             .ignoresSafeArea()
         }
+        .sheet(isPresented: $app.filePickerRequested) {
+            SingleTransferFilePicker { items in app.pickedChosen(items) }
+        }
         // 设置没存上 / 命令没执行成（#971 #972）：可见的失败反馈，点掉即清。
         .alert(L.s("notice_title"), isPresented: Binding(get: { app.notice != nil }, set: { if !$0 { app.notice = nil } })) {
             Button(L.s("ok_got_it")) {}

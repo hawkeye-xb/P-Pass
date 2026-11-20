@@ -93,11 +93,10 @@ final class OnboardingNavigationTests: XCTestCase {
         XCTAssertEqual(AppModel.launchPhase(.lost(desktopName: "Mac"), onboarded: true), .main)
     }
 
-    /// 决定页主按钮「选择备份范围」在照片权限框之后：全部允许 → 选范围页；部分 / 拒绝 → 系统选图（ADR 结论 5）。
-    func testDecisionLandingByPhotoAccess() {
-        XCTAssertEqual(AppModel.decisionLanding(.full), .chooseScope)
-        XCTAssertEqual(AppModel.decisionLanding(.partial), .registerAllowed, "部分允许：系统已弹过选照片页，不再弹 App 的选图器")
-        XCTAssertEqual(AppModel.decisionLanding(.none), .pickPhotos)
+    func testDecisionProvidesSeparatePhotoAndFileEntries() throws {
+        let source = try String(contentsOf: RepoPaths.root.appendingPathComponent("apps/ios/PPass/Home/DecisionScreen.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("title: L.s(\"pick_from_photos_label\"), action: app.decisionPickPhotos"))
+        XCTAssertTrue(source.contains("title: L.s(\"pick_from_files_label\"), action: app.decisionPickFiles"))
     }
 
     /// 产品负责人 2026-11-04：部分照片权限下不让系统在 App 回前台 / 首次读相册时自动弹「选择更多照片」——
@@ -113,7 +112,7 @@ final class OnboardingNavigationTests: XCTestCase {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let decision = try String(contentsOf: root.appendingPathComponent("PPass/Home/DecisionScreen.swift"), encoding: .utf8)
         let photos = try String(contentsOf: root.appendingPathComponent("PPass/Photos/PhotosScreen.swift"), encoding: .utf8)
-        XCTAssertTrue(decision.contains("L.s(\"photo_access_change_later_hint\")"))
+        XCTAssertFalse(decision.contains("L.s(\"photo_access_change_later_hint\")"))
         // 引导卡的「去设置」直接跳过去，卡上不重复路径说明（产品负责人 11-04）。
         XCTAssertFalse(photos.contains("L.s(\"photo_access_change_later_hint\")"))
         for lang in ["zh-Hans", "en"] {

@@ -15,19 +15,19 @@ just ios-ui-regress device --invert SettingsRuleFull   # 反证
 
 | 用例 | 界面操作（测试自己点） | 通过行（App 日志，按顺序） |
 |---|---|---|
-| DecisionScopeFull | 决定页「选择备份范围」→ 照片权限「允许全部」 | `onboarding: decision shown` → `onboarding: photo access after prompt=full` |
-| DecisionPick | 决定页「先挑几张试试」→ 系统选择器选 1 张 | `onboarding: decision shown` → `picked: 1 chosen` → `onboarding: marked onboarded via=pick` |
-| SettingsRuleFull | 决定页「选择备份范围」存一个范围（准备，会开一次规则）→ 设置页「自动备份」关一次再开 | `onboarding: marked onboarded via=scope` → `auto-rule: saved enabled=false` → `auto-rule: saved enabled=true` |
-| SettingsRuleLimited | 决定页「选择备份范围」→ 权限「限制访问」选 1 张 → 设置页开「自动备份」→ 随 App 去系统设置再回来（不改权限） | `onboarding: photo access after prompt=partial` → `auto-rule: partial photo access, opening system settings for full access` → `auto-rule: partial photo access, sent allowed photos n=[1-9], rule stays off` |
+| DecisionScopeFull | 决定页「开启自动备份」→ 范围页「允许访问照片」→ 照片权限「允许全部」 | `onboarding: decision shown` → `scope: photo access after prompt=full` |
+| DecisionPick | 决定页「从相册选择」→ 系统选择器选 1 张 | `onboarding: decision shown` → `picked: 1 chosen` → `onboarding: marked onboarded via=pick` |
+| SettingsRuleFull | 决定页「开启自动备份」→ 范围页「允许访问照片」允许 →「开始备份」存一个范围（准备）→ 设置页「自动备份」关一次再开 | `onboarding: marked onboarded via=scope` → `auto-rule: saved enabled=false` → `auto-rule: saved enabled=true` |
+| SettingsRuleLimited | 决定页「开启自动备份」→ 范围页「允许访问照片」→ 权限「限制访问」选 1 张 →「开始备份」存范围（规则已开）→ 设置页「自动备份」关一次再开 → 随 App 去系统设置再回来（不改权限） | `scope: photo access after prompt=partial` → `auto-rule: partial photo access, opening system settings for full access` → `auto-rule: partial photo access, sent allowed photos n=[1-9], rule stays off` |
 | SettingsPick | 设置页「挑几张传」→ 系统选择器选 1 张 | `… via=pick` → `picked: 1 chosen` |
 | NotifyAllow | 设置页「通知」→ 系统授权「允许」 | `… via=pick` → `notifications: system prompt result granted=true` |
 | NotifyDeny | 设置页「通知」→ 系统授权「不允许」 | `… via=pick` → `notifications: system prompt result granted=false` |
 
 判定表是 `tools/ios/ui-regress-rules.tsv`，日志行改了只改这一处；**用例清单也由它生成**（一行一例），
-脚本里不再抄一份。设置页的用例按各自的实际操作分两种准备：「挑几张传」「通知」先走「先挑几张试试」进主界面
+脚本里不再抄一份。设置页的用例按各自的实际操作分两种准备：「挑几张传」「通知」先走决定页「从相册选择」进主界面
 （规则关着、照片权限未定），第一个通过行是 `marked onboarded via=pick`；「自动备份」Full 先存一个范围再操作开关
 （保存范围本身会打一条 `saved enabled=true`，判定只认它之后实际操作阶段的 `false→true`，操作失效必红）；
-Limited 从决定页给有限授权，开规则后随 App 去系统设置再回前台（不改权限），不弹照片权限框、开关保持关。
+Limited 从范围页给有限授权，存范围时规则已经开，先关一次再开，随 App 去系统设置再回前台（不改权限），不弹照片权限框、开关保持关。
 
 暂未纳入：「设置页拒绝」（设置页「自动备份」→「不允许」）要的通过行
 `settings: auto-rule photo access after prompt=none` App 现在不打（#1453），加了必红、会让整个回归永久退出 1。
@@ -93,6 +93,6 @@ Limited 是权限框答「允许全部」（没走有限授权路径，判据缺
 
 ## 改界面时
 
-用例按 accessibilityIdentifier 找控件（`decisionChooseScope`、`decisionPickPhotos`、`autoBackupRuleToggle`、
-`pickPhotosRow`、`pairCodeValue`），「设置」标签与「通知」开关按显示文字找（脚本从 `Localizable.strings` 取中英文字）。
+用例按 accessibilityIdentifier 找控件（`decisionChooseScope`、`bucketRequestAccess`、`decisionPickPhotos`、
+`autoBackupRuleToggle`、`pickPhotosRow`、`pairCodeValue`），「设置」标签与「通知」开关按显示文字找（脚本从 `Localizable.strings` 取中英文字）。
 改了这些 id 或文字，先跑 `just ios-ui-regress sim`。

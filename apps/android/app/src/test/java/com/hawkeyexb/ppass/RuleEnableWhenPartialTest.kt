@@ -81,12 +81,10 @@ class RuleEnableWhenPartialTest {
     }
 
     /**
-     * #1794：「备份范围」入口常驻设置卡——自动备份关着也看得到、进得去（对齐 iOS）。
-     * 反证：把这一行移回 `if (autoBackupRuleOn)`（如 origin/main），备份范围行前面就会有一个尚未闭合的
-     * 开关分支，本条红；上一版只看 brace 深度，行只是缩进不同也能过，判不出真假。
+     * #1902：仅开启自动备份时显示范围入口。把该行移出规则分支，即使保留缩进，本条也会失败。
      */
     @Test
-    fun settings_scope_row_is_always_shown() {
+    fun settings_scope_row_requires_auto_backup() {
         val card = home.substringAfter("label = stringResource(R.string.auto_backup_rule_label)")
             .substringBefore("R.string.setting_wifi_only")
         val scope = card.indexOf("R.string.backup_scope")
@@ -96,7 +94,7 @@ class RuleEnableWhenPartialTest {
                 val rest = card.substring(open.range.last + 1, scope)
                 rest.count { it == '{' } - rest.count { it == '}' } >= 0
             }
-        assertTrue("备份范围行不能在 if (autoBackupRuleOn) 分支里，否则开关关着就看不到", guarded == null)
+        assertTrue("备份范围行必须在自动备份规则开启的分支里", guarded != null)
     }
 
     /**

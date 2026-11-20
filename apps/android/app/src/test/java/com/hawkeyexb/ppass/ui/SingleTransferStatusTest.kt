@@ -125,17 +125,22 @@ class SingleTransferStatusTest {
         )
     }
 
-    /** #1789 验收 3 源文本门禁：MainActivity 的两个入口、轮询与 onboarding 两处都必须读跨批次聚合
-     *  summary()——改回 latestBatch() 就退回「只看单批汇总」的缺陷，本条红。 */
+    /** 设置入口、轮询及决定页的共用回调都读跨批次汇总，不能只展示最后一批。 */
     @Test
     fun the_hero_feed_reads_the_cross_batch_summary_not_the_latest_batch() {
         val main = mainActivity()
-        assertEquals(
-            "英雄区数据源全部换成跨批次聚合（5 处：相册入口 / 文件入口 / 轮询 / onboarding 两处）",
-            0,
-            Regex("\\.latestBatch\\(\\)").findAll(main).count(),
-        )
-        assertEquals(5, Regex("PickedUploads\\.store\\(context\\)\\.summary\\(\\)").findAll(main).count())
+        assertFalse("英雄区不得只读最后一批", main.contains(".latestBatch()"))
+        val summary = "PickedUploads.store(context).summary()"
+        val photos = main.substringAfter("val pickPhotosLauncher").substringBefore("val filePickLauncher")
+        val files = main.substringAfter("val filePickLauncher").substringBefore("androidx.compose.runtime.LaunchedEffect")
+        val decision = main.substringAfter("val decisionPickLauncherResult:").substringBefore("val launchDecisionFile:")
+        assertTrue("设置相册入口刷新跨批次汇总", photos.contains(summary))
+        assertTrue("设置文件入口刷新跨批次汇总", files.contains(summary))
+        assertTrue("决定页共用的回调刷新跨批次汇总", decision.contains(summary))
+        assertTrue("决定页相册选择使用共用回调", decision.contains("onResult = decisionPickLauncherResult"))
+        assertTrue("决定页文件选择使用共用回调", decision.contains("decisionPickLauncherResult(if (result.resultCode"))
+        val polling = main.substringAfter("androidx.compose.runtime.LaunchedEffect(Unit) {").substringBefore("val decisionPickLauncherResult:")
+        assertTrue("轮询刷新跨批次汇总", polling.contains(summary))
         val store = File("src/main/java/com/hawkeyexb/ppass/backup/picked/PickedStore.kt").readText()
         // 评审：按语句边界切出 summary() 的实现段整体断言——之前的负向正则 [^"'] 跨不过 SQL 里的
         // 'pending' 这类引号，永远匹配不上，反证防线失效；这里改回单批口径（SQL 加 WHERE）必红。
@@ -269,7 +274,7 @@ class SingleTransferStatusTest {
      */
     @Test
     fun clickable_rows_carry_button_semantics_and_accounts_stay_inert() {
-        val row = homeScreen().substringAfter("private fun CellRow(").substringBefore("\n}\n")
+        val row = homeScreen().substringAfter("internal fun CellRow(").substringBefore("\n}\n")
         // #1879 评审：断言拆开、各自可判红——role 挂在「onClick != null」守卫分支里，
         // 不是「clickable 无条件挂上、回调传空」的假不可点。
         assertTrue(

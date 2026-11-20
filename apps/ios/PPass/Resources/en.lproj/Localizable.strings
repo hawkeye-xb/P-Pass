@@ -4,14 +4,15 @@
 "welcome_scan" = "Scan to connect to a computer";
 "welcome_step1" = "1 · Install and open P-Pass on the computer";
 "welcome_step2" = "2 · Scan the QR code or enter the pairing code to connect to the computer";
-"welcome_step3" = "3 · Choose the albums to back up";
+"welcome_step3" = "3 · Choose the albums and folders to back up";
 "scan_header_title" = "Scan to connect";
 "scan_hint" = "Point at the pairing QR code\non your computer's screen";
 "scan_manual_link" = "Can't scan? Pair manually";
 "decision_connected" = "Connected to %1$@";
 "decision_title" = "Choose the photos to back up automatically";
 "decision_destination" = "After you choose albums and a time range, photos in that range are sent to %1$@ each time you open the app.";
-"decision_choose_scope" = "Choose what to back up";
+"decision_choose_scope" = "Turn on automatic backup";
+"scope_album_no_access_title" = "Photos access is incomplete";
 "decision_choose_scope_note" = "Requires access to all photos";
 "decision_pick_photos" = "Pick a few to try first";
 "scan_manual_title" = "Enter pairing code";
