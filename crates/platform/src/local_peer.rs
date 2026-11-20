@@ -70,13 +70,18 @@ pub struct UserDirFacts {
     pub music: Option<std::path::PathBuf>,
 }
 
-/// #1918：单个用户目录事实路径是否合法：非空、绝对路径（含根或 Windows 盘符根）、不含 `..`。
+/// #1918：单个用户目录事实路径是否合法：非空、本机磁盘绝对路径、不含 `..`，
+/// 且显式拒绝 UNC 网络共享与 Windows 设备命名空间路径（防止服务端以 `NT SERVICE\P-Pass`
+/// 身份 `canonicalize` 触发外连 SMB/NTLM 或访问设备对象）。
 ///
-/// 跨平台判据，不依赖 `cfg`：
-/// - Unix 绝对路径：`/` 开头（`is_absolute()` 为真）；
-/// - Windows 盘符绝对路径：`<盘符>:\` 或 `<盘符>:/`、或 `\\` UNC 路径（在 Windows 上
-///   `is_absolute()` 为真；在 Unix 单测里构造 Windows 盘符路径时也用字面形状识别）。
-/// - 含 `..`（`Component::ParentDir` 或分隔后的 `..` 段）一律判非法。
+/// 跨平台判据（不依赖 `cfg`）：
+/// - 含 NUL 或任一段为 `..` ⇒ 拒绝；
+/// - Windows 盘符绝对路径：`<盘符>:\`、`<盘符>:/`、以及 `canonicalize()` 产出的本地盘符
+///   扩展路径 `\\?\<盘符>:\` ⇒ 放行；
+/// - UNC（`\\server\...`、`//server/...`、`\\?\UNC\...`）与设备/非盘符命名空间
+///   （`\\.\...`、`\\?\GlobalRoot\...`、`\\?\Volume{...}`）⇒ 一律拒绝；
+/// - POSIX 绝对路径：非 Windows 宿主上以单个 `/` 开头（排除 `//`）⇒ 放行；
+///   Windows 宿主上无盘符的 `/...` 属于驱动器相对路径，由 `path.is_absolute()` 自然拒绝。
 fn is_valid_dir_fact_path(path: &std::path::Path) -> bool {
     let raw = path.as_os_str();
     if raw.is_empty() {
@@ -94,15 +99,34 @@ fn is_valid_dir_fact_path(path: &std::path::Path) -> bool {
     {
         return false;
     }
-    if path.is_absolute() {
-        return true;
-    }
-    // 兼容在非 Windows 宿主单测中验证 Windows 盘符绝对路径（如 `C:\Users\alice`）。
     let bytes = s.as_bytes();
-    bytes.len() >= 3
+    // 1. 标准 Windows 本地盘符绝对路径：`C:\...` 或 `C:/...`。
+    if bytes.len() >= 3
         && bytes[0].is_ascii_alphabetic()
         && bytes[1] == b':'
         && (bytes[2] == b'\\' || bytes[2] == b'/')
+    {
+        return true;
+    }
+    // 2. Windows `canonicalize()` 产出的本地盘符 verbatim 路径：`\\?\C:\...`。
+    //    显式只放行盘符，拒绝 `\\?\UNC\...`、`\\?\Volume{...}`、`\\?\GlobalRoot\...` 等。
+    if bytes.len() >= 7
+        && bytes.starts_with(br"\\?\")
+        && bytes[4].is_ascii_alphabetic()
+        && bytes[5] == b':'
+        && bytes[6] == b'\\'
+    {
+        return true;
+    }
+    // 3. 显式拒绝一切 UNC / 设备命名空间前缀（`\\...`、`//...`、`\/...`、`/\...`）。
+    if bytes.len() >= 2
+        && (bytes[0] == b'\\' || bytes[0] == b'/')
+        && (bytes[1] == b'\\' || bytes[1] == b'/')
+    {
+        return false;
+    }
+    // 4. POSIX 本地绝对路径（单个 `/` 开头；在 Windows 宿主上 `is_absolute()` 为 false）。
+    bytes[0] == b'/' && path.is_absolute()
 }
 
 impl UserDirFacts {
@@ -600,7 +624,7 @@ mod floor_tests {
 
         let win = UserDirFacts {
             home: Some(PathBuf::from(r"C:\Users\alice")),
-            desktop: Some(PathBuf::from(r"C:\Users\alice\Desktop")),
+            desktop: Some(PathBuf::from(r"\\?\C:\Users\alice\Desktop")),
             documents: Some(PathBuf::from(r"D:\Docs")),
             downloads: Some(PathBuf::from(r"C:\Users\alice\Downloads")),
             library: None,
@@ -608,7 +632,7 @@ mod floor_tests {
             videos: Some(PathBuf::from(r"C:\Users\alice\Videos")),
             music: Some(PathBuf::from(r"C:\Users\alice\Music")),
         };
-        assert!(win.selection_ready(), "合法 Windows 盘符路径应就绪");
+        assert!(win.selection_ready(), "合法 Windows 本地盘符路径应就绪");
 
         // Windows 下不带盘符的 `/Users/alice` 是驱动器相对路径，必须拒绝。
         if cfg!(windows) {
@@ -627,6 +651,15 @@ mod floor_tests {
             r"C:relative",
             "/Users/alice/../bob",
             r"C:\Users\..\Public",
+            // 安全边界：显式拒绝 UNC 网络共享与 Windows 设备/非盘符命名空间路径，
+            // 防止服务账户 canonicalize 触发 NTLM 外连或设备对象访问。
+            r"\\attacker\share\Desktop",
+            "//attacker/share/Desktop",
+            r"\\?\UNC\attacker\share\Desktop",
+            r"\\.\pipe\ppf-svc",
+            r"\\.\PhysicalDrive0",
+            r"\\?\GlobalRoot\Device\HarddiskVolume1\Users",
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\Users",
         ] {
             let mut f = host_facts.clone();
             f.desktop = Some(PathBuf::from(bad));
