@@ -29,6 +29,13 @@ ignore = [
   # 修复只在 `libsqlite3-sys >= 0.39.0`，而 sqlx 0.8.x 钉死 0.30.x、没有补丁版，
   # 只能升 sqlx 0.9（破坏性升级，落在存储核心）。#1629 升完删掉这一行。
   "RUSTSEC-2026-0459",
+  # `chrono 0.4.45` is unmaintained（#1921 / #1851，无已知漏洞，自研代码 0 直接引用，
+  # cargo-deny 报 `No safe upgrade is available!`）。两条强制传递链：① `iroh-blobs
+  # 0.103.1 → chrono`（必选依赖，上游最新 `0.105.0` 仍必选）；② `iroh → netwatch
+  # 0.19.3 → wmi 0.18.4 → chrono`（Windows 必选，上游 `n0-computer/net-tools#226`
+  # 未合入；`netwatch` 最新 `0.20.2` 仍带 `chrono`）。删除条件：#1851 保持 open 跟踪，
+  # 上游发布去 `chrono` 版本并升级后 `cargo tree -i chrono`（含 `--target all`）为空时删除本行。
+  "RUSTSEC-2026-0543",
 ]
 
 [licenses]

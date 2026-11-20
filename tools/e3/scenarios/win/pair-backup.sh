@@ -103,11 +103,15 @@ act() {
   for i in $(seq 1 30); do
     win_phone_dump "$d/phone-postpair.xml" || return 1
     scope_screen "$d/phone-postpair.xml" && break
+    # #1902：决定页主按钮改成「开启自动备份」（直接进范围页）；旧包仍是「选择备份范围」。
+    win_phone_has "$d/phone-postpair.xml" '开启自动备份' && break
     win_phone_has "$d/phone-postpair.xml" '选择备份范围' && break
     sleep 1
   done
   if ! scope_screen "$d/phone-postpair.xml"; then
-    win_phone_tap_xml "$d/phone-postpair.xml" '选择备份范围' || { echo "找不到选择备份范围"; return 1; }
+    win_phone_tap_xml "$d/phone-postpair.xml" '开启自动备份' ||
+      win_phone_tap_xml "$d/phone-postpair.xml" '选择备份范围' ||
+      { echo "找不到「开启自动备份」/「选择备份范围」"; return 1; }
     for i in $(seq 1 15); do
       sleep 1
       win_phone_dump "$d/phone-postpair.xml" || return 1

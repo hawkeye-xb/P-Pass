@@ -1,0 +1,3 @@
+Paired and disconnected devices are listed separately, with notices for inactive devices.
+Tab stays in dialogs; screen readers announce the title.
+Backup resumes after a failed update if it was on.

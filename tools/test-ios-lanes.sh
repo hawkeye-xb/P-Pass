@@ -57,7 +57,8 @@ HW_UDID=00008030-001A2B3C4D5E6F7A
 out=$(CI=false PPASS_IOS_FORCE_SIMULATOR=0 PPASS_IOS_TEST_PLAN_ONLY=1 PPASS_IOS_TEST_DEVICE="$CORE_UUID" bash "$ROOT/tools/ios/test.sh")
 expect_contains "$out" "EXECUTION=device UDID=$HW_UDID" "本地真机用例显式清除继承的 CI 环境，并换硬件 UDID"
 expect_contains "$out" "XCODEBUILD_DESTINATION=id=$HW_UDID" "真实 xcodebuild 目的地使用硬件 UDID"
-expect_contains "$out" 'HOST_TESTS_DEFERRED=12' "真机明确延期全部宿主测试"
+HOST_COUNT=$(grep -Ev '^[[:space:]]*(#|$)' "$ROOT/tools/ios/host-only-tests.txt" | wc -l | tr -d ' ')
+expect_contains "$out" "HOST_TESTS_DEFERRED=$HOST_COUNT" "真机明确延期全部宿主测试"
 expect_contains "$out" 'SKIP=PPassTests/VersionStampTests' "真机带宿主跳过参数"
 expect_contains "$out" 'XCODEBUILD_ARG=-skip-testing' "真实 xcodebuild 参数带宿主跳过项"
 expect_contains "$out" 'SKIP=PPassTests/OnboardingNavigationTests' "真机覆盖直接读源文件的测试"

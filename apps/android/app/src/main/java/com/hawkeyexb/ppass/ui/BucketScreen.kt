@@ -165,7 +165,7 @@ private fun AlbumNoAccessNotice(canPrompt: Boolean, onRequest: () -> Unit, onOpe
     ) {
         Column(Modifier.padding(16.dp)) {
             Text(
-                stringResource(R.string.no_media_access_title),
+                stringResource(R.string.scope_album_no_access_title),
                 fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = PPColor.Ink,
             )
             Spacer(Modifier.height(6.dp))

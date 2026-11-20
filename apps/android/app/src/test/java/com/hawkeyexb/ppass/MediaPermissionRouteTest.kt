@@ -109,11 +109,12 @@ class MediaPermissionRouteTest {
     /**
      * #1788（评审阻断）：rationale 分不清「从没申请过」与「被永久拒绝」，只能靠自己的发射记录补这一维，
      * 所以每个相册权限申请口发射时都要记一笔。本仓没有 Robolectric，接线按源码形状钉住
-     * （MOB92ScopeWiringTest 同做法）：四个申请口必须都走同一个发射口，不许绕过。
+     * （MOB92ScopeWiringTest 同做法）：三个申请口必须都走同一个发射口；决定页不申请。
      */
     @Test
     fun every_album_permission_launch_goes_through_the_recording_gate() {
-        for (launcher in listOf("rulePermission", "decisionPermission", "mediaPermission", "bucketAlbumPermission")) {
+        assertFalse("决定页不发照片权限请求", main.contains("val decisionPermission ="))
+        for (launcher in listOf("rulePermission", "mediaPermission", "bucketAlbumPermission")) {
             assertTrue("$launcher 没走发射口（漏记「申请过」）", main.contains("launchAlbumAccessPrompt($launcher,"))
             assertFalse("$launcher 绕过发射口直接 launch", main.contains("$launcher.launch(withMediaLocation("))
         }

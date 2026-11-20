@@ -190,9 +190,6 @@ internal fun launchScreen(pairing: Pairing?, onboarded: (String) -> Boolean): Sc
     else -> Screen.Decision(pairing)
 }
 
-/** #1321：决定页主按钮「选择备份范围」在照片权限框关掉之后去哪。 */
-internal enum class DecisionLanding { ChooseScope, RegisterAllowed, PickPhotos }
-
 /**
  * 决定页「处理中」锁（定案：决定开始处理后两个按钮都不可点，直到进照片页或回到决定页）。
  * 点任一按钮先 [tryLock]：锁住时再点不触发第二次；离开决定页或这次处理落空（取消、没登记上、结果丢失、拉不起系统页）就 [unlock]。
@@ -206,17 +203,6 @@ internal class DecisionLock {
         return true
     }
     fun unlock() { busy = false }
-}
-
-/**
- * 全部允许 → 选范围页；拒绝 → 系统选图（单张备份）。
- * 部分允许：用户在系统权限框里已经选了照片，那次选择就是这次的「系统选图」——直接登记已授权的照片（单张备份），
- * 不再弹选图器让人选第二遍（三星验收：用户以为没生效、反复选了几次）。两端同一口径（iOS #1323）。方案结论 5：不新增第三个出口。
- */
-internal fun decisionLanding(access: MediaAccess): DecisionLanding = when (access) {
-    MediaAccess.FULL -> DecisionLanding.ChooseScope
-    MediaAccess.PARTIAL -> DecisionLanding.RegisterAllowed
-    else -> DecisionLanding.PickPhotos
 }
 
 /**
@@ -814,15 +800,13 @@ fun PPassApp() {
     LaunchedEffect(screen) { if (screen !is Screen.Decision) decisionLock.unlock() }
     // 单张备份：系统选图（不要照片权限）。选完登记成一批手选订单才算做了决定；取消 = 还在决定页。
     var decisionPickPairing by remember { mutableStateOf<Pairing?>(null) }
-    val decisionPickLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickMultipleVisualMedia(com.hawkeyexb.ppass.backup.picked.PickedUploads.MAX_PICK),
-    ) { uris ->
+    val decisionPickLauncherResult: (List<android.net.Uri>) -> Unit = handlePick@{ uris ->
         val pairing = decisionPickPairing
         decisionPickPairing = null
         if (pairing == null || uris.isEmpty()) {
             PLog.i("PPassFlow", "onboarding: pick cancelled, staying on decision")
             decisionLock.unlock()
-            return@rememberLauncherForActivityResult
+            return@handlePick
         }
         scope.launch {
             val count = withContext(Dispatchers.IO) {
@@ -843,6 +827,24 @@ fun PPassApp() {
             if (screen == Screen.Decision(pairing)) screen = Screen.Home(pairing)
         }
     }
+    val decisionPickLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(com.hawkeyexb.ppass.backup.picked.PickedUploads.MAX_PICK),
+        onResult = decisionPickLauncherResult,
+    )
+    val decisionFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        decisionPickLauncherResult(if (result.resultCode == android.app.Activity.RESULT_OK) {
+            com.hawkeyexb.ppass.ui.SingleTransferFilePicker.urisFromResult(result.data)
+        } else emptyList())
+    }
+    val launchDecisionFile: (Pairing) -> Unit = { pairing ->
+        decisionPickPairing = pairing
+        runCatching { decisionFileLauncher.launch(com.hawkeyexb.ppass.ui.SingleTransferFilePicker.intent()) }
+            .onFailure {
+                PLog.w("PPassFlow", "onboarding: file picker failed to open", it)
+                decisionPickPairing = null
+                decisionLock.unlock()
+            }
+    }
     val launchDecisionPick: (Pairing) -> Unit = { pairing ->
         decisionPickPairing = pairing
         runCatching {
@@ -856,52 +858,15 @@ fun PPassApp() {
             decisionLock.unlock()
         }
     }
-    // 部分允许：系统权限框里的选择就是用户的选择——当场落盘、进照片页（不停在决定页等），已授权的照片在后台登记成一批手选订单。
-    val registerDecisionAllowed: (Pairing) -> Unit = { pairing ->
-        markDecided(pairing, "partial")
-        if (screen == Screen.Decision(pairing)) screen = Screen.Home(pairing)
-        scope.launch {
-            val n = withContext(Dispatchers.IO) {
-                runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueueAllowedImages(context) }
-                    .onFailure { PLog.w("PPassFlow", "onboarding: allowed enqueue failed", it) }
-                    .getOrDefault(0)
-            }
-            PLog.i("PPassFlow", "onboarding: partial access registered $n allowed photos")
-            if (n <= 0) return@launch
-            pickedBatch = withContext(Dispatchers.IO) {
-                runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).summary() }.getOrNull()
-            }
-            com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
-        }
-    }
-    // 主按钮「选择备份范围」：申请全部照片权限；全部允许 → 选范围页（firstTime），部分 → 登记已授权照片，拒绝 → 系统选图（方案结论 5）。
-    var decisionPermissionPairing by remember { mutableStateOf<Pairing?>(null) }
-    val decisionPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
-        val pairing = decisionPermissionPairing
-        decisionPermissionPairing = null
-        mediaAccess = mediaAccess(context)
-        mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
-        if (pairing == null) {
-            decisionLock.unlock()
-            return@rememberLauncherForActivityResult
-        }
-        PLog.i("PPassFlow", "onboarding: photo access after prompt=$mediaAccess")
-        when (decisionLanding(mediaAccess)) {
-            DecisionLanding.ChooseScope -> screen = Screen.Buckets(pairing, emptySet(), firstTime = true)
-            DecisionLanding.RegisterAllowed -> registerDecisionAllowed(pairing)
-            DecisionLanding.PickPhotos -> launchDecisionPick(pairing)
-        }
-    }
+    // #1902：权限只在范围页主动申请，决定页先持久化规则。
     val onDecisionChooseScope: (Pairing) -> Unit = { pairing ->
-        if (mediaAccess(context) == MediaAccess.FULL) {
+        if (settingsWriter.write("autoRule", true) { rulePrefs.set(true) }) {
+            ruleOn = true
+            ruleHintRes = null
+            PLog.i("PPassFlow", "onboarding: auto backup enabled, opening scope")
             screen = Screen.Buckets(pairing, emptySet(), firstTime = true)
         } else {
-            decisionPermissionPairing = pairing
-            runCatching { launchAlbumAccessPrompt(decisionPermission, withMediaLocation(requiredMediaPermissions())) }.onFailure {
-                PLog.w("PPassFlow", "onboarding: permission prompt failed to open", it)
-                decisionPermissionPairing = null
-                decisionLock.unlock()
-            }
+            decisionLock.unlock()
         }
     }
 
@@ -1078,6 +1043,7 @@ fun PPassApp() {
                 busy = decisionLock.busy,
                 onChooseScope = { if (decisionLock.tryLock()) onDecisionChooseScope(s.pairing) },
                 onPickPhotos = { if (decisionLock.tryLock()) launchDecisionPick(s.pairing) },
+                onPickFiles = { if (decisionLock.tryLock()) launchDecisionFile(s.pairing) },
             )
         }
 

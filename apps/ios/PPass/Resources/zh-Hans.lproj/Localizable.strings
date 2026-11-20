@@ -4,14 +4,15 @@
 "welcome_scan" = "扫码连接电脑";
 "welcome_step1" = "1 · 在电脑上安装并打开 P-Pass";
 "welcome_step2" = "2 · 扫码或输入配对码，连接电脑";
-"welcome_step3" = "3 · 选择要备份的相册";
+"welcome_step3" = "3 · 选择要备份的相册和文件夹";
 "scan_header_title" = "扫码连接";
 "scan_hint" = "对准电脑屏幕上的\n配对二维码";
 "scan_manual_link" = "无法扫码？手动配对";
 "decision_connected" = "已连上 %1$@";
 "decision_title" = "选择要自动备份的照片";
 "decision_destination" = "选好相册和时间范围后，每次打开 App，范围内的照片会自动传到 %1$@。";
-"decision_choose_scope" = "选择备份范围";
+"decision_choose_scope" = "开启自动备份";
+"scope_album_no_access_title" = "相册未完整授权";
 "decision_choose_scope_note" = "需要允许访问全部照片";
 "decision_pick_photos" = "先挑几张试试";
 "scan_manual_title" = "输入配对码";

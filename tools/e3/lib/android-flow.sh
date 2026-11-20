@@ -9,6 +9,26 @@ cand_apk() {
 base_apk() { echo "${E3_ANDROID_BASE_APK:-$E3_STATE/base/$(base_sha)/app-debug.apk}"; }
 base_sha() { git -C "$REPO_ROOT" rev-parse --short "$(git -C "$REPO_ROOT" merge-base HEAD origin/main)"; }
 
+# card_selected <xml> <卡片上的文字>：这张来源卡当前是不是选中态。
+# Compose 的选中勾只在选中时带 content-desc「已选择」，且挂在卡片子树里；按标题找到最近的可点卡片再查它的子树。
+card_selected() {
+  python3 -I - "$1" "$2" <<'PY'
+import sys, xml.etree.ElementTree as ET
+path, want = sys.argv[1], sys.argv[2]
+root = ET.parse(path).getroot()
+parent = {c: p for p in root.iter() for c in p}
+for n in root.iter("node"):
+    if (n.get("text") or "") != want and (n.get("content-desc") or "") != want:
+        continue
+    cur = n
+    while cur is not None and cur.get("clickable") != "true":
+        cur = parent.get(cur)
+    if cur is not None and any((m.get("content-desc") or "") in ("已选择", "Selected") for m in cur.iter()):
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
 # install_fresh <apk>：卸掉现有的再装（签名不同或要从零开始时）
 install_fresh() {
   A uninstall "$PKG" >/dev/null 2>&1
@@ -43,25 +63,44 @@ pair_enter_code() {
   echo "$node" >"$E3_STATE/android-node"
 }
 
-# pair_with_stub <证据目录>：清数据 → 配对 →（#1321 决定页「选择备份范围」）→ 系统照片权限框「全部允许」→
-# 范围只勾专用测试相册 →「开始备份」→ 读回存下的范围核对。调用前专用相册里要已有图（album_seed 或场景自己推）。
-# 只在 P-Pass 在前台时点。成功返回 0。
+# pair_with_stub <证据目录>：清数据 → 配对 →（#1902 决定页「开启自动备份」）→ 范围页点「允许访问照片」→
+# 系统照片权限框「全部允许」→ 范围只勾专用测试相册 →「开始备份」→ 读回存下的范围核对。
+# 旧包（决定页还是「选择备份范围」）走原路径：主按钮先弹系统权限框，允许后才进范围页。
+# 调用前专用相册里要已有图（album_seed 或场景自己推）。只在 P-Pass 在前台时点。成功返回 0。
 pair_with_stub() {
-  local ev="$1" end
+  local ev="$1" end want_prompt=0
   app_stop
   A shell pm clear "$PKG" >/dev/null
   app_start
   pair_enter_code "$ev" || return 1
-  # #1321 起配对后先进决定页（候选包）；上一版包（#1272 起）配对后直接进照片页，从「开启自动备份」进。
-  if wait_text "选择要自动备份的照片" 15; then tap_text "选择备份范围" || return 1
-  elif ui_has "开启自动备份"; then tap_text "开启自动备份" || return 1; fi
-  # 系统照片权限框 → 全部允许；之后「开始备份」
-  end=$((SECONDS + 60))
-  while [ $SECONDS -lt $end ]; do
-    fg | grep -q permissioncontroller && break
-    sleep 1
-  done
-  tap_text "全部允许" || tap_text "Allow all" || { log "没等到系统照片权限框"; return 1; }
+  # #1902：候选包决定页主按钮是「开启自动备份」，点了落规则直接进范围页，**不弹**系统权限框；
+  # 照片权限改在范围页点「允许访问照片」才申请。上一版包（如 0.12.1-test.1）仍是「选择备份范围」→ 先弹权限框。
+  if wait_text "选择要自动备份的照片" 20; then
+    if ui_has "开启自动备份"; then
+      tap_text "开启自动备份" || return 1
+      wait_text "开始备份" 20 || { ui_dump "$ev/scope-not-opened.xml"; log "决定页主按钮之后没进范围页"; return 1; }
+      if ui_has "允许访问照片"; then
+        tap_text "允许访问照片" || return 1
+        want_prompt=1
+      fi
+    else
+      tap_text "选择备份范围" || return 1
+      want_prompt=1
+    fi
+  elif ui_has "开启自动备份"; then
+    # 更早的包配对后直接进照片页，从首页「开启自动备份」进。
+    tap_text "开启自动备份" || return 1
+    want_prompt=1
+  fi
+  # 系统照片权限框 → 全部允许；只在这次真的申请了权限时才等框（已授权时没有框）。
+  if [ "$want_prompt" = 1 ]; then
+    end=$((SECONDS + 60))
+    while [ $SECONDS -lt $end ]; do
+      fg | grep -q permissioncontroller && break
+      sleep 1
+    done
+    tap_text "全部允许" || tap_text "Allow all" || { log "没等到系统照片权限框"; return 1; }
+  fi
   sleep 3
   # #1412：范围只勾专用测试相册。首次选范围页按钮是「开始备份」、默认勾相机相册（点一下取消）；
   # 上一版的选范围页按钮是「保存」、默认不勾。两种都点上测试相册，存下之后读回来核对。
@@ -70,7 +109,10 @@ pair_with_stub() {
   ui_has "$E3_ALBUM" || { log "选范围页首屏没有测试相册 $E3_ALBUM"; return 1; }
   tap_text "$E3_ALBUM" || return 1
   if ui_has "开始备份"; then
-    if ui_has "Camera"; then tap_text "Camera" || return 1; fi
+    # #1902 新流程先进范围页再在页内授权，相册列表晚加载，首次默认勾相机相册的初值可能没生效：
+    # 只在相机相册确实是选中态时才点它取消，别把没勾的相机相册反而勾上。
+    ui_dump
+    if card_selected "$UI_XML" "Camera"; then tap_text "Camera" || return 1; fi
     tap_text "开始备份"
   elif ui_has "保存"; then tap_text "保存"; fi
   sleep 4
