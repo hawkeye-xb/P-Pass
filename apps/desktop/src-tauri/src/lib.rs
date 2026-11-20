@@ -595,6 +595,26 @@ fn disable_auto_sleep_blocking() -> Result<(), String> {
     }
 }
 
+/// #1918（方案 A）：为 `config.set_library` 构造请求体。
+/// Windows 服务形态下服务账户 `NT SERVICE\P-Pass` 禁止 `SeImpersonatePrivilege` 且管道为
+/// `SECURITY_IDENTIFICATION`，无法解析主人的 Known Folders；由已通过管道 SID 鉴权的本机
+/// 主人桌面进程直接调 [`platform::UserDirFacts::for_current_user`] 随请求传给 daemon。
+fn set_library_params(library_dir: &str) -> Value {
+    json!({
+        "library": library_dir,
+        "user_dirs": platform::UserDirFacts::for_current_user(),
+    })
+}
+
+/// #1918（方案 A）：为 `library.relocate` 构造请求体（预检与落计划共用）。
+fn relocate_library_params(target: &std::path::Path, dry_run: bool) -> Value {
+    json!({
+        "target": target.to_string_lossy(),
+        "dry_run": dry_run,
+        "user_dirs": platform::UserDirFacts::for_current_user(),
+    })
+}
+
 /// #1115：照片库位置的唯一写法——IPC `config.set_library`（daemon 只对验过签名的窗口程序
 /// 开放；以前的 CLI 子命令 `config init` / `config set-library` 已删）。建库目录、写模板、
 /// 校验（存在 / 可写 / 不嵌套）、写正本都在 daemon（`crates/daemon/src/library_location.rs`）。
@@ -603,7 +623,7 @@ fn disable_auto_sleep_blocking() -> Result<(), String> {
 fn configure_library(library_dir: &str) -> Result<(), String> {
     // §5.3：**先把目录设为私有、再交给 daemon**（daemon 会以自己的身份复查目录）。
     let set = |h: &ipc::DaemonHandle| {
-        h.call("config.set_library", json!({ "library": library_dir }))
+        h.call("config.set_library", set_library_params(library_dir))
             .map(|_| ())
     };
     private_library_then(
@@ -760,7 +780,7 @@ async fn relocate_library(
                 // 跨卷时预检要量整个库的大小（逐个文件），大库在机械盘上会超过平常的 10 秒。
                 ipc::DaemonHandle::discover()?.call_with_timeout(
                     "library.relocate",
-                    json!({ "target": dir.to_string_lossy(), "dry_run": dry_run }),
+                    relocate_library_params(&dir, dry_run),
                     std::time::Duration::from_secs(120),
                 )
             },
@@ -3801,6 +3821,44 @@ mod tests {
         assert!(
             product_fn_body(&src, "verify_sidecar_runs").contains("daemon_cli::probe_version("),
             "探活必须走 --version --json"
+        );
+    }
+
+    /// #1918（方案 A）：桌面壳发出的 `config.set_library` 与 `library.relocate` 请求都必须
+    /// 附带 `user_dirs`（由主人进程调 `UserDirFacts::for_current_user()` 取得），否则
+    /// Windows 服务形态下会被 daemon 按 `ui.err_library_user_dirs` 拒绝。
+    /// 反证：从 `set_library_params` 或 `relocate_library_params` 去掉 `user_dirs` ⇒ 红。
+    #[test]
+    fn library_location_ipc_requests_carry_owner_user_dirs() {
+        let set_params = set_library_params("/tmp/example-library");
+        assert_eq!(set_params["library"], "/tmp/example-library");
+        let parsed_set: platform::UserDirFacts =
+            serde_json::from_value(set_params["user_dirs"].clone())
+                .expect("config.set_library 必须携带合法的 user_dirs");
+        assert!(
+            parsed_set.selection_ready(),
+            "桌面主人进程取出的 user_dirs 必须就绪：{parsed_set:?}"
+        );
+
+        let reloc_params = relocate_library_params(std::path::Path::new("/tmp/new-library"), true);
+        assert_eq!(reloc_params["target"], "/tmp/new-library");
+        assert_eq!(reloc_params["dry_run"], true);
+        let parsed_reloc: platform::UserDirFacts =
+            serde_json::from_value(reloc_params["user_dirs"].clone())
+                .expect("library.relocate 必须携带合法的 user_dirs");
+        assert!(
+            parsed_reloc.selection_ready(),
+            "relocate 携带的 user_dirs 必须就绪：{parsed_reloc:?}"
+        );
+
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        assert!(
+            product_fn_body(&src, "configure_library").contains("set_library_params("),
+            "configure_library 必须通过 set_library_params 构造请求体"
+        );
+        assert!(
+            product_fn_body(&src, "relocate_library").contains("relocate_library_params("),
+            "relocate_library 必须通过 relocate_library_params 构造请求体"
         );
     }
 

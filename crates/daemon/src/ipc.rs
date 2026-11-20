@@ -496,7 +496,39 @@ pub fn daemon_version() -> String {
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
 }
 
-/// #1115：`config.set_library {library}` 的应答（常驻 daemon 与未配置状态共用）。
+/// #1918（方案 A）：把已通过连接鉴权的 `PeerUser` 与客户端随请求传入的 `user_dirs`
+/// 合成供敏感目录校验使用的最终连接方事实：
+/// - 没有连接方（macOS 签名 socket、令牌模式）：返回 `None`，走平台当前用户事实。
+/// - 服务端侧已拿到完整目录事实（例如 Windows 同用户计划任务/直跑形态）：直接使用服务端事实，
+///   不接受客户端覆盖，避免客户端伪造绕过。
+/// - 服务端侧事实未就绪（Windows 服务形态：`NT SERVICE\P-Pass` 禁止 `SeImpersonatePrivilege`、
+///   管道保持 `SECURITY_IDENTIFICATION`）：必须解析客户端传入的 `params.user_dirs` 并通过
+///   [`platform::UserDirFacts::selection_ready`] 校验；缺失、类型错误、缺字段、相对路径或含 `..`
+///   时保持空事实，由下游 [`crate::library_location::check_library_path`] 统一拒绝并返回
+///   `ui.err_library_user_dirs`，绝不静默退回服务账户目录。
+fn resolve_peer_with_client_dirs(
+    user: Option<&platform::PeerUser>,
+    params: &serde_json::Value,
+) -> Option<platform::PeerUser> {
+    let peer = user?;
+    if peer.dirs().selection_ready() {
+        return Some(peer.clone());
+    }
+    let Some(raw) = params.get("user_dirs") else {
+        return Some(peer.clone());
+    };
+    let Ok(facts) = serde_json::from_value::<platform::UserDirFacts>(raw.clone()) else {
+        tracing::warn!("#1918: 客户端传入的 user_dirs 格式非法，拒绝本次位置设置");
+        return Some(peer.clone());
+    };
+    if !facts.selection_ready() {
+        tracing::warn!("#1918: 客户端传入的 user_dirs 不完整或路径非法，拒绝本次位置设置");
+        return Some(peer.clone());
+    }
+    Some(peer.with_dirs(facts))
+}
+
+/// #1115：`config.set_library {library, user_dirs?}` 的应答（常驻 daemon 与未配置状态共用）。
 /// 校验类错误原样放进 `params.ui_error`（keyed JSON），窗口程序据此显示具体原因。
 async fn set_library_resp(
     id: String,
@@ -511,7 +543,7 @@ async fn set_library_resp(
     else {
         return Resp::err(id, RespError::new(Reason::BadRequest));
     };
-    let user = user.cloned();
+    let user = resolve_peer_with_client_dirs(user, params);
     match tokio::task::spawn_blocking(move || location.set(&library, user.as_ref())).await {
         Ok(Ok(cfg)) => Resp::ok(
             id,
@@ -538,9 +570,10 @@ fn relocate_resp(
         return Resp::err(id, RespError::new(Reason::BadRequest));
     };
     let target = std::path::Path::new(target);
+    let user = resolve_peer_with_client_dirs(user, params);
     // 预检（窗口确认前调）：不落盘，告诉窗口最终位置、文件夹里是否已有别的东西。
     if params.get("dry_run").and_then(|v| v.as_bool()) == Some(true) {
-        return match crate::relocate::check(library, target, local_base, user) {
+        return match crate::relocate::check(library, target, local_base, user.as_ref()) {
             Ok(c) => Resp::ok(
                 id,
                 serde_json::json!({
@@ -555,7 +588,7 @@ fn relocate_resp(
             ),
         };
     }
-    match crate::relocate::plan(library, target, local_base, user) {
+    match crate::relocate::plan(library, target, local_base, user.as_ref()) {
         Ok(check) => {
             let plan = check.plan;
             tokio::spawn(async move {
@@ -3117,5 +3150,215 @@ mod tests {
             .await;
         assert!(resp.ok, "没有连接方时同一位置不该被拒：{resp:?}");
         assert!(documents.join(LIBRARY_MARKER).is_dir());
+    }
+
+    /// #1918（方案 A）：Windows 服务形态下管道只认出客户端 SID，服务端侧 `PeerUser.dirs` 为空；
+    /// 已通过 SID 鉴权的桌面进程随 `config.set_library` / `library.relocate` 传入 `user_dirs` 后：
+    /// - 未传、格式坏、缺字段、相对路径或含 `..` ⇒ 一律返回 `ui.err_library_user_dirs`，绝不静默退回；
+    /// - 传入完整合法 `user_dirs` ⇒ 命中主人的敏感目录仍返回 `ui.err_library_sensitive`，普通目录放行；
+    /// - 服务端自身已有完整事实（同用户直跑形态）⇒ 忽略客户端传入的伪造 `user_dirs`，不被绕过。
+    /// 反证：去掉 `resolve_peer_with_client_dirs`（还原 `let user = user.cloned()`）⇒ 服务形态带合法
+    /// `user_dirs` 的敏感目录与普通目录用例全部错报 `ui.err_library_user_dirs`，红。
+    #[tokio::test]
+    async fn service_peer_uses_validated_client_user_dirs_for_set_library_and_relocate() {
+        use crate::library_location::{LibraryLocation, LIBRARY_MARKER};
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open_in_memory().await.unwrap();
+        let platform_dir = dir.path().join("platform");
+        let mut server = test_server(&db, dir.path());
+        server.set_library_location(Arc::new(LibraryLocation::with(None, platform_dir.clone())));
+        let server = Arc::new(server);
+
+        let home = dir.path().join("owner-home");
+        std::fs::create_dir_all(&home).unwrap();
+        let owner_facts =
+            platform::UserDirFacts::from_home(crate::library_location::real_path(&home));
+        let service_peer =
+            platform::PeerUser::new("S-1-5-21-1".into(), platform::UserDirFacts::default());
+        let ordinary = home.join("PPASS_STORAGE");
+        let desktop = home.join("Desktop").join("ppass-1918");
+
+        // 1. 服务形态未传 / 坏格式 / 缺字段 / 相对路径 / 含 `..`：全部拒绝并报 ui.err_library_user_dirs。
+        let mut incomplete = owner_facts.clone();
+        incomplete.pictures = None;
+        let mut relative = owner_facts.clone();
+        relative.desktop = Some(std::path::PathBuf::from("Desktop"));
+        let mut traversal = owner_facts.clone();
+        traversal.documents = Some(home.join("Documents").join("..").join("Other"));
+        let invalid_payloads = [
+            serde_json::json!({ "library": ordinary.to_str().unwrap() }),
+            serde_json::json!({ "library": ordinary.to_str().unwrap(), "user_dirs": "bad" }),
+            serde_json::json!({ "library": ordinary.to_str().unwrap(), "user_dirs": incomplete }),
+            serde_json::json!({ "library": ordinary.to_str().unwrap(), "user_dirs": relative }),
+            serde_json::json!({ "library": ordinary.to_str().unwrap(), "user_dirs": traversal }),
+        ];
+        for (idx, params) in invalid_payloads.into_iter().enumerate() {
+            let resp = server
+                .dispatch(
+                    Req {
+                        id: format!("invalid-{idx}"),
+                        method: "config.set_library".into(),
+                        params,
+                        ..Default::default()
+                    },
+                    Some(&service_peer),
+                )
+                .await;
+            assert!(!resp.ok, "case {idx} 必须拒绝：{resp:?}");
+            assert!(
+                resp.error
+                    .as_ref()
+                    .unwrap()
+                    .params()
+                    .get("ui_error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .contains("ui.err_library_user_dirs"),
+                "case {idx} 必须报 ui.err_library_user_dirs：{resp:?}"
+            );
+            assert!(!ordinary.exists(), "case {idx} 拒绝时不许建库目录");
+        }
+
+        // 2. 服务形态带完整合法 user_dirs：敏感目录（桌面）拒绝，不建目录、不写 config。
+        let resp = server
+            .dispatch(
+                Req {
+                    id: "svc-sensitive".into(),
+                    method: "config.set_library".into(),
+                    params: serde_json::json!({
+                        "library": desktop.to_str().unwrap(),
+                        "user_dirs": &owner_facts,
+                    }),
+                    ..Default::default()
+                },
+                Some(&service_peer),
+            )
+            .await;
+        assert!(!resp.ok, "服务形态带 user_dirs 仍要拒桌面：{resp:?}");
+        assert!(
+            resp.error
+                .as_ref()
+                .unwrap()
+                .params()
+                .get("ui_error")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .contains("ui.err_library_sensitive"),
+            "{resp:?}"
+        );
+        assert!(!desktop.exists(), "拒绝时不许建目录");
+
+        // 3. 服务形态 relocate 预检：不传 user_dirs 报 ui.err_library_user_dirs；传合法 user_dirs 拒桌面。
+        let resp = server
+            .dispatch(
+                Req {
+                    id: "svc-reloc-missing".into(),
+                    method: "library.relocate".into(),
+                    params: serde_json::json!({
+                        "target": ordinary.to_str().unwrap(),
+                        "dry_run": true,
+                    }),
+                    ..Default::default()
+                },
+                Some(&service_peer),
+            )
+            .await;
+        assert!(
+            !resp.ok
+                && resp
+                    .error
+                    .as_ref()
+                    .unwrap()
+                    .params()
+                    .get("ui_error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .contains("ui.err_library_user_dirs"),
+            "服务形态 relocate 缺 user_dirs 必须报 ui.err_library_user_dirs：{resp:?}"
+        );
+        let resp = server
+            .dispatch(
+                Req {
+                    id: "svc-reloc-sensitive".into(),
+                    method: "library.relocate".into(),
+                    params: serde_json::json!({
+                        "target": desktop.to_str().unwrap(),
+                        "dry_run": true,
+                        "user_dirs": &owner_facts,
+                    }),
+                    ..Default::default()
+                },
+                Some(&service_peer),
+            )
+            .await;
+        assert!(
+            !resp.ok
+                && resp
+                    .error
+                    .as_ref()
+                    .unwrap()
+                    .params()
+                    .get("ui_error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .contains("ui.err_library_sensitive"),
+            "服务形态 relocate 带 user_dirs 必须拒敏感目录：{resp:?}"
+        );
+
+        // 4. 服务形态带完整合法 user_dirs：普通独立目录成功保存。
+        let resp = server
+            .dispatch(
+                Req {
+                    id: "svc-ordinary".into(),
+                    method: "config.set_library".into(),
+                    params: serde_json::json!({
+                        "library": ordinary.to_str().unwrap(),
+                        "user_dirs": &owner_facts,
+                    }),
+                    ..Default::default()
+                },
+                Some(&service_peer),
+            )
+            .await;
+        assert!(
+            resp.ok,
+            "服务形态带合法 user_dirs 选普通目录应通过：{resp:?}"
+        );
+        assert!(ordinary.join(LIBRARY_MARKER).is_dir());
+
+        // 5. 同用户直跑形态（服务端侧 peer.dirs 已就绪）：客户端伪造别的 user_dirs 无法覆盖服务端事实。
+        let decoy_home = dir.path().join("decoy-home");
+        std::fs::create_dir_all(&decoy_home).unwrap();
+        let decoy_facts =
+            platform::UserDirFacts::from_home(crate::library_location::real_path(&decoy_home));
+        let same_user_peer = platform::PeerUser::new("S-1-5-21-1".into(), owner_facts);
+        let resp = server
+            .dispatch(
+                Req {
+                    id: "same-user-no-override".into(),
+                    method: "config.set_library".into(),
+                    params: serde_json::json!({
+                        "library": desktop.to_str().unwrap(),
+                        "user_dirs": &decoy_facts,
+                    }),
+                    ..Default::default()
+                },
+                Some(&same_user_peer),
+            )
+            .await;
+        assert!(
+            !resp.ok
+                && resp
+                    .error
+                    .as_ref()
+                    .unwrap()
+                    .params()
+                    .get("ui_error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .contains("ui.err_library_sensitive"),
+            "服务端已有事实时不许被客户端伪造的 user_dirs 覆盖：{resp:?}"
+        );
     }
 }

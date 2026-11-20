@@ -46,15 +46,16 @@ pub enum PeerCheck {
     NotSupported(&'static str),
 }
 
-/// #1826：用户「标准目录」的事实——家目录，加上桌面 / 文稿 / 下载 / 图片 / 影片 / 音乐，
+/// #1826 / #1918：用户「标准目录」的事实——家目录，加上桌面 / 文稿 / 下载 / 图片 / 影片 / 音乐，
 /// 以及 macOS 的 `~/Library`。**真实位置**由系统口径给出（Windows 走 `SHGetKnownFolderPath`，
 /// 可能被重定向到家目录外、别的盘）；调用方负责解析符号链接。
 ///
-/// 平台差异（怎么取）留在 [`UserDirFacts::for_current_user`] 与 Windows 的
-/// `peer_dir_facts` 里，结构本身各平台同一份，daemon 只消费这一份。
-/// Windows 没有 `~/Library` 这一层的对应物，`library` 在 Windows 的连接方事实上
-/// **按定义就是 `None`**，不算缺失。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// 平台差异（怎么取）留在 [`UserDirFacts::for_current_user`] 里，结构本身各平台同一份，
+/// daemon 只消费这一份。Windows 服务形态下由已通过管道 SID 鉴权的本机主人桌面进程调
+/// [`UserDirFacts::for_current_user`] 获取并随 `config.set_library` / `library.relocate`
+/// 传给 daemon（#1918）；`library` 在 Windows 上按定义就是 `None`，不算缺失。
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct UserDirFacts {
     /// 家目录；读不到 = `None`。
     pub home: Option<std::path::PathBuf>,
@@ -67,6 +68,41 @@ pub struct UserDirFacts {
     /// macOS 的「影片」；Windows 是 `FOLDERID_Videos`（Linux 按 XDG 的 `Videos`）。
     pub videos: Option<std::path::PathBuf>,
     pub music: Option<std::path::PathBuf>,
+}
+
+/// #1918：单个用户目录事实路径是否合法：非空、绝对路径（含根或 Windows 盘符根）、不含 `..`。
+///
+/// 跨平台判据，不依赖 `cfg`：
+/// - Unix 绝对路径：`/` 开头（`is_absolute()` 为真）；
+/// - Windows 盘符绝对路径：`<盘符>:\` 或 `<盘符>:/`、或 `\\` UNC 路径（在 Windows 上
+///   `is_absolute()` 为真；在 Unix 单测里构造 Windows 盘符路径时也用字面形状识别）。
+/// - 含 `..`（`Component::ParentDir` 或分隔后的 `..` 段）一律判非法。
+fn is_valid_dir_fact_path(path: &std::path::Path) -> bool {
+    let raw = path.as_os_str();
+    if raw.is_empty() {
+        return false;
+    }
+    let s = raw.to_string_lossy();
+    if s.trim().is_empty() || s.contains('\0') {
+        return false;
+    }
+    // 任一路径段出现 `..` 一律拒绝（兼容 `/` 与 `\` 两种分隔符）。
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+        || s.split(['/', '\\']).any(|seg| seg == "..")
+    {
+        return false;
+    }
+    if path.is_absolute() {
+        return true;
+    }
+    // 兼容在非 Windows 宿主单测中验证 Windows 盘符绝对路径（如 `C:\Users\alice`）。
+    let bytes = s.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
 }
 
 impl UserDirFacts {
@@ -125,27 +161,33 @@ impl UserDirFacts {
         .flatten()
     }
 
-    /// #1826：选照片库位置要用的关键事实齐不齐：家目录 + 除 macOS `library` 外的
-    /// 全部标准目录（Windows 的 `library` 按 [`UserDirFacts`] 的定义就是 `None`）。
-    /// 连接方存在而事实不齐 ⇒ 调用方必须拒绝本次选择，不拿自己的目录代答、不按形状猜。
+    /// #1826 / #1918：选照片库位置要用的关键事实齐不齐且格式合法：家目录 + 除 macOS
+    /// `library` 外的全部标准目录均非空、为绝对路径且不含 `..`；可选 `library` 若存在
+    /// 也必须同样合法（Windows 的 `library` 按 [`UserDirFacts`] 的定义就是 `None`）。
+    /// 连接方存在而事实不齐或不合法 ⇒ 调用方必须拒绝本次选择，不拿自己的目录代答、不按形状猜。
     pub fn selection_ready(&self) -> bool {
-        self.home.is_some()
-            && self.desktop.is_some()
-            && self.documents.is_some()
-            && self.downloads.is_some()
-            && self.pictures.is_some()
-            && self.videos.is_some()
-            && self.music.is_some()
+        let req = |p: &Option<std::path::PathBuf>| p.as_deref().is_some_and(is_valid_dir_fact_path);
+        let opt = |p: &Option<std::path::PathBuf>| p.as_deref().is_none_or(is_valid_dir_fact_path);
+        req(&self.home)
+            && req(&self.desktop)
+            && req(&self.documents)
+            && req(&self.downloads)
+            && req(&self.pictures)
+            && req(&self.videos)
+            && req(&self.music)
+            && opt(&self.library)
     }
 }
 
 /// #1167：连接方的系统用户（Windows：SID 字符串）。只有 Windows 管道的**服务端**取得到；
 /// 用途有两个——首启向导写好库位置时把它记成主人（`PlatformAdapter::claim_resident_owner`），
-/// 以及敏感目录判定要知道主人的用户标准目录（#1826）。
+/// 以及敏感目录判定要知道主人的用户标准目录（#1826 / #1918）。
 ///
-/// #1826：目录事实（[`UserDirFacts`]）随这次连接一起解析（Windows：用该连接已验证用户的
-/// token 逐个调 `SHGetKnownFolderPath`）。服务形态下服务账户读不到主人的这些目录，取不到
-/// 就是 `None`——调用方必须拒绝本次选择，不拿服务账户的目录代答，也不按路径形状猜。
+/// #1918：命名管道保持 `SECURITY_IDENTIFICATION` 且服务账户禁止 `SeImpersonatePrivilege`，
+/// 因此跨用户（服务形态）时服务端不再用标识级令牌调 `SHGetKnownFolderPath`，`dirs` 初始为空；
+/// 由已通过管道 SID 鉴权的本机主人桌面进程直接调 `SHGetKnownFolderPath` 获取 [`UserDirFacts`]
+/// 并随 `config.set_library` / `library.relocate` 传入，经服务端校验后注入。
+/// 同用户直跑/计划任务形态下服务端直接取当前用户事实。事实不齐或不合法 ⇒ 拒绝本次选择。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerUser {
     pub(crate) sid: String,
@@ -156,6 +198,15 @@ impl PeerUser {
     /// 平台实现与测试构造用。
     pub fn new(sid: String, dirs: UserDirFacts) -> Self {
         Self { sid, dirs }
+    }
+
+    /// 用新的目录事实替换（保留已验证的 SID）。供服务端把客户端提交并校验后的
+    /// [`UserDirFacts`] 绑定到已通过 SID 鉴权的连接方（#1918）。
+    pub fn with_dirs(&self, dirs: UserDirFacts) -> Self {
+        Self {
+            sid: self.sid.clone(),
+            dirs,
+        }
     }
 
     /// 给日志与错误说明用的标识（Windows：SID）。
@@ -528,6 +579,58 @@ mod floor_tests {
         assert!(meets_min_version(Some("0.10.0"), "0.10.0-test.10").is_ok());
         // 版本串两端的空白不影响：
         assert!(meets_min_version(Some(" 0.10.1 "), "0.10.1").is_ok());
+    }
+
+    /// #1918：`UserDirFacts::selection_ready` 不仅要求必填 7 项存在，还必须全部为非空、
+    /// 绝对路径、不含 `..`（可选 `library` 若存在也必须同样合法）；同时验证 `PeerUser::with_dirs`
+    /// 保留 SID 并替换目录事实。
+    /// 反证：把 `selection_ready` 退回只判 `is_some()` ⇒ 相对路径 / 空串 / `..` 全部变 true，红。
+    #[test]
+    fn user_dir_facts_selection_ready_rejects_relative_empty_and_parent_paths() {
+        use super::{PeerUser, UserDirFacts};
+        use std::path::PathBuf;
+
+        let posix = UserDirFacts::from_home(PathBuf::from("/Users/alice"));
+        assert!(posix.selection_ready(), "合法 POSIX 事实应就绪");
+
+        let win = UserDirFacts {
+            home: Some(PathBuf::from(r"C:\Users\alice")),
+            desktop: Some(PathBuf::from(r"C:\Users\alice\Desktop")),
+            documents: Some(PathBuf::from(r"D:\Docs")),
+            downloads: Some(PathBuf::from(r"C:\Users\alice\Downloads")),
+            library: None,
+            pictures: Some(PathBuf::from(r"D:\Pictures")),
+            videos: Some(PathBuf::from(r"C:\Users\alice\Videos")),
+            music: Some(PathBuf::from(r"C:\Users\alice\Music")),
+        };
+        assert!(win.selection_ready(), "合法 Windows 盘符路径应就绪");
+
+        for bad in [
+            "",
+            "   ",
+            "relative/path",
+            r"Users\alice",
+            r"C:relative",
+            "/Users/alice/../bob",
+            r"C:\Users\..\Public",
+        ] {
+            let mut f = posix.clone();
+            f.desktop = Some(PathBuf::from(bad));
+            assert!(!f.selection_ready(), "非法 desktop 路径 {bad:?} 必须被拒");
+
+            let mut f_lib = posix.clone();
+            f_lib.library = Some(PathBuf::from(bad));
+            assert!(
+                !f_lib.selection_ready(),
+                "非法可选 library 路径 {bad:?} 必须被拒"
+            );
+        }
+
+        let peer = PeerUser::new("S-1-5-21-1".into(), UserDirFacts::default());
+        assert!(!peer.dirs().selection_ready());
+        let hydrated = peer.with_dirs(win.clone());
+        assert_eq!(hydrated.id(), "S-1-5-21-1");
+        assert_eq!(hydrated.dirs(), &win);
     }
 }
 

@@ -279,17 +279,38 @@ pub fn bind_resident(name: &str) -> io::Result<Listener> {
     bind_with_sddl(name, &policy.sddl())
 }
 
-/// 服务端：按**这条连接**模拟客户端，取它的用户 SID 与这一次连接解析出的目录事实
-/// （#1826：主人的家目录与各用户标准目录，用该用户 token 调 `SHGetKnownFolderPath`）。
+/// #1918：按服务端与连接方 SID 决定服务端本地能直接知道的目录事实：
+/// - 服务端与连接方是**同一用户**（计划任务 / 直跑形态）：当前进程本身就跑在主人名下，
+///   直接用当前用户的 Known Folder 事实。
+/// - 服务端与连接方是**不同用户**（服务形态 `NT SERVICE\P-Pass`）：服务端禁止
+///   `SeImpersonatePrivilege` 且管道为 `SECURITY_IDENTIFICATION`，绝不拿服务账户的目录
+///   代答，返回空 `UserDirFacts::default()`，要求客户端在 `config.set_library` /
+///   `library.relocate` 里提供经 `SHGetKnownFolderPath` 取到的目录事实。
+fn server_side_peer_dirs(
+    server_sid: Option<&str>,
+    client_sid: &str,
+    current_dirs: impl FnOnce() -> crate::local_peer::UserDirFacts,
+) -> crate::local_peer::UserDirFacts {
+    if server_sid.is_some_and(|s| s.eq_ignore_ascii_case(client_sid)) {
+        current_dirs()
+    } else {
+        crate::local_peer::UserDirFacts::default()
+    }
+}
+
+/// 服务端：按**这条连接**模拟客户端，只用最小权限 `TOKEN_QUERY` 取它的用户 SID。
 ///
 /// 调用线程在模拟期间换了身份，所以无论成败都先 `RevertToSelf` 再返回；恢复失败
-/// 就直接终止进程——带着别人的身份继续跑是绝不能接受的状态。目录事实用令牌句柄取
-/// （`SHGetKnownFolderPath` 的第三个参数），不需要继续顶着客户端身份。
+/// 就直接终止进程——带着别人的身份继续跑是绝不能接受的状态。
+///
+/// #1918：客户端以 `SECURITY_IDENTIFICATION` 连接，且服务账户禁止 `SeImpersonatePrivilege`，
+/// 标识级令牌无法调用 `SHGetKnownFolderPath`。这里不再徒劳向标识级令牌请求
+/// `TOKEN_IMPERSONATE | TOKEN_DUPLICATE` 或调 `SHGetKnownFolderPath`；同用户（计划任务 /
+/// 直跑）直取当前用户事实，跨用户（服务形态）返回空事实，由已通过管道 SID 鉴权的主人
+/// 桌面进程随请求提供并经服务端校验。
 pub(crate) fn client_user(handle: RawHandle) -> io::Result<PeerUser> {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows_sys::Win32::Security::{
-        RevertToSelf, TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_QUERY,
-    };
+    use windows_sys::Win32::Security::{RevertToSelf, TOKEN_QUERY};
     use windows_sys::Win32::System::Pipes::ImpersonateNamedPipeClient;
     use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
 
@@ -299,18 +320,10 @@ pub(crate) fn client_user(handle: RawHandle) -> io::Result<PeerUser> {
         return Err(io::Error::last_os_error());
     }
     let mut token: HANDLE = std::ptr::null_mut();
-    // OpenAsSelf = TRUE：按进程自己的身份做访问检查（客户端令牌通常只到标识级）。
-    // Microsoft Learn：SHGetKnownFolderPath 按指定用户取目录要求 TOKEN_QUERY |
-    // TOKEN_IMPERSONATE；部分情况还需 TOKEN_DUPLICATE，这里一次开全，不只开查询权限。
+    // OpenAsSelf = TRUE：按进程自己的身份做访问检查（客户端令牌为 Identification 级）。
+    // 只需要 TOKEN_QUERY 读 TokenUser（SID），不请求模拟/复制权限。
     // SAFETY: GetCurrentThread 是伪句柄；token 是出参。
-    let opened = unsafe {
-        OpenThreadToken(
-            GetCurrentThread(),
-            TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_IMPERSONATE,
-            1,
-            &mut token,
-        )
-    };
+    let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) };
     let open_err = io::Error::last_os_error();
     // SAFETY: 无参数；失败意味着本线程仍顶着客户端身份。
     if unsafe { RevertToSelf() } == 0 {
@@ -320,11 +333,15 @@ pub(crate) fn client_user(handle: RawHandle) -> io::Result<PeerUser> {
         return Err(open_err);
     }
     let sid = windows_programdata::token_user_sid_string(token).map_err(io::Error::other);
-    // 主人的用户目录事实（家目录与各标准目录）：必须在令牌句柄关闭前取。
-    let dirs = crate::windows::peer_dir_facts(token);
     // SAFETY: token 是 OpenThreadToken 成功返回的真句柄。
     unsafe { CloseHandle(token) };
     let sid = sid?;
+    let server_sid = windows_programdata::current_user_sid_string().ok();
+    let dirs = server_side_peer_dirs(
+        server_sid.as_deref(),
+        &sid,
+        crate::windows::current_user_dir_facts,
+    );
     Ok(PeerUser::new(sid, dirs))
 }
 
@@ -850,17 +867,39 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::NotFound, "{err:?}");
     }
 
-    /// #1826：`client_user` 要一并解析这条连接（主人）的**全部**用户目录——家目录 +
-    /// 桌面 / 文稿 / 下载 / 图片 / 影片 / 音乐——用的就是这条已验证连接的 token。
-    /// 真实壳以 Identification 级连上来（`connect_identification_tokio`）之后：
-    /// `SHGetKnownFolderPath` 一个都不许失败（`selection_ready` 为真），值要与
-    /// 同一用户的直取结果、以及适配器的回答一致（身份核对链没被破坏就是连得上的
-    /// 证明：SID 与 `the_server_reads_the_clients_sid_by_impersonation` 同判据）。
-    ///
-    /// 若本用例在真实 Windows 上红了：按报错原文（哪个 Known Folder、哪个 OS 错误码）
-    /// 选标准机制（`DuplicateTokenEx`、模拟期间读取等），**不许**只往
-    /// `OpenThreadToken` 上加权限位猜。在把令牌判红修对之前，`config.set_library`
-    /// 会按 `ui.err_library_user_dirs` 拒绝全部保存。
+    /// #1918：服务端与连接方同用户（计划任务/直跑）时直接取当前用户目录事实；
+    /// 跨用户（服务形态 `NT SERVICE\P-Pass` ≠ 主人 SID）或拿不到服务端 SID 时，
+    /// 必须返回空事实且**绝不**调用服务账户的目录查询。
+    /// 反证：去掉 `server_side_peer_dirs` 的 SID 比较、一律调 `current_dirs` ⇒ 跨用户断言红。
+    #[test]
+    fn server_side_peer_dirs_only_uses_current_user_when_sid_matches() {
+        let mut called = 0usize;
+        let same = server_side_peer_dirs(Some(&me()), &me().to_lowercase(), || {
+            called += 1;
+            crate::local_peer::UserDirFacts::from_home(std::path::PathBuf::from(r"C:\Users\alice"))
+        });
+        assert_eq!(called, 1, "同用户应调用 current_dirs");
+        assert!(same.selection_ready(), "同用户应拿到完整目录事实");
+
+        let cross = server_side_peer_dirs(Some(SERVICE), &me(), || {
+            panic!("跨用户（服务形态）绝不许拿服务账户自己的目录事实代答");
+        });
+        assert!(
+            !cross.selection_ready(),
+            "跨用户必须返回空目录事实（交给客户端传入）"
+        );
+        assert_eq!(cross, crate::local_peer::UserDirFacts::default());
+
+        let unknown = server_side_peer_dirs(None, &me(), || {
+            panic!("拿不到服务端 SID 时也不许盲取当前账户目录");
+        });
+        assert!(!unknown.selection_ready());
+    }
+
+    /// #1826 / #1918：同用户直跑形态下，真实壳以 Identification 级连上来
+    /// （`connect_identification_tokio`）后，`client_user` 仅凭 `TOKEN_QUERY` 就能读出
+    /// 客户端 SID，并在服务端与客户端同用户时拿到与 `current_user_dir_facts()` 一致的
+    /// 完整目录事实（不再用标识级令牌调 `SHGetKnownFolderPath`）。
     #[tokio::test]
     async fn client_user_resolves_the_interactive_users_known_folders_over_the_real_client_shape() {
         let name = unique("kf");
@@ -881,10 +920,10 @@ mod tests {
         let facts = user.dirs().clone();
         assert!(
             facts.selection_ready(),
-            "选位置要的关键事实不齐（SHGetKnownFolderPath 有失败）：{facts:?}"
+            "同用户直跑形态下应拿到完整目录事实：{facts:?}"
         );
         let direct = crate::windows::current_user_dir_facts();
-        assert_eq!(facts, direct, "带 token 与直取（同一用户）必须一致");
+        assert_eq!(facts, direct, "同用户下必须与 current_user_dir_facts 一致");
         use crate::PlatformAdapter as _;
         let a = crate::adapter();
         assert_eq!(facts.home, a.home_dir(), "home 与适配器不一致");
