@@ -559,14 +559,22 @@ describe("#1132 逐项断言", () => {
     const rowClasses = (row.getAttribute("class") || "").split(/\s+/);
     expect(rowClasses).toContain("flex-wrap");
 
-    // 名称容器必须带非零最小宽度与 basis 保护，迫使右侧固定列在放不下时折行，
-    // 不能再退回 min-w-0 + flex-basis:0% 被挤到几十像素。
+    // 名称容器必须带足够的最小宽度与 basis 保护（≥ 160px），迫使右侧固定列
+    // 在放不下时折行，不能退回 min-w-0 + flex-basis:0% 或过小数值被挤到几十像素。
     const nameCol = nameBtn.parentElement;
     const colClasses = (nameCol.getAttribute("class") || "").split(/\s+/);
     expect(colClasses).toContain("flex-1");
     expect(colClasses).not.toContain("min-w-0");
-    expect(colClasses.some((c) => /^min-w-\[/.test(c))).toBe(true);
-    expect(colClasses.some((c) => /^basis-\[/.test(c))).toBe(true);
+    const pxOf = (cls) => {
+      const m = cls.match(/(\d+)px/);
+      return m ? Number(m[1]) : 0;
+    };
+    const minW = colClasses.find((c) => /^min-w-\[/.test(c));
+    const basis = colClasses.find((c) => /^basis-\[/.test(c));
+    expect(minW).toBeTruthy();
+    expect(basis).toBeTruthy();
+    expect(pxOf(minW)).toBeGreaterThanOrEqual(160);
+    expect(pxOf(basis)).toBeGreaterThanOrEqual(160);
 
     // 按钮自身受容器宽度约束，文字由内部 truncate 截断（不把 overflow-hidden 放父级，
     // 避免裁掉按钮外圈 focus-visible:ring-3）。
