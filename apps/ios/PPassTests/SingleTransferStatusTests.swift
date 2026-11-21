@@ -102,6 +102,26 @@ final class SingleTransferStatusTests: XCTestCase {
         }
     }
 
+    /// #1945：设置页 2/3 分组两行均传 `inList: true`，且 `SingleTransferSelectionRow` 在列表模式下
+    /// 不设固定 `minHeight: 44`、带右侧 `chevron.right`（`PPColor.ink40`）披露指示，使行高与同页标准行一致。
+    /// 反证：去掉 `inList: true` 或回退 `SingleTransferSelectionRow`，本条判红。
+    func testSingleTransferListRowsUseNativeListRowHeightAndDisclosure() throws {
+        let settings = try source("apps/ios/PPass/Home/SettingsScreen.swift")
+        let group = try XCTUnwrap(self.group(settings, "2/3"), "缺「单次传输」分组")
+        let buttons = group.components(separatedBy: "SingleTransferSelectionRow(").dropFirst()
+        XCTAssertEqual(buttons.count, 2, "单次传输组固定两行入口")
+        XCTAssertTrue(
+            buttons.allSatisfy { $0.contains("inList: true") },
+            "设置页单次传输两行在 List 内均须传 inList: true，避免内层 minHeight 叠加把行高撑到 74pt",
+        )
+        let decision = try source("apps/ios/PPass/Home/DecisionScreen.swift")
+        XCTAssertTrue(decision.contains("var inList = false"), "SingleTransferSelectionRow 须支持 inList 参数且默认 false")
+        XCTAssertTrue(decision.contains("minHeight: inList ? nil : PPUI.Layout.rowMinHeight"), "inList 模式下不设固定内层 minHeight")
+        XCTAssertFalse(decision.contains("minHeight: 44"), "SingleTransferSelectionRow 不得写死 minHeight: 44")
+        XCTAssertTrue(decision.contains("Image(systemName: \"chevron.right\")"), "SingleTransferSelectionRow 须包含右侧 chevron.right 披露箭头")
+        XCTAssertTrue(decision.contains(".foregroundStyle(PPColor.ink40)"), "chevron.right 须使用品牌色 PPColor.ink40")
+    }
+
     /// #1784：设置页不再有「挑几张传」的进度/结果行——单次状态只在英雄区出现。
     func testNoPickProgressLineIsLeftInTheSettingsCard() throws {
         let settings = try source("apps/ios/PPass/Home/SettingsScreen.swift")

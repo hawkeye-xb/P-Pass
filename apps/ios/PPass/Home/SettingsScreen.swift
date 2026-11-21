@@ -167,9 +167,9 @@ struct SettingsScreen: View {
         // ── #1789 固定分组 2/3「单次传输」：固定两行「从相册选择」「从文件选择」，
         // 两行只发起选择，不显示进度、结果或最近一批——状态只在英雄区出现（#1784）。
         Section {
-            SingleTransferSelectionRow(title: L.s("pick_from_photos_label")) { app.pickerRequested = true }
+            SingleTransferSelectionRow(title: L.s("pick_from_photos_label"), inList: true) { app.pickerRequested = true }
                 .accessibilityIdentifier("pickPhotosRow")
-            SingleTransferSelectionRow(title: L.s("pick_from_files_label")) { showFilePicker = true }
+            SingleTransferSelectionRow(title: L.s("pick_from_files_label"), inList: true) { showFilePicker = true }
                 .accessibilityIdentifier("pickFilesRow")
         }
         .ppTinted(PPUI.Surface.settingsCard)
