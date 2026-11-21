@@ -62,6 +62,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -999,8 +1000,10 @@ internal fun HomeScreen(
         }
 
         Spacer(Modifier.height(18.dp))
-        // ── #1789 固定分组 2/3「单次传输」：固定两行「从相册选择」「从文件选择」，
-        // 两行只发起选择，不显示进度、结果或最近一批——状态只在英雄区出现（#1784）。
+        // ── #1789 固定分组 2/3「单次传输」：有独立系统照片选择器时两行「从相册选择」「从文件选择」，
+        // 无独立照片选择器（如鸿蒙卓易通）时合并为单一行「从文件选择」（#1943）；
+        // 入口行只发起选择，不显示进度、结果或最近一批——状态只在英雄区出现（#1784）。
+        val photoPickerAvailable = SingleTransferFilePicker.hasDedicatedPhotoPicker(LocalContext.current)
         Surface(
             color = PPColor.Paper,
             shape = RoundedCornerShape(PPSize.RadiusCard),
@@ -1008,15 +1011,18 @@ internal fun HomeScreen(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column {
-                CellRow(
-                    label = stringResource(R.string.pick_from_photos_label),
-                    onClick = onPickPhotos,
-                    heading = true,
-                )
-                HorizontalDivider(color = PPColor.Divider)
+                if (photoPickerAvailable) {
+                    CellRow(
+                        label = stringResource(R.string.pick_from_photos_label),
+                        onClick = onPickPhotos,
+                        heading = true,
+                    )
+                    HorizontalDivider(color = PPColor.Divider)
+                }
                 CellRow(
                     label = stringResource(R.string.pick_from_files_label),
                     onClick = onPickFiles,
+                    heading = !photoPickerAvailable,
                 )
             }
         }

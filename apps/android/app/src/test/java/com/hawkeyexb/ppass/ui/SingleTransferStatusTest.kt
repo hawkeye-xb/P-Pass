@@ -155,6 +155,7 @@ class SingleTransferStatusTest {
     // ── ② 源文本门禁 ──────────────────────────────────────────────
 
     private fun homeScreen() = File("src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt").readText()
+    private fun decisionScreen() = File("src/main/java/com/hawkeyexb/ppass/ui/DecisionScreen.kt").readText()
     private fun mainActivity() = File("src/main/java/com/hawkeyexb/ppass/MainActivity.kt").readText()
 
     private fun group(source: String, marker: String): String? =
@@ -212,6 +213,49 @@ class SingleTransferStatusTest {
             assertFalse("入口行不显示进度 / 结果 / 最近一批", g.contains("pickedBatch"))
             assertFalse("入口行不带状态句", g.contains("picked_progress"))
         }
+    }
+
+    /** #1943：无独立系统照片选择器（如鸿蒙卓易通，PickVisualMedia 回退到 ACTION_OPEN_DOCUMENT）时，
+     *  HomeScreen 分组 2/3 与 DecisionScreen 均隐藏「从相册选择」与分隔线、只保留「从文件选择」单一行，
+     *  且 HomeScreen 单行模式下将分组无障碍 heading 移交给「从文件选择」（heading = !photoPickerAvailable）。 */
+    @Test
+    fun single_transfer_collapses_to_files_row_when_dedicated_photo_picker_is_unavailable() {
+        val group = group(homeScreen(), "2/3")!!
+        assertTrue(
+            "HomeScreen 单次传输组必须按 SingleTransferFilePicker.hasDedicatedPhotoPicker 检测系统照片选择器",
+            group.contains("val photoPickerAvailable = SingleTransferFilePicker.hasDedicatedPhotoPicker(LocalContext.current)"),
+        )
+        val homeGuarded = group.substringAfter("if (photoPickerAvailable) {", "").substringBefore("\n                }")
+        assertTrue(
+            "HomeScreen 的「从相册选择」与分隔线必须在 if (photoPickerAvailable) 分支内",
+            homeGuarded.contains("R.string.pick_from_photos_label") &&
+                homeGuarded.contains("HorizontalDivider(color = PPColor.Divider)"),
+        )
+        assertFalse(
+            "HomeScreen 的「从文件选择」必须在条件分支外始终渲染",
+            homeGuarded.contains("R.string.pick_from_files_label"),
+        )
+        val filesRow = group.substringAfter("R.string.pick_from_files_label")
+        assertTrue(
+            "HomeScreen 单行回退时「从文件选择」必须接管分组无障碍 heading（heading = !photoPickerAvailable）",
+            filesRow.contains("heading = !photoPickerAvailable"),
+        )
+
+        val decision = decisionScreen()
+        assertTrue(
+            "DecisionScreen 必须默认按 SingleTransferFilePicker.hasDedicatedPhotoPicker(LocalContext.current) 检测",
+            decision.contains("photoPickerAvailable: Boolean = SingleTransferFilePicker.hasDedicatedPhotoPicker(LocalContext.current)"),
+        )
+        val decisionGuarded = decision.substringAfter("if (photoPickerAvailable) {", "").substringBefore("\n                        }")
+        assertTrue(
+            "DecisionScreen 的「从相册选择」与分隔线必须在 if (photoPickerAvailable) 分支内",
+            decisionGuarded.contains("R.string.pick_from_photos_label") &&
+                decisionGuarded.contains("HorizontalDivider(color = PPColor.Divider)"),
+        )
+        assertFalse(
+            "DecisionScreen 的「从文件选择」必须在条件分支外始终渲染",
+            decisionGuarded.contains("R.string.pick_from_files_label"),
+        )
     }
 
     /** #1784：设置页不再有「挑几张传」的进度/结果行——单次状态只在英雄区出现。 */

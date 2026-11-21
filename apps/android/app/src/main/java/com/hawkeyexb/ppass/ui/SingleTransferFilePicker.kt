@@ -1,10 +1,25 @@
 package com.hawkeyexb.ppass.ui
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.result.contract.ActivityResultContracts
 
 /** 单次备份的系统文件选择：只返回用户本次选中的 URI，不授予目录或自动备份范围。 */
 object SingleTransferFilePicker {
+    enum class Entry { PHOTOS, FILES }
+
+    /**
+     * #1943：系统具备独立照片选择器时展示「从相册选择」「从文件选择」两行；
+     * 无独立照片选择器（如鸿蒙卓易通兼容层，PickVisualMedia 会回退到同一 ACTION_OPEN_DOCUMENT）时
+     * 自动收口为单一行「从文件选择」。
+     */
+    fun visibleEntries(photoPickerAvailable: Boolean): List<Entry> =
+        if (photoPickerAvailable) listOf(Entry.PHOTOS, Entry.FILES) else listOf(Entry.FILES)
+
+    fun hasDedicatedPhotoPicker(context: Context): Boolean =
+        ActivityResultContracts.PickVisualMedia.isPhotoPickerAvailable(context)
+
     fun intent(): Intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
         addCategory(Intent.CATEGORY_OPENABLE)
         type = "*/*"

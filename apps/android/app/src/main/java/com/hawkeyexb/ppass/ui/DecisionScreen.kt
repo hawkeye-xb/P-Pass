@@ -9,13 +9,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hawkeyexb.ppass.R
 
 @Composable
-fun DecisionScreen(computerName: String, busy: Boolean = false, onChooseScope: () -> Unit, onPickPhotos: () -> Unit, onPickFiles: () -> Unit) {
+fun DecisionScreen(
+    computerName: String,
+    busy: Boolean = false,
+    onChooseScope: () -> Unit,
+    onPickPhotos: () -> Unit,
+    onPickFiles: () -> Unit,
+    photoPickerAvailable: Boolean = SingleTransferFilePicker.hasDedicatedPhotoPicker(LocalContext.current),
+) {
     val name = computerName.ifBlank { stringResource(R.string.storage_device_default) }
     PPScreen {
         androidx.compose.material3.ProvideTextStyle(
@@ -48,8 +56,10 @@ fun DecisionScreen(computerName: String, busy: Boolean = false, onChooseScope: (
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Column {
-                        CellRow(stringResource(R.string.pick_from_photos_label), onClick = onPickPhotos.takeUnless { busy })
-                        androidx.compose.material3.HorizontalDivider(color = PPColor.Divider)
+                        if (photoPickerAvailable) {
+                            CellRow(stringResource(R.string.pick_from_photos_label), onClick = onPickPhotos.takeUnless { busy })
+                            androidx.compose.material3.HorizontalDivider(color = PPColor.Divider)
+                        }
                         CellRow(stringResource(R.string.pick_from_files_label), onClick = onPickFiles.takeUnless { busy })
                     }
                 }
