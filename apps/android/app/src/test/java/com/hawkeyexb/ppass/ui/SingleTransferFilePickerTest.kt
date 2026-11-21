@@ -1,6 +1,7 @@
 package com.hawkeyexb.ppass.ui
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -78,5 +79,22 @@ class SingleTransferFilePickerTest {
         assertTrue("clip 为空时必须回退到单选 data", parse.contains("ifEmpty"))
         // 反证：取消/空结果返回空表 → 上层不登记任务。
         assertTrue("空结果必须返回空表", source.readText().contains("return emptyList()"))
+    }
+
+    @Test
+    fun `visible entries merge into single files entry when dedicated photo picker is unavailable`() {
+        assertEquals(
+            listOf(SingleTransferFilePicker.Entry.PHOTOS, SingleTransferFilePicker.Entry.FILES),
+            SingleTransferFilePicker.visibleEntries(photoPickerAvailable = true),
+        )
+        assertEquals(
+            listOf(SingleTransferFilePicker.Entry.FILES),
+            SingleTransferFilePicker.visibleEntries(photoPickerAvailable = false),
+        )
+        val text = source.readText()
+        assertTrue(
+            "系统能力检测必须委托给 ActivityResultContracts.PickVisualMedia.isPhotoPickerAvailable",
+            text.contains("ActivityResultContracts.PickVisualMedia.isPhotoPickerAvailable(context)"),
+        )
     }
 }
