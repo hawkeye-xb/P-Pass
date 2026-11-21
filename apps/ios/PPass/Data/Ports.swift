@@ -58,13 +58,15 @@ protocol TimelineLiveFeed: AnyObject {
 }
 
 /// 手机相册里的一个相册（对位 Android `MediaScanner.Bucket`）。
-struct AlbumBucket: Identifiable, Equatable {
+struct AlbumBucket: Identifiable, Equatable, Sendable {
     let id: String
     /// nil = 系统没给名字（界面显示 bucket_unnamed）。
     let name: String?
     let count: Int
     /// 「最近项目」（整个图库）：iOS 上相机拍的照片只在这里，首次选范围默认勾上它（#1263，对位 Android 相机相册）。
     var isCameraAlbum = false
+    /// 相册内最新一项 `PHAsset.localIdentifier`（由 `albums()` 枚举时一次性携带，避免每张封面重复扫描全量相册，#1944）。
+    var coverAssetId: String? = nil
 }
 
 /// 手机相册：授权、相册列表、备份范围。

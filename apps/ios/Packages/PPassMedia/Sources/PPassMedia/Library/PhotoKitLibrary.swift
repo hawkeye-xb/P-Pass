@@ -28,10 +28,13 @@ public struct PhotoKitLibrary: PhotoLibraryReading {
     public func summary(ofCollection id: String) -> CollectionSummary? {
         guard let collection = Self.collection(id) else { return nil }
         let newest = PHAsset.fetchAssets(in: collection, options: Self.mediaOptions(newestFirst: true, limit: 1))
+        guard let newestId = newest.firstObject?.localIdentifier else {
+            return CollectionSummary(imageCount: 0, videoCount: 0, newestAssetId: nil)
+        }
         return CollectionSummary(
             imageCount: PHAsset.fetchAssets(in: collection, options: Self.mediaOptions(only: .image)).count,
             videoCount: PHAsset.fetchAssets(in: collection, options: Self.mediaOptions(only: .video)).count,
-            newestAssetId: newest.firstObject?.localIdentifier
+            newestAssetId: newestId
         )
     }
 

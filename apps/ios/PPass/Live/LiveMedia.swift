@@ -7,15 +7,62 @@ import UniformTypeIdentifiers
 
 /// 手机相册（PPassMedia）：授权三档、相册目录、备份范围（PPassCore `BackupScopeStore`，按电脑分文件）。
 final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
+    typealias CoverImageCompletion = @Sendable (UIImage?, [AnyHashable: Any]?) -> Void
+    typealias CoverImageRequester = @Sendable (
+        _ assetId: String,
+        _ targetSize: CGSize,
+        _ contentMode: PHImageContentMode,
+        _ options: PHImageRequestOptions,
+        _ resultHandler: @escaping CoverImageCompletion
+    ) -> PHImageRequestID?
+
     private let auth: PhotoAuthorizationProviding
-    private let catalog = AlbumCatalog(library: PhotoKitLibrary())
+    private let catalog: AlbumCatalog
     private let albumListing: (() -> [AlbumBucket])?
     private let scopeStore: () -> BackupScopeStore
+    private let requestCoverImage: CoverImageRequester
+    private let cancelCoverImage: @Sendable (PHImageRequestID) -> Void
 
-    init(scopeStore: @escaping () -> BackupScopeStore, auth: PhotoAuthorizationProviding = PhotoKitAuthorization(), albumListing: (() -> [AlbumBucket])? = nil) {
+    init(
+        scopeStore: @escaping () -> BackupScopeStore,
+        auth: PhotoAuthorizationProviding = PhotoKitAuthorization(),
+        library: any PhotoLibraryReading = PhotoKitLibrary(),
+        albumListing: (() -> [AlbumBucket])? = nil,
+        requestCoverImage: CoverImageRequester? = nil,
+        cancelCoverImage: (@Sendable (PHImageRequestID) -> Void)? = nil
+    ) {
         self.scopeStore = scopeStore
         self.auth = auth
+        self.catalog = AlbumCatalog(library: library)
         self.albumListing = albumListing
+        self.requestCoverImage = requestCoverImage ?? { assetId, targetSize, contentMode, options, resultHandler in
+            guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil).firstObject else {
+                resultHandler(nil, nil)
+                return nil
+            }
+            return PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: targetSize,
+                contentMode: contentMode,
+                options: options
+            ) { image, info in
+                resultHandler(image, info)
+            }
+        }
+        self.cancelCoverImage = cancelCoverImage ?? { requestId in
+            PHImageManager.default().cancelImageRequest(requestId)
+        }
+    }
+
+    private static let albumCatalogQueue = DispatchQueue(label: "com.ppass.ios.album-catalog", qos: .userInitiated)
+
+    /// 选备份范围封面请求配置（#1944）：只读系统本地已有的快速缩略图，绝不联网拉取 iCloud 原图。
+    static func coverRequestOptions() -> PHImageRequestOptions {
+        let options = PHImageRequestOptions()
+        options.isNetworkAccessAllowed = false
+        options.deliveryMode = .fastFormat
+        options.resizeMode = .fast
+        return options
     }
 
     /// 权限三档 → 首页表达（#336：只有完整授权才显示数字、才允许「都存好了」）。没决定过也算拿不到。
@@ -39,24 +86,58 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
     func requestAccess() async -> MediaAccess { Self.map(await auth.requestFullAccess()) }
 
     func albums() async throws -> [AlbumBucket] {
+        guard !Task.isCancelled else { return [] }
         switch auth.currentLevel() {
         case .full, .limited: break
         case .notDetermined, .denied, .restricted: return []
         }
         if let albumListing { return albumListing() }
-        return catalog.listAlbums().map { AlbumBucket(id: $0.id, name: $0.title, count: $0.count, isCameraAlbum: $0.kind == .library) }
+        let box = AsyncCatalogBox<[AlbumBucket]>(cancelledValue: [])
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<[AlbumBucket], Never>) in
+                guard box.install(continuation) else { return }
+                Self.albumCatalogQueue.async { [self] in
+                    guard !box.isCancelled else {
+                        box.complete(with: [])
+                        return
+                    }
+                    let result = self.catalog.listAlbums().map {
+                        AlbumBucket(
+                            id: $0.id,
+                            name: $0.title,
+                            count: $0.count,
+                            isCameraAlbum: $0.kind == .library,
+                            coverAssetId: $0.coverAssetId
+                        )
+                    }
+                    box.complete(with: result)
+                }
+            }
+        } onCancel: {
+            box.cancel()
+        }
     }
 
     func cover(_ album: AlbumBucket, side: CGFloat) async -> UIImage? {
-        guard let id = catalog.listAlbums().first(where: { $0.id == album.id })?.coverAssetId,
-              let asset = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject else { return nil }
-        let options = PHImageRequestOptions()
-        options.deliveryMode = .highQualityFormat
-        options.isNetworkAccessAllowed = true
+        guard let id = album.coverAssetId, !Task.isCancelled else { return nil }
+        let options = Self.coverRequestOptions()
         let scale = await UIScreen.main.scale
-        return await withCheckedContinuation { c in
-            PHImageManager.default().requestImage(for: asset, targetSize: CGSize(width: side * 1.6 * scale, height: side * scale),
-                                                  contentMode: .aspectFill, options: options) { image, _ in c.resume(returning: image) }
+        guard !Task.isCancelled else { return nil }
+        let targetSize = CGSize(width: side * 1.6 * scale, height: side * scale)
+        let box = CoverRequestBox(cancelRequest: cancelCoverImage)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<UIImage?, Never>) in
+                guard box.install(continuation) else { return }
+                let reqId = requestCoverImage(id, targetSize, .aspectFill, options) { image, info in
+                    let cancelled = (info?[PHImageCancelledKey] as? Bool) == true
+                    let hasError = info?[PHImageErrorKey] != nil
+                    let valid = (!cancelled && !hasError) ? image : nil
+                    box.complete(with: valid)
+                }
+                box.setRequestId(reqId)
+            }
+        } onCancel: {
+            box.cancel()
         }
     }
 
@@ -70,8 +151,23 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
     }
 
     func existingAlbumIds() async -> Set<String>? {
-        guard access() == .full else { return nil }
-        return Set(catalog.listAlbums().map(\.id))
+        guard !Task.isCancelled, access() == .full else { return nil }
+        let box = AsyncCatalogBox<Set<String>?>(cancelledValue: nil)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Set<String>?, Never>) in
+                guard box.install(continuation) else { return }
+                Self.albumCatalogQueue.async { [self] in
+                    guard !box.isCancelled else {
+                        box.complete(with: nil)
+                        return
+                    }
+                    let ids = Set(self.catalog.listAlbums().map(\.id))
+                    box.complete(with: ids)
+                }
+            }
+        } onCancel: {
+            box.cancel()
+        }
     }
 
     func saveScope(_ selected: Set<String>, known: Set<String>, since: BackupSince) async throws {
@@ -275,3 +371,129 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
         return out
     }
 }
+
+// MARK: - 选范围相册目录与封面并发取消盒（#1944）
+
+private final class AsyncCatalogBox<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private let cancelledValue: Value
+    private var continuation: CheckedContinuation<Value, Never>?
+    private var cancelled = false
+    private var finished = false
+
+    init(cancelledValue: Value) {
+        self.cancelledValue = cancelledValue
+    }
+
+    var isCancelled: Bool { lock.withLock { cancelled } }
+
+    func install(_ c: CheckedContinuation<Value, Never>) -> Bool {
+        let alreadyCancelled: Bool = lock.withLock {
+            if cancelled {
+                finished = true
+                return true
+            }
+            continuation = c
+            return false
+        }
+        if alreadyCancelled {
+            c.resume(returning: cancelledValue)
+            return false
+        }
+        return true
+    }
+
+    func complete(with value: Value) {
+        let c: CheckedContinuation<Value, Never>? = lock.withLock {
+            guard !finished, let cont = continuation else { return nil }
+            finished = true
+            continuation = nil
+            return cont
+        }
+        c?.resume(returning: value)
+    }
+
+    func cancel() {
+        let c: CheckedContinuation<Value, Never>? = lock.withLock {
+            cancelled = true
+            guard !finished, let cont = continuation else { return nil }
+            finished = true
+            continuation = nil
+            return cont
+        }
+        c?.resume(returning: cancelledValue)
+    }
+}
+
+private final class CoverRequestBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<UIImage?, Never>?
+    private var requestId: PHImageRequestID?
+    private var cancelled = false
+    private var finished = false
+    private let cancelRequest: @Sendable (PHImageRequestID) -> Void
+
+    init(cancelRequest: @escaping @Sendable (PHImageRequestID) -> Void) {
+        self.cancelRequest = cancelRequest
+    }
+
+    func install(_ c: CheckedContinuation<UIImage?, Never>) -> Bool {
+        let alreadyCancelled: Bool = lock.withLock {
+            if cancelled {
+                finished = true
+                return true
+            }
+            continuation = c
+            return false
+        }
+        if alreadyCancelled {
+            c.resume(returning: nil)
+            return false
+        }
+        return true
+    }
+
+    func setRequestId(_ id: PHImageRequestID?) {
+        guard let id else { return }
+        let shouldCancel: Bool = lock.withLock {
+            if cancelled {
+                return true
+            }
+            if !finished {
+                requestId = id
+            }
+            return false
+        }
+        if shouldCancel {
+            cancelRequest(id)
+        }
+    }
+
+    func complete(with image: UIImage?) {
+        let c: CheckedContinuation<UIImage?, Never>? = lock.withLock {
+            guard !finished, let cont = continuation else { return nil }
+            finished = true
+            continuation = nil
+            requestId = nil
+            return cont
+        }
+        c?.resume(returning: image)
+    }
+
+    func cancel() {
+        let (c, id): (CheckedContinuation<UIImage?, Never>?, PHImageRequestID?) = lock.withLock {
+            cancelled = true
+            let reqId = requestId
+            requestId = nil
+            guard !finished, let cont = continuation else { return (nil, reqId) }
+            finished = true
+            continuation = nil
+            return (cont, reqId)
+        }
+        if let id {
+            cancelRequest(id)
+        }
+        c?.resume(returning: nil)
+    }
+}
+
