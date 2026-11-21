@@ -16,6 +16,8 @@ final class AlbumCatalogTests: XCTestCase {
 
         XCTAssertEqual(albums.map(\.id), ["empty"])
         XCTAssertEqual(albums[0].count, 0)
+        XCTAssertEqual(albums[0].imageCount, 0)
+        XCTAssertEqual(albums[0].videoCount, 0)
         XCTAssertNil(albums[0].coverAssetId, "空相册没有封面，UI 退化为空白封面")
         XCTAssertEqual(albums[0].kind, .userAlbum)
     }

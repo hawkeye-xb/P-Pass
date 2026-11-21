@@ -330,10 +330,12 @@ struct BucketScreen: View {
         error = nil
         do {
             let list = try await app.backend.media.albums()
+            guard !Task.isCancelled else { return }
             app.refreshAccess() // 读相册时可能刚弹过系统照片权限框（时间档初值看这一档，所以要在下面之前）
             known = app.backend.media.knownAlbums()
             let saved = try app.backend.media.savedScope() // 读失败走下面的 catch（显示错误 + 重试），不当成「从未保存」
             let folderList = await app.backend.engine.folderSources()
+            guard !Task.isCancelled else { return }
             let folderIds = Set(folderList.map { FolderMediaSource.bucketId(sourceId: $0.id) })
             if hasLoaded {
                 // 已保存来源保留在编辑态（含当前不可见的）；本次未保存勾选只在能展示时保留；不写持久 scope。
@@ -355,6 +357,7 @@ struct BucketScreen: View {
             albums = list
             hasLoaded = true
         } catch {
+            guard !Task.isCancelled else { return }
             self.error = String(describing: error)
         }
     }
@@ -390,6 +393,10 @@ private struct AlbumCover: View {
             .overlay { if let image { Image(uiImage: image).resizable().scaledToFill() } }
             .clipped()
             // side = 封面高（pt），宽按 1.6 由 cover 自己算。
-            .task(id: album.id) { image = await app.backend.media.cover(album, side: 120) }
+            .task(id: "\(album.id)|\(album.coverAssetId ?? "")") {
+                let loaded = await app.backend.media.cover(album, side: 120)
+                guard !Task.isCancelled else { return }
+                image = loaded
+            }
     }
 }
