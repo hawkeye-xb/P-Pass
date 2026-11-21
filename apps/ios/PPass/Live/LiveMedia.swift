@@ -92,7 +92,7 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
         case .notDetermined, .denied, .restricted: return []
         }
         if let albumListing { return albumListing() }
-        let box = AlbumListBox()
+        let box = AsyncCatalogBox<[AlbumBucket]>(cancelledValue: [])
         return await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<[AlbumBucket], Never>) in
                 guard box.install(continuation) else { return }
@@ -151,8 +151,23 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
     }
 
     func existingAlbumIds() async -> Set<String>? {
-        guard access() == .full else { return nil }
-        return Set(catalog.listAlbums().map(\.id))
+        guard !Task.isCancelled, access() == .full else { return nil }
+        let box = AsyncCatalogBox<Set<String>?>(cancelledValue: nil)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Set<String>?, Never>) in
+                guard box.install(continuation) else { return }
+                Self.albumCatalogQueue.async { [self] in
+                    guard !box.isCancelled else {
+                        box.complete(with: nil)
+                        return
+                    }
+                    let ids = Set(self.catalog.listAlbums().map(\.id))
+                    box.complete(with: ids)
+                }
+            }
+        } onCancel: {
+            box.cancel()
+        }
     }
 
     func saveScope(_ selected: Set<String>, known: Set<String>, since: BackupSince) async throws {
@@ -359,15 +374,20 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
 
 // MARK: - 选范围相册目录与封面并发取消盒（#1944）
 
-private final class AlbumListBox: @unchecked Sendable {
+private final class AsyncCatalogBox<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
-    private var continuation: CheckedContinuation<[AlbumBucket], Never>?
+    private let cancelledValue: Value
+    private var continuation: CheckedContinuation<Value, Never>?
     private var cancelled = false
     private var finished = false
 
+    init(cancelledValue: Value) {
+        self.cancelledValue = cancelledValue
+    }
+
     var isCancelled: Bool { lock.withLock { cancelled } }
 
-    func install(_ c: CheckedContinuation<[AlbumBucket], Never>) -> Bool {
+    func install(_ c: CheckedContinuation<Value, Never>) -> Bool {
         let alreadyCancelled: Bool = lock.withLock {
             if cancelled {
                 finished = true
@@ -377,31 +397,31 @@ private final class AlbumListBox: @unchecked Sendable {
             return false
         }
         if alreadyCancelled {
-            c.resume(returning: [])
+            c.resume(returning: cancelledValue)
             return false
         }
         return true
     }
 
-    func complete(with albums: [AlbumBucket]) {
-        let c: CheckedContinuation<[AlbumBucket], Never>? = lock.withLock {
+    func complete(with value: Value) {
+        let c: CheckedContinuation<Value, Never>? = lock.withLock {
             guard !finished, let cont = continuation else { return nil }
             finished = true
             continuation = nil
             return cont
         }
-        c?.resume(returning: albums)
+        c?.resume(returning: value)
     }
 
     func cancel() {
-        let c: CheckedContinuation<[AlbumBucket], Never>? = lock.withLock {
+        let c: CheckedContinuation<Value, Never>? = lock.withLock {
             cancelled = true
             guard !finished, let cont = continuation else { return nil }
             finished = true
             continuation = nil
             return cont
         }
-        c?.resume(returning: [])
+        c?.resume(returning: cancelledValue)
     }
 }
 

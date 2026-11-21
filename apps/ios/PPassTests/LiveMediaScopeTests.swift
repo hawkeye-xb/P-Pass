@@ -28,6 +28,7 @@ final class LiveMediaScopeTests: XCTestCase {
         private let items: [(collection: LibraryCollection, summary: CollectionSummary)]
         private(set) var collectionsCalls = 0
         private(set) var summaryCalls = 0
+        private(set) var collectionsCalledOnMainThread = false
 
         init(albumCount: Int, includeEmptyAlbum: Bool = true) {
             var built: [(LibraryCollection, CollectionSummary)] = []
@@ -52,8 +53,10 @@ final class LiveMediaScopeTests: XCTestCase {
         }
 
         func collections() -> [LibraryCollection] {
-            lock.withLock {
+            let onMain = Thread.isMainThread
+            return lock.withLock {
                 collectionsCalls += 1
+                if onMain { collectionsCalledOnMainThread = true }
                 return items.map(\.collection)
             }
         }
@@ -276,5 +279,71 @@ final class LiveMediaScopeTests: XCTestCase {
         let reentryElapsed = ContinuousClock.now - reentryStart
         XCTAssertEqual(reloaded.count, 12)
         XCTAssertLessThan(reentryElapsed, .milliseconds(200), "重进页面读取相册不得被上一轮残留在途请求阻塞")
+    }
+
+    private final class BlockingPhotoLibrary: PhotoLibraryReading, @unchecked Sendable {
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        private(set) var calledOnMainThread = false
+
+        func collections() -> [LibraryCollection] {
+            calledOnMainThread = Thread.isMainThread
+            entered.signal()
+            _ = release.wait(timeout: .now() + 2.0)
+            return [LibraryCollection(id: "recents", title: "Recents", type: .smartAlbum, subtype: .smartAlbumUserLibrary)]
+        }
+
+        func summary(ofCollection id: String) -> CollectionSummary? {
+            CollectionSummary(imageCount: 1, videoCount: 0, newestAssetId: "a1")
+        }
+
+        func assetIdentifiers(inCollection id: String) -> [String]? { [] }
+        func assetIdentifiers(inCollection id: String, among assetIds: [String]) -> [String]? { [] }
+        func userAlbumIdentifiers(containing assetIds: [String]) -> [String: [String]] { [:] }
+    }
+
+    @MainActor
+    func test_existingAlbumIds_runs_on_catalog_queue_and_returns_immediately_on_cancel() async {
+        let normalLib = CountingPhotoLibrary(albumCount: 4, includeEmptyAlbum: true)
+        let normalMedia = LiveMediaLibrary(
+            scopeStore: { fatalError("本用例不读持久范围") },
+            auth: StubAuth(level: .full),
+            library: normalLib
+        )
+        let ids = await normalMedia.existingAlbumIds()
+        XCTAssertEqual(ids, ["recents", "album-1", "album-2", "album-empty"])
+        XCTAssertFalse(normalLib.collectionsCalledOnMainThread)
+
+        let blockingLib = BlockingPhotoLibrary()
+        defer { blockingLib.release.signal() }
+        let blockingMedia = LiveMediaLibrary(
+            scopeStore: { fatalError("本用例不读持久范围") },
+            auth: StubAuth(level: .full),
+            library: blockingLib
+        )
+        let task = Task { await blockingMedia.existingAlbumIds() }
+        // 在后台线程等 collections() 真正进入慢查询，不阻塞当前主线程
+        await Task.detached { _ = blockingLib.entered.wait(timeout: .now() + 1.0) }.value
+
+        let cancelStart = ContinuousClock.now
+        task.cancel()
+        let completedFast: Bool = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                let res = await task.value
+                return res == nil
+            }
+            group.addTask {
+                try? await Task.sleep(for: .milliseconds(200))
+                guard !Task.isCancelled else { return true }
+                blockingLib.release.signal()
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+        let elapsed = ContinuousClock.now - cancelStart
+        XCTAssertFalse(blockingLib.calledOnMainThread)
+        XCTAssertTrue(completedFast, "取消 existingAlbumIds() 必须立即释放等待并返回 nil，不得占住调用方等待慢速全量扫描（耗时 \(elapsed)）")
     }
 }
