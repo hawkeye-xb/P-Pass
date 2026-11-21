@@ -99,6 +99,21 @@ final class OnboardingNavigationTests: XCTestCase {
         XCTAssertTrue(source.contains("title: L.s(\"pick_from_files_label\"), action: app.decisionPickFiles"))
     }
 
+    /// #1945：决定页单次传输独立卡片使用品牌圆角 PPRadius.card、1pt PPColor.border 描边、PPDivider()、
+    /// PPUI.Layout.rowMinHeight 与 16pt 水平内边距，不再硬编码 cornerRadius: 12 或裸 Divider()。
+    /// 反证：回退 DecisionScreen.swift 到旧写法，本条判红。
+    func testDecisionSingleTransferCardFollowsDesignTokens() throws {
+        let source = try String(contentsOf: RepoPaths.root.appendingPathComponent("apps/ios/PPass/Home/DecisionScreen.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("PPRadius.card"), "决定页单次传输卡片圆角须使用 PPRadius.card")
+        XCTAssertTrue(source.contains(".strokeBorder(PPColor.border, lineWidth: 1)"), "决定页单次传输卡片须带 1pt PPColor.border 描边")
+        XCTAssertTrue(source.contains("PPDivider().padding(.leading, 16)"), "决定页单次传输卡片分割线须使用 PPDivider().padding(.leading, 16)")
+        XCTAssertTrue(source.contains("PPUI.Layout.rowMinHeight"), "决定页单次传输行高须使用 PPUI.Layout.rowMinHeight")
+        XCTAssertTrue(source.contains(".padding(.horizontal, inList ? 0 : 16)"), "决定页单次传输行须带 16pt 水平内边距")
+        XCTAssertTrue(source.contains(".buttonStyle(.plain)"), "决定页单次传输卡片须设置 .buttonStyle(.plain)")
+        XCTAssertFalse(source.contains("cornerRadius: 12"), "决定页单次传输卡片不得硬编码 cornerRadius: 12")
+        XCTAssertNil(source.range(of: #"\bDivider\(\)"#, options: .regularExpression), "决定页单次传输卡片不得使用裸 Divider()")
+    }
+
     /// 产品负责人 2026-11-04：部分照片权限下不让系统在 App 回前台 / 首次读相册时自动弹「选择更多照片」——
     /// 苹果标准做法是 Info.plist 的 PHPhotoLibraryPreventAutomaticLimitedAccessAlert = YES。反证：删掉这个键，本条红。
     func testLimitedAccessAutoAlertIsSuppressed() {

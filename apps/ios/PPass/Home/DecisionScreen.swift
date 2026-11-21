@@ -6,15 +6,24 @@ import SwiftUI
 /// 次入口是欢迎页「手动输入」同一种文字链接。
 struct SingleTransferSelectionRow: View {
     let title: String
+    var inList = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Text(title)
-                .font(PPFont.sans(PPUI.TextSize.rowLabel))
-                .foregroundStyle(PPColor.ink)
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .contentShape(Rectangle())
+            HStack(spacing: 12) {
+                Text(title)
+                    .font(PPFont.sans(PPUI.TextSize.rowLabel))
+                    .foregroundStyle(PPColor.ink)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(PPColor.ink40)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, inList ? 0 : 16)
+            .frame(maxWidth: .infinity, minHeight: inList ? nil : PPUI.Layout.rowMinHeight, alignment: .leading)
+            .contentShape(Rectangle())
         }
     }
 }
@@ -49,11 +58,17 @@ struct DecisionScreen: View {
                     VStack(spacing: 0) {
                         SingleTransferSelectionRow(title: L.s("pick_from_photos_label"), action: app.decisionPickPhotos)
                             .accessibilityIdentifier("decisionPickPhotos")
-                        Divider()
+                        PPDivider().padding(.leading, 16)
                         SingleTransferSelectionRow(title: L.s("pick_from_files_label"), action: app.decisionPickFiles)
                             .accessibilityIdentifier("decisionPickFiles")
                     }
-                    .background(PPUI.Surface.settingsCard, in: RoundedRectangle(cornerRadius: 12))
+                    .buttonStyle(.plain)
+                    .background(PPUI.Surface.settingsCard, in: RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous)
+                            .strokeBorder(PPColor.border, lineWidth: 1)
+                    )
+                    .opacity(app.decisionBusy ? 0.5 : 1)
                     .disabled(app.decisionBusy)
                     .padding(.top, 18)
                 }
