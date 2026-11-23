@@ -30,32 +30,49 @@ final class BucketAccessNoticeTests: XCTestCase {
                        "拒绝授权且 albums() 为空：一张都展示不了（编辑态相册部分由刷新清空）")
     }
 
-    /// 定稿文案中英都在（缺 key 时 bundle 返回占位值）。
-    func test_copy_exists_in_both_languages() throws {
+    /// #1961：未完整权限提示改用与 Android 共享的词条（元数据在 Localizable.strings，iOS 不再手写一份），
+    /// 旧的 `bucket_no_access_*` / `bucket_request_access_action` 已删除；来源卡类型词也走共享词条。
+    /// 反证：把 BucketScreen 或 IOS.strings 改回旧 key，本条红。
+    func test_shared_scope_copy_is_used_and_legacy_keys_are_gone() throws {
         let expected: [String: [String: String]] = [
             "en": [
-                "bucket_no_access_title": "Photos access is incomplete",
-                "bucket_no_access_body": "Photos won't be backed up automatically. Back up folders only, or send selected photos.",
-                "bucket_no_access_action": "Open Settings",
-                "bucket_request_access_action": "Allow Access",
+                "scope_album_no_access_title": "Photos access is incomplete",
+                "scope_album_no_access_body": "P-Pass can’t read photos on this phone, so it can’t back them up.",
+                "scope_album_no_access_action": "Allow access to photos",
+                "auto_backup_blocked_action": "Open settings",
+                "source_kind_album": "Album",
+                "source_kind_folder": "Folder",
                 "hero_mixed_album_incomplete": "Backing up folders · Photos access incomplete",
                 "hero_adjust_scope_action": "Adjust scope",
                 "welcome_scan": "Scan to connect to a computer",
             ],
             "zh-Hans": [
-                "bucket_no_access_title": "相册未完整授权",
-                "bucket_no_access_body": "相册不会自动备份。可以只备份文件夹，或先挑几张传。",
-                "bucket_no_access_action": "去设置",
-                "bucket_request_access_action": "允许访问",
+                "scope_album_no_access_title": "相册未完整授权",
+                "scope_album_no_access_body": "无法读取这台手机上的照片，没法备份。",
+                "scope_album_no_access_action": "允许访问照片",
+                "auto_backup_blocked_action": "去设置",
+                "source_kind_album": "相册",
+                "source_kind_folder": "文件夹",
                 "hero_mixed_album_incomplete": "文件夹备份中 · 相册未完整授权",
                 "hero_adjust_scope_action": "调整范围",
             ],
+        ]
+        let legacyKeys = [
+            "bucket_no_access_title", "bucket_no_access_body",
+            "bucket_no_access_action", "bucket_request_access_action",
         ]
         for (lang, keys) in expected {
             let path = try XCTUnwrap(Bundle.main.path(forResource: lang, ofType: "lproj"))
             let bundle = try XCTUnwrap(Bundle(path: path))
             for (key, text) in keys {
                 XCTAssertEqual(L.s(key, bundle: bundle), text, "\(lang) \(key)")
+            }
+            for key in legacyKeys {
+                let missing = "\u{1}"
+                XCTAssertEqual(bundle.localizedString(forKey: key, value: missing, table: "IOS"), missing,
+                               "\(lang) 旧词条 \(key) 必须已从 IOS.strings 删除")
+                XCTAssertEqual(bundle.localizedString(forKey: key, value: missing, table: nil), missing,
+                               "\(lang) 旧词条 \(key) 不能被任何表兜底命中")
             }
         }
     }

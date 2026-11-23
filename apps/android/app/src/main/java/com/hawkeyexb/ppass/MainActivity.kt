@@ -1874,7 +1874,7 @@ fun PPassApp() {
                             scope.launch(Dispatchers.IO) {
                                 runCatching {
                                     com.hawkeyexb.ppass.backup.folder.FolderAccess.removeFolder(context, key)
-                                }.onFailure { foldersError = R.string.folder_add_failed }
+                                }.onFailure { foldersError = R.string.command_failed }
                                 com.hawkeyexb.ppass.backup.folder.FolderAccess.changed(context)
                                 folderRevision++
                             }

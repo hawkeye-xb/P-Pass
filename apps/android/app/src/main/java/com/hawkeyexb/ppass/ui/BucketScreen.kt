@@ -231,14 +231,28 @@ private fun BucketSourceCard(
 }
 
 /**
- * #1794：相册区能不能选。没有相册权限时不给选，只在相册区显示现状与申请入口；
+ * #1794 / #1961：相册区能不能选。相册自动备份只认完整照片权限——「部分照片权限」对相册自动备份
+ * 与「无权限」没有区别（底层引擎和首页 HeroCard 在 PARTIAL 下都停止相册自动备份），所以只有 FULL
+ * 才给选相册；PARTIAL / NONE 都在顶部显示现状与开启入口。
  * 文件夹区和「添加文件夹」不受影响（对齐 iOS，范围页始终能进）。
  */
-internal fun bucketScreenOffersAlbumChoices(access: MediaAccess): Boolean = access != MediaAccess.NONE
+internal fun bucketScreenOffersAlbumChoices(access: MediaAccess): Boolean = access == MediaAccess.FULL
 
 /**
- * 整机空文案（「手机上没有照片或视频」）只在真读得到照片、且相册与文件夹都为空时成立；
- * 没有相册权限时读不到照片，不能说成整机没有照片。
+ * #1961：相册卡片显示哪些（对齐 iOS `BucketScreen.visibleAlbums` 的 #1811 不变量）。
+ * 完整授权显示全部；未完整授权只显示当前编辑态里勾着的相册（已保存的 + 本次未保存勾选的），
+ * 保证它们仍能取消；没勾的受限相册不展示，避免诱使用户误选一勾就报「自动备份已停止」。
+ */
+internal fun visibleAlbumBuckets(
+    buckets: List<MediaScanner.Bucket>,
+    checked: Set<Long>,
+    access: MediaAccess,
+): List<MediaScanner.Bucket> =
+    if (bucketScreenOffersAlbumChoices(access)) buckets else buckets.filter { it.id in checked }
+
+/**
+ * 整机空文案（「手机上没有照片或视频」）只在真读得到完整照片权限、且相册与文件夹都为空时成立；
+ * 没有完整权限（含部分权限）时读不到全部照片，不能说成整机没有照片。
  */
 internal fun bucketScreenEmptyNoticeVisible(
     bucketsEmpty: Boolean,
@@ -356,7 +370,7 @@ fun BucketScreen(
                     horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
                     verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
                 ) {
-                    // #1794：没有相册权限时相册区不给选，只说现状 + 申请入口；文件夹区照常。
+                    // #1794：没有完整相册权限时相册区不给新增选择，只说现状 + 申请入口；文件夹区照常。
                     if (!offersAlbums) {
                         item(key = "album-no-access", span = { GridItemSpan(maxLineSpan) }) {
                             AlbumNoAccessNotice(
@@ -375,22 +389,21 @@ fun BucketScreen(
                             )
                         }
                     }
-                    if (offersAlbums) {
-                        items(buckets, key = { "album:${it.id}" }) { b ->
-                            BucketSourceCard(
-                                title = b.name ?: stringResource(R.string.bucket_unnamed),
-                                bucketId = b.id,
-                                coverUri = b.coverUri,
-                                count = b.count,
-                                kind = SourceKind.ALBUM,
-                                kindLabel = stringResource(R.string.source_kind_album),
-                                selected = b.id in checked,
-                                isNew = b.id in newIds,
-                                onClick = {
-                                    checked = if (b.id in checked) checked - b.id else checked + b.id
-                                },
-                            )
-                        }
+                    // #1961：未完整授权时只剩编辑态里勾着的相册（可取消），不显示诱选受限相册。
+                    items(visibleAlbumBuckets(buckets, checked, albumAccess), key = { "album:${it.id}" }) { b ->
+                        BucketSourceCard(
+                            title = b.name ?: stringResource(R.string.bucket_unnamed),
+                            bucketId = b.id,
+                            coverUri = b.coverUri,
+                            count = b.count,
+                            kind = SourceKind.ALBUM,
+                            kindLabel = stringResource(R.string.source_kind_album),
+                            selected = b.id in checked,
+                            isNew = b.id in newIds,
+                            onClick = {
+                                checked = if (b.id in checked) checked - b.id else checked + b.id
+                            },
+                        )
                     }
                     items(folderBuckets, key = { "folder:${it.key}" }) { folder ->
                         // #1797：重新授权与移除收进标准菜单；移除仍先过确认弹窗（语义不变）。

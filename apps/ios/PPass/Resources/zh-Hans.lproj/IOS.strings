@@ -1,13 +1,6 @@
 /* iOS 独有或 Android 说法在 iOS 上不成立的文案（#315）。手写；同名 key 盖过 Localizable.strings（由 Android strings.xml 生成）。
    每条都要说清为什么 iOS 不同：见行尾注释。 */
 
-/* 选范围页：相册权限提示只针对相册，文件夹仍可添加和备份；首次点击才申请，拒绝后去设置。
-   #1811：有限授权与拒绝统一成「相册未完整授权」，同一套 UI；相册不进自动范围。 */
-"bucket_no_access_title" = "相册未完整授权";
-"bucket_no_access_body" = "相册不会自动备份。可以只备份文件夹，或先挑几张传。";
-"bucket_no_access_action" = "去设置";
-"bucket_request_access_action" = "允许访问";
-
 /* 失败通知（#981）：iOS 点通知只打开 App、不会直达系统设置，指路写 iOS 设置项名字；电池优化在 iOS 上不存在，对位的是「后台 App 刷新」。 */
 "notif_media_partial_body" = "照片权限已改为部分照片，自动备份暂时无法继续。可随时在「设置 › 隐私与安全性 › 照片 › P-Pass」改为「完全访问」。";
 "notif_media_none_body" = "照片权限已关闭，自动备份已停止。可随时在「设置 › 隐私与安全性 › 照片 › P-Pass」改为「完全访问」。";
@@ -100,6 +93,8 @@
 "folder_sources_status_wait" = "等待重新授权";
 "folder_sources_reauth" = "重新授权";
 "folder_sources_remove" = "移除";
-"folder_sources_remove_confirm_title" = "移除这个文件夹？";
+"folder_sources_remove_confirm_title" = "移除「%@」？";
 "folder_sources_remove_confirm_body" = "会停止备份这个文件夹。手机上的素材和电脑上已备份的内容都不会删除。";
 "folder_sources_add_failed" = "文件夹没添加成功，请重试。";
+"folder_sources_reauth_failed" = "重新授权没有完成，请重新选择同一个文件夹再试。";
+"folder_sources_remove_failed" = "没能移除这个文件夹，请重试。";

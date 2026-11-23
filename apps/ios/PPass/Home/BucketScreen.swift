@@ -8,6 +8,7 @@ import PPassMedia
 /// 相册未完整授权时只显示「保存过的相册」供取消，不给新增相册（#1811 评审）。
 /// 底部只有主按钮：首次「开始备份」，编辑「保存」。不显示合计张数与大小（#1263 删掉 bucket_summary；iOS 没有公开的大小接口，#1016）。
 /// 与 Android 的差别只有：标题用系统大标题导航栏；相册是异步读的，所以多了加载中 / 读取失败两种状态。
+/// #1961：未完整权限提示与来源卡片对齐 Android（actBg 权限卡、双列等高、菜单收动作、区分失败文案）。
 struct BucketScreen: View {
     let firstTime: Bool
     /// 选中的来源、保存时看到的全部来源、时间档是不是「全部」。
@@ -44,7 +45,8 @@ struct BucketScreen: View {
             .sheet(item: $reauthTarget) { target in
                 FolderPicker { url in Task { await reauthorize(target, at: url) } }
             }
-            .confirmationDialog(L.s("folder_sources_remove_confirm_title"), isPresented: Binding(
+            // #1961：移除确认改成带文件夹名的 .alert（与 Android AlertDialog 同语义），不再用底部确认表。
+            .alert(L.f("folder_sources_remove_confirm_title", removeTarget?.displayName ?? ""), isPresented: Binding(
                 get: { removeTarget != nil }, set: { if !$0 { removeTarget = nil } })) {
                 Button(L.s("folder_sources_remove"), role: .destructive) {
                     if let target = removeTarget {
@@ -124,15 +126,22 @@ struct BucketScreen: View {
     }
 
     /// 相册权限提示只针对相册；文件夹仍可添加和备份。首次点击才申请，拒绝后改去系统设置。
+    /// #1961：与首页权限卡、Android `AlbumNoAccessNotice` 同一套——actBg 圆角 16 卡、ink 标题、
+    /// ink40 正文、40pt 紧凑描边次级按钮；不再用刺眼红字标题和全宽黑底主按钮与底部主按钮打架。
     private var noAccess: some View {
         let presentation = PhotoAccessPresentation.of(PhotoKitAuthorization().currentLevel())
-        return VStack(alignment: .leading, spacing: 10) {
-            Text(L.s("bucket_no_access_title")).font(PPFont.cardTitle).foregroundStyle(PPColor.act)
-            Text(L.s("bucket_no_access_body")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(L.s("scope_album_no_access_title"))
+                .font(PPFont.sans(15, .semibold, relativeTo: .subheadline))
+                .foregroundStyle(PPColor.ink)
+            Text(L.s("scope_album_no_access_body"))
+                .font(PPFont.sans(13, relativeTo: .footnote))
+                .foregroundStyle(PPColor.ink40)
                 .fixedSize(horizontal: false, vertical: true)
             switch presentation.notice?.action {
             case .requestAccess:
-                PPButton(title: L.s("bucket_request_access_action")) {
+                noticeActionButton(L.s("scope_album_no_access_action")) {
                     Task {
                         let granted = await app.backend.media.requestAccess()
                         AppLog.log("scope: photo access after prompt=\(granted)")
@@ -141,20 +150,52 @@ struct BucketScreen: View {
                     }
                 }
                 .accessibilityIdentifier("bucketRequestAccess")
+                .padding(.top, 4)
             case .openAppSettings:
-                PPButton(title: L.s("bucket_no_access_action")) { app.openAppSettings() }
+                noticeActionButton(L.s("auto_backup_blocked_action")) { app.openAppSettings() }
                     .accessibilityIdentifier("bucketOpenSettings")
+                    .padding(.top, 4)
             case nil:
                 EmptyView()
             }
         }
-        .padding(.top, 24)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(PPColor.actBg, in: shape)
     }
 
-    /// Android BucketCard：圆角 16、paper 底、2pt 描边（选中 ink / 未选 border）；文字区内边距 12/9/12/11。
+    /// 权限卡里的紧凑次级按钮（Android OutlinedButton：40 高、圆角 14、act 40% 描边、act 字色）。
+    private func noticeActionButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(PPFont.sans(15, .bold, relativeTo: .subheadline))
+                .foregroundStyle(PPColor.act)
+                .padding(.horizontal, 20)
+                .frame(height: 40)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(PPColor.act.opacity(0.4), lineWidth: 1)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// #1961：封面左下角的来源类型角标（相册 / 文件夹），读屏读出类型词（对齐 Android SourceCard 的 kind 图标）。
+    private func kindBadge(symbol: String, label: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(PPColor.ink)
+            .padding(6)
+            .background(PPColor.paper.opacity(0.92), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .padding(8)
+            .accessibilityLabel(label)
+    }
+
+    /// Android BucketCard：圆角 16、选中 paper 底 2pt ink 描边 / 未选 linen 底 1pt border 描边；
+    /// 文字区内边距 12/9/12/11；封面左下角标相册类型。
     private func card(_ album: AlbumBucket) -> some View {
         let on = checked.contains(album.id)
-        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
         return Button {
             if on { checked.remove(album.id) } else { checked.insert(album.id) }
             Haptics.selection()
@@ -162,7 +203,8 @@ struct BucketScreen: View {
             VStack(alignment: .leading, spacing: 0) {
                 AlbumCover(album: album)
                     .overlay(alignment: .topTrailing) { SelectBadge(selected: on).padding(8) }
-                VStack(alignment: .leading, spacing: 0) {
+                    .overlay(alignment: .bottomLeading) { kindBadge(symbol: "photo.on.rectangle", label: L.s("source_kind_album")) }
+                VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(album.name ?? L.s("bucket_unnamed")).font(PPFont.sans(14.5, .semibold, relativeTo: .subheadline))
                             .foregroundStyle(PPColor.ink).lineLimit(1)
@@ -175,21 +217,19 @@ struct BucketScreen: View {
                 }
                 .padding(.init(top: 9, leading: 12, bottom: 11, trailing: 12))
             }
-            .background(PPColor.paper, in: shape)
-            .clipShape(shape)
-            .overlay(shape.strokeBorder(on ? PPColor.ink : PPColor.border, lineWidth: 2))
-            .contentShape(shape)
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(on ? [.isSelected] : [])
+        .modifier(SourceCardChrome(selected: on))
     }
 
-    /// 文件夹与相册使用同一选中外观；取消勾选只改待保存范围，重新授权和移除是独立动作。
+    /// 文件夹与相册使用同一选中外观与同一张卡高度；重新授权 / 移除收进标题行右侧的菜单
+    /// （#1961，对齐 Android SourceCard 的 overflow menu），不再让底部按钮行把双列挤得高低错落。
     private func folderCard(_ source: FolderSourceInfo) -> some View {
         let id = FolderMediaSource.bucketId(sourceId: source.id)
         let on = checked.contains(id)
-        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
-        return VStack(alignment: .leading, spacing: 0) {
+        return ZStack(alignment: .bottomTrailing) {
             Button {
                 if on { checked.remove(id) } else { checked.insert(id) }
                 Haptics.selection()
@@ -198,41 +238,53 @@ struct BucketScreen: View {
                     PPColor.linen.aspectRatio(1.6, contentMode: .fit)
                         .overlay { Image(systemName: "folder.fill").font(.system(size: 40)).foregroundStyle(PPColor.ink40) }
                         .overlay(alignment: .topTrailing) { SelectBadge(selected: on).padding(8) }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(source.displayName).font(PPFont.sans(14.5, .semibold, relativeTo: .subheadline))
-                            .foregroundStyle(PPColor.ink).lineLimit(1)
-                            .accessibilityIdentifier("folderSourceName")
-                        Text(source.available ? L.s("folder_sources_status_ok") : L.s("folder_sources_status_wait"))
-                            .font(PPFont.sans(12.5, relativeTo: .caption)).foregroundStyle(PPColor.ink40)
+                        .overlay(alignment: .bottomLeading) { kindBadge(symbol: "folder", label: L.s("source_kind_folder")) }
+                    HStack(spacing: 6) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(source.displayName).font(PPFont.sans(14.5, .semibold, relativeTo: .subheadline))
+                                .foregroundStyle(PPColor.ink).lineLimit(1)
+                                .accessibilityIdentifier("folderSourceName")
+                            Text(source.available
+                                 ? L.f("bucket_count", source.count)
+                                 : L.s("folder_sources_status_wait"))
+                                .font(PPFont.sans(12.5, relativeTo: .caption)).foregroundStyle(PPColor.ink40)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 44) // 给右下角菜单留出触控区，标题不被压住
                     }
-                    .padding(.init(top: 9, leading: 12, bottom: 8, trailing: 12))
+                    .padding(.init(top: 9, leading: 12, bottom: 11, trailing: 12))
                 }
-                .contentShape(shape)
+                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
             .buttonStyle(.plain)
             .accessibilityAddTraits(on ? [.isSelected] : [])
-            HStack(spacing: 12) {
+
+            Menu {
                 if !source.available {
                     Button(L.s("folder_sources_reauth")) { reauthTarget = source }
-                        .font(PPFont.sans(12.5, relativeTo: .caption))
                         .accessibilityIdentifier("folderSourceReauth")
                 }
-                Spacer()
-                Button(L.s("folder_sources_remove")) { removeTarget = source }
-                    .font(PPFont.sans(12.5, relativeTo: .caption)).foregroundStyle(PPColor.ink40)
+                Button(L.s("folder_sources_remove"), role: .destructive) { removeTarget = source }
                     .accessibilityIdentifier("folderSourceRemove")
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(PPColor.ink60)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
-            .padding(.horizontal, 12).padding(.bottom, 9)
-            .disabled(folderBusy)
+            .accessibilityLabel(L.s("source_more_actions"))
+            .accessibilityIdentifier("folderSourceMore")
+            .padding(.trailing, 4)
+            .padding(.bottom, 6)
         }
-        .background(PPColor.paper, in: shape)
-        .clipShape(shape)
-        .overlay(shape.strokeBorder(on ? PPColor.ink : PPColor.border, lineWidth: 2))
+        .disabled(folderBusy)
+        .modifier(SourceCardChrome(selected: on))
     }
 
+    /// 「添加文件夹」与来源卡同网格同尺寸：未选 linen 底 + 1pt border 描边，封面与底部信息区高度一致。
     private var addFolderCard: some View {
-        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
-        return Button { showingAddPicker = true } label: {
+        Button { showingAddPicker = true } label: {
             VStack(alignment: .leading, spacing: 0) {
                 PPColor.linen.aspectRatio(1.6, contentMode: .fit)
                     .overlay { Image(systemName: "plus").font(.system(size: 36, weight: .medium)).foregroundStyle(PPColor.ink40) }
@@ -240,19 +292,17 @@ struct BucketScreen: View {
                     .foregroundStyle(PPColor.ink).lineLimit(1)
                     .padding(.init(top: 9, leading: 12, bottom: 11, trailing: 12))
             }
-            .background(PPColor.paper, in: shape)
-            .clipShape(shape)
-            .overlay(shape.strokeBorder(PPColor.border, lineWidth: 2))
-            .contentShape(shape)
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(folderBusy)
         .accessibilityIdentifier("folderSourceAdd")
+        .modifier(SourceCardChrome(selected: false))
     }
 
     private func addFolder(_ url: URL) async {
         let before = Set(folders.map(\.id))
-        _ = await runFolder("folder-add", operation: {
+        _ = await runFolder("folder-add", failureKey: "folder_sources_add_failed", operation: {
             try await app.backend.engine.addFolderSource(at: url, displayName: url.lastPathComponent)
         }, apply: { updated in
             if let added = updated.first(where: { !before.contains($0.id) }) {
@@ -262,17 +312,21 @@ struct BucketScreen: View {
     }
 
     private func reauthorize(_ target: FolderSourceInfo, at url: URL) async {
-        _ = await runFolder("folder-reauth") { try await app.backend.engine.reauthorizeFolderSource(id: target.id, at: url) }
+        _ = await runFolder("folder-reauth", failureKey: "folder_sources_reauth_failed") {
+            try await app.backend.engine.reauthorizeFolderSource(id: target.id, at: url)
+        }
     }
 
     private func remove(_ target: FolderSourceInfo) async {
-        _ = await runFolder("folder-remove", operation: { try app.backend.engine.removeFolderSource(id: target.id) }, apply: { _ in
+        _ = await runFolder("folder-remove", failureKey: "folder_sources_remove_failed",
+                            operation: { try app.backend.engine.removeFolderSource(id: target.id) }, apply: { _ in
             checked.remove(FolderMediaSource.bucketId(sourceId: target.id))
         })
     }
 
+    /// #1961：失败提示按操作区分（添加 / 重新授权 / 移除），不再一律说「文件夹没添加成功」。
     @discardableResult
-    private func runFolder(_ what: String, operation: () async throws -> Void,
+    private func runFolder(_ what: String, failureKey: String, operation: () async throws -> Void,
                            apply: ([FolderSourceInfo]) -> Void = { _ in }) async -> Bool {
         guard !folderBusy else { return false }
         folderBusy = true
@@ -282,7 +336,7 @@ struct BucketScreen: View {
             AppLog.log("\(what): ok")
         } catch {
             AppLog.log("\(what): failed: \(error)")
-            app.notice = UserNotice(message: L.s("folder_sources_add_failed"))
+            app.notice = UserNotice(message: L.s(failureKey))
             return false
         }
         let updated = await app.backend.engine.folderSources()
@@ -358,8 +412,23 @@ struct BucketScreen: View {
             hasLoaded = true
         } catch {
             guard !Task.isCancelled else { return }
-            self.error = String(describing: error)
+            AppLog.log("scope: load failed: \(error)")
+            self.error = L.s("command_failed")
         }
+    }
+}
+
+/// 双列来源卡的统一外壳（对齐 Android SourceCard）：圆角 16；选中 paper 底 + 2pt ink 描边，
+/// 未选 linen 底 + 1pt border 描边。
+private struct SourceCardChrome: ViewModifier {
+    let selected: Bool
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        return content
+            .background(selected ? PPColor.paper : PPColor.linen, in: shape)
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(selected ? PPColor.ink : PPColor.border, lineWidth: selected ? 2 : 1))
     }
 }
 

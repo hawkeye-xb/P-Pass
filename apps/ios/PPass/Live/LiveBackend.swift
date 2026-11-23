@@ -5,6 +5,7 @@ import PPassCore
 import PPassMedia
 import PPassTransport
 import UIKit
+import UniformTypeIdentifiers
 
 /// 真实现的总装（#925）：存储根 → 身份 → 控制面 → 配对 → 相册 → Flow 引擎（+ 前台追赶 / 后台尽力而为 #340）。
 /// 端口的实现都在 Live/ 里，引擎与账本在 PPassCore，PhotoKit 在 PPassMedia，字节与 BLAKE3 在传输 FFI。
@@ -428,13 +429,53 @@ final class LiveBackend: @unchecked Sendable {
     }
 
     /// 二级页一行：注册表记录 + 此刻可达性（探测失败一律 false = 等待重新授权，不误报可用）。
+    /// #1961：可用时顺带数出目录里的图片 / 视频张数，供范围页卡片展示「N 张」；不可用记 0。
     func folderSourceInfos() async -> [FolderSourceInfo] {
         var out: [FolderSourceInfo] = []
         for record in folders.allRecords() {
             let available = await Self.folderSourceAvailable(record: record, registry: folders, logger: logger)
-            out.append(FolderSourceInfo(id: record.id, displayName: record.displayName, available: available))
+            let count = available ? await Self.folderMediaCount(record: record, registry: folders, logger: logger) : 0
+            out.append(FolderSourceInfo(id: record.id, displayName: record.displayName, available: available, count: count))
         }
         return out
+    }
+
+    /// #1961：范围页文件夹卡片上的「N 张」——授权作用域内递归数图片 / 视频，过滤口径与
+    /// `FolderMediaSource.walk` 一致（跳过符号链接，只数 UTI 为图片或影片的普通文件）。
+    /// 只数不建映射、不排序；不可达 / 枚举失败返回 0（卡片同时显示「等待重新授权」，不编数字）。
+    static func folderMediaCount(record: FolderRecord, registry: FolderRegistry, logger: CoreLogger) async -> Int {
+        let root: FolderRoot
+        do {
+            root = try FolderBookmarks.resolve(record, registry: registry, logger: logger)
+        } catch {
+            return 0
+        }
+        do {
+            return try await FolderBookmarks.withScope(root.url) { url in
+                var total = 0
+                guard let enumerator = FileManager.default.enumerator(
+                    at: url,
+                    includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+                    options: [],
+                    errorHandler: { item, error in
+                        logger.log("folder \(record.id): count enumeration failed at \(LogRedact.id(item.lastPathComponent)): \(error.localizedDescription)")
+                        return false
+                    })
+                else { return 0 }
+                for case let file as URL in enumerator {
+                    let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                    if values?.isSymbolicLink == true { continue }
+                    guard values?.isRegularFile == true else { continue }
+                    let uti = UTType(filenameExtension: file.pathExtension)
+                    guard let uti, uti.conforms(to: .image) || uti.conforms(to: .movie) || uti.conforms(to: .video) else { continue }
+                    total += 1
+                }
+                return total
+            }
+        } catch {
+            logger.log("folder \(record.id): count failed: \(error.localizedDescription)")
+            return 0
+        }
     }
 
     /// 可达性探测：书签可解析且根目录此刻可达。只读；stale 重建沿用 resolve 的既有口径（在当前授权内原子换）。

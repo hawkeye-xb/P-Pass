@@ -233,15 +233,17 @@ class BackupScopeTimeTest {
         assertEquals(ScopeTime.ALL, initialScopeTime(saved = true, sinceSec = null, partialAccess = true))
     }
 
-    // ── 首次默认勾上相机相册 ────────────────────────────────────
+    // ── #1811 / #1961：首次默认一个都不勾 ────────────────────────
 
+    // 产品负责人 2026-11-17 定案（#1811）：首次加载不自动预选相机相册，由用户显式勾选来源。
+    // 旧断言曾要求首次勾上相机相册（firstTime -> cameraBucketIds），#1961 按定案改成空集。
     @Test
-    fun first_time_selects_the_camera_album_by_default() {
-        assertEquals(setOf(11L), initialSelection(saved = null, firstTime = true, cameraBucketIds = setOf(11L)))
-        assertEquals("识别不到相机相册就不勾，退回原行为", emptySet<Long>(), initialSelection(null, firstTime = true, cameraBucketIds = emptySet()))
+    fun first_time_selects_nothing_by_default() {
+        assertEquals(emptySet<Long>(), initialSelection(saved = null, firstTime = true, cameraBucketIds = setOf(11L)))
+        assertEquals("识别不到相机相册同样不勾", emptySet<Long>(), initialSelection(null, firstTime = true, cameraBucketIds = emptySet()))
         assertEquals("存过范围就用存下的", setOf(3L), initialSelection(setOf(3L), firstTime = true, cameraBucketIds = setOf(11L)))
         assertEquals("存过空集也照样用（用户自己取消的）", emptySet<Long>(), initialSelection(emptySet(), firstTime = true, cameraBucketIds = setOf(11L)))
-        assertEquals("设置里进来、从没存过：原行为一个都不勾", emptySet<Long>(), initialSelection(null, firstTime = false, cameraBucketIds = setOf(11L)))
+        assertEquals("设置里进来、从没存过：同样一个都不勾", emptySet<Long>(), initialSelection(null, firstTime = false, cameraBucketIds = setOf(11L)))
     }
 
     @Test

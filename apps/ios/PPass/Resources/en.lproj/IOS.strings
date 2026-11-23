@@ -8,13 +8,6 @@
 "notif_background_refresh_off_body" = "Backup now runs only while P-Pass is open. You can turn it back on in Settings › General › Background App Refresh.";
 "notif_background_refresh_restricted_body" = "This iPhone restricts Background App Refresh for P-Pass (possibly Screen Time or device management). Backup now runs only while P-Pass is open.";
 
-/* Scope page: photo access is only needed for system albums. Folder backup remains available; ask only after the user taps.
-   #1811: limited and denied access share one "photos access incomplete" state; albums are not auto-backup sources. */
-"bucket_no_access_title" = "Photos access is incomplete";
-"bucket_no_access_body" = "Photos won't be backed up automatically. Back up folders only, or send selected photos.";
-"bucket_no_access_action" = "Open Settings";
-"bucket_request_access_action" = "Allow Access";
-
 /* Simulator and devices without a camera. */
 "scan_camera_unavailable" = "Camera unavailable. Enter the pairing code to connect.";
 
@@ -98,6 +91,8 @@
 "folder_sources_status_wait" = "Re-authorization needed";
 "folder_sources_reauth" = "Re-authorize";
 "folder_sources_remove" = "Remove";
-"folder_sources_remove_confirm_title" = "Remove this folder?";
+"folder_sources_remove_confirm_title" = "Remove \"%@\"?";
 "folder_sources_remove_confirm_body" = "P-Pass will stop backing up this folder. Nothing on this phone or already backed up on your computer will be deleted.";
 "folder_sources_add_failed" = "Couldn't add the folder. Try again.";
+"folder_sources_reauth_failed" = "Re-authorize didn't finish. Pick the same folder and try again.";
+"folder_sources_remove_failed" = "Couldn't remove the folder. Try again.";
