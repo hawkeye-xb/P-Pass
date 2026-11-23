@@ -264,6 +264,74 @@ final class FolderMediaSourceTests: XCTestCase {
         let opaque = registry.opaqueId(sourceId: sourceId, relativePath: rel)
         return "folder:\(sourceId!):\(opaque)"
     }
+
+    // MARK: - #1937 热路径单次轻量计数
+
+    // 大于单页阈值（500）的目录：一次枚举数完，不生成 opaque 映射、不排序。
+    // 反证：把 inScopeCount 改回分页调 inScope，每页都会全量枚举（日志出现多条 "scan ok"），断言红。
+    func testInScopeCountSinglePassCountsLargeDirectoryWithoutWritingMapping() async throws {
+        for n in 0..<520 { try put("bulk/\(n).jpg", content: "jpeg-\(n)") }
+        let logs = RecordingLogger()
+        let bucket = FolderMediaSource.bucketId(sourceId: sourceId)
+        let scoped = FolderMediaSource(registry: registry, sourceId: sourceId, directory: dir, logger: logs,
+                                       scope: { ([bucket], [bucket], BackupSince.all) })
+        let count = try await scoped.inScopeCount()
+        XCTAssertEqual(count, 520, "超过单页 500 也要一次数全")
+        XCTAssertTrue(registry.record(id: sourceId)!.items.isEmpty, "只数数量，不生成 opaque 映射")
+        XCTAssertEqual(logs.all.filter { $0.contains("count ok") }.count, 1, "只数一次")
+        XCTAssertTrue(logs.all.filter { $0.contains("scan ok") }.isEmpty, "不得退回分页 inScope 的全量对账扫描")
+    }
+
+    // since != .all 时单次枚举并按拍摄时间（缺失回退修改时间）过滤计数，同样不写映射。
+    func testInScopeCountAppliesSinceFilterInSinglePass() async throws {
+        let start: Int64 = 1_800_000_000_000
+        for n in 0..<3 {
+            try put("old/\(n).jpg", content: "old-\(n)", modifiedAt: Date(timeIntervalSince1970: Double(start) / 1000 - 1))
+        }
+        for n in 0..<3 {
+            try put("new/\(n).jpg", content: "new-\(n)", modifiedAt: Date(timeIntervalSince1970: Double(start) / 1000))
+        }
+        let logs = RecordingLogger()
+        let bucket = FolderMediaSource.bucketId(sourceId: sourceId)
+        let scoped = FolderMediaSource(registry: registry, sourceId: sourceId, directory: dir, logger: logs,
+                                       scope: { ([bucket], [bucket], BackupSince.since(ms: start)) })
+        let count = try await scoped.inScopeCount()
+        XCTAssertEqual(count, 3, "起点之前的修改时间排除，起点当天包含")
+        XCTAssertEqual(logs.all.filter { $0.contains("count ok") }.count, 1)
+        XCTAssertTrue(registry.record(id: sourceId)!.items.isEmpty, "since 过滤计数同样不写映射")
+    }
+
+    // 取消勾选的目录不枚举、计数为 0（与 inScope 同一份选中判定）。
+    func testInScopeCountSkipsUncheckedFolder() async throws {
+        try put("a.jpg")
+        var record = registry.record(id: sourceId)!
+        record.bookmark = Data("broken".utf8) // 书签损坏也不能被读到：未选中直接返回 0
+        XCTAssertTrue(registry.upsert(record))
+        let bucket = FolderMediaSource.bucketId(sourceId: sourceId)
+        let scoped = FolderMediaSource(registry: registry, sourceId: sourceId, directory: dir, logger: logger,
+                                       scope: { ([], [bucket], BackupSince.all) })
+        let count = try await scoped.inScopeCount()
+        XCTAssertEqual(count, 0)
+    }
+
+    // LiveBackend 热路径入口：大目录总数准确，且同样只枚举一次。
+    func testBackendFolderInScopeCountUsesSinglePassForLargeDirectory() async throws {
+        for n in 0..<520 { try put("bulk/\(n).jpg", content: "jpeg-\(n)") }
+        let logs = RecordingLogger()
+        let bucket = FolderMediaSource.bucketId(sourceId: sourceId)
+        let total = await LiveBackend.folderInScopeCount(selected: [bucket], since: .all, known: [bucket],
+                                                         registry: registry, directory: dir, logger: logs)
+        XCTAssertEqual(total, 520)
+        XCTAssertTrue(registry.record(id: sourceId)!.items.isEmpty, "计数不改写映射表")
+        XCTAssertTrue(logs.all.filter { $0.contains("scan ok") }.isEmpty, "不得退回分页 inScope 的全量对账扫描")
+    }
+}
+
+private final class RecordingLogger: CoreLogger, @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [String] = []
+    func log(_ message: String) { lock.lock(); entries.append(message); lock.unlock() }
+    var all: [String] { lock.lock(); defer { lock.unlock() }; return entries }
 }
 
 private final class FolderTestBox<T>: @unchecked Sendable {

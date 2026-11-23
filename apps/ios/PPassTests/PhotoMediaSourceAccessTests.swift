@@ -391,4 +391,45 @@ final class PhotoMediaSourceAccessTests: XCTestCase {
             XCTAssertNil(total, "含相册且照片未完整授权（\(level)）时仍应返回 nil")
         }
     }
+
+    /// #1937：不覆盖 `accessDecided` / `absenceTrusted`，只注入授权实现，验证生产默认闭包本身走 `canReadPhotoKit`。
+    /// 反证：把默认 `accessDecided` 改回 `currentLevel() != .notDetermined`，.denied / .restricted 会碰 inbox 抛错/记调用，
+    /// `history.calls` 不为 0，本用例红。
+    func testDefaultAccessClosuresReadInjectedAuthorizationAndKeepMixedFolderScanning() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("media-default-auth-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        for level in [PhotoAccessLevel.notDetermined, .denied, .restricted] {
+            let history = RecordingHistory()
+            let inbox = try Inbox(path: dir.appendingPathComponent("inbox-\(level.rawValue).db").path, history: history)
+            let folderDir = dir.appendingPathComponent("folder-\(level.rawValue)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folderDir, withIntermediateDirectories: true)
+            try Data([0xFF, 0xD8, 0xFF, 0xD9]).write(to: folderDir.appendingPathComponent("shot.jpg"))
+            let registryDir = dir.appendingPathComponent("reg-\(level.rawValue)", isDirectory: true)
+            try FileManager.default.createDirectory(at: registryDir, withIntermediateDirectories: true)
+            let registry = FolderRegistry(directory: registryDir, logger: NoopLogger())
+            let sourceId = try registry.addFolder(at: folderDir, displayName: "Samples")
+            let folderBucket = FolderMediaSource.bucketId(sourceId: sourceId)
+
+            // 只给 auth，不传 accessDecided / absenceTrusted：走 PhotoMediaSource 的生产默认闭包。
+            let photo = PhotoMediaSource(selected: { ["album-1", folderBucket] }, since: { .all }, inbox: inbox,
+                                         auth: FakeAuthorization(level), log: { _ in })
+            let folder = FolderMediaSource(registry: registry, sourceId: sourceId, directory: registryDir,
+                                           logger: NoopLogger(),
+                                           scope: { (["album-1", folderBucket], ["album-1", folderBucket], BackupSince.all) })
+            let composite = CompositeMediaSource(library: photo, others: [folder])
+
+            let pos = try await composite.currentPosition()
+            XCTAssertEqual(Inbox.seq(fromPosition: pos.raw), 0, "\(level)：默认闭包判定不可读，不读变更令牌")
+            let changed = try await composite.changes(after: pos, limit: 10)
+            XCTAssertEqual(changed, [], "\(level)：PhotoKit 增量不抛错且为空")
+            let scanned = try await composite.inScope(after: nil, limit: 10)
+            XCTAssertEqual(scanned.count, 1, "\(level)：混合范围的文件夹条目仍正常扫描")
+            XCTAssertTrue(scanned[0].mediaId.hasPrefix("folder:\(sourceId):"))
+            let existing = try await photo.existingIds(["photo:1"])
+            XCTAssertNil(existing, "\(level)：默认 absenceTrusted 只认完整授权，缺席不可信")
+            XCTAssertEqual(history.calls, 0, "\(level)：默认闭包不得触碰 PhotoKit inbox")
+        }
+    }
 }

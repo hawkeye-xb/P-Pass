@@ -224,6 +224,9 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
 /// 发现走收件箱（PPassMedia `Inbox`，refs #958）：G 是收件箱序号的编码（`Inbox.position(of:)`），逐张推进，对齐 Android 的
 /// `(GENERATION_MODIFIED, _id)`。收件箱进箱不看范围；范围与「照片还在不在」在这里取件时过滤（MediaSource 契约：只返回范围内）。
 final class PhotoMediaSource: MediaSource, @unchecked Sendable {
+    /// 授权注入点（#1937）：沿用 PPassMedia 既有协议 ``PhotoAuthorizationProviding``，只在本类里给「照片库授权」
+    /// 一个语义化名字，不另造一份重复协议；测试注入 FakeAuthorization 即可验证生产默认 `accessDecided` 闭包。
+    typealias PhotoKitAuthorizing = PhotoAuthorizationProviding
     private let selected: @Sendable () -> Set<String>
     private let since: @Sendable () -> BackupSince
     /// 系统问过照片权限没有（#1259）。没问过时不碰 PhotoKit：App 第一次用 PhotoKit 取资源 / 读变更令牌，系统会自动弹授权框；
@@ -247,13 +250,14 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     }
 
     init(selected: @escaping @Sendable () -> Set<String>, since: @escaping @Sendable () -> BackupSince, inbox: Inbox,
-         accessDecided: @escaping @Sendable () -> Bool = { PhotoMediaSource.canReadPhotoKit(PhotoKitAuthorization().currentLevel()) },
-         absenceTrusted: @escaping @Sendable () -> Bool = { PhotoKitAuthorization().currentLevel() == .full },
+         auth: PhotoKitAuthorizing = PhotoKitAuthorization(),
+         accessDecided: (@Sendable () -> Bool)? = nil,
+         absenceTrusted: (@Sendable () -> Bool)? = nil,
          log: @escaping @Sendable (String) -> Void) {
         self.selected = selected
         self.since = since
-        self.accessDecided = accessDecided
-        self.absenceTrusted = absenceTrusted
+        self.accessDecided = accessDecided ?? { PhotoMediaSource.canReadPhotoKit(auth.currentLevel()) }
+        self.absenceTrusted = absenceTrusted ?? { auth.currentLevel() == .full }
         self.inbox = inbox
         self.log = log
     }
