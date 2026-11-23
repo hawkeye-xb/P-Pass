@@ -200,7 +200,10 @@ final class LocalSourceFirstTests: XCTestCase {
                 let body = #"{"jpeg_base64":"\#(remoteJpeg.base64EncodedString())","placeholder":false}"#
                 return try ProtoJSON.encode(Resp(id: "1", ok: true, result: try JSONValue.parse(Data(body.utf8))))
             case Methods.assetBlobTicket:
-                let body = #"{"ticket":"remote-ticket"}"#
+                // #1940：票据回带请求里的内容哈希，让 fetchBlob 桩能返回与任意条目匹配的哈希（照片/视频通用）。
+                let object = (try? JSONSerialization.jsonObject(with: paramsJSON)) as? [String: Any]
+                let requestedHash = (object?["hash"] as? String) ?? ""
+                let body = #"{"ticket":"\#(requestedHash)"}"#
                 return try ProtoJSON.encode(Resp(id: "1", ok: true, result: try JSONValue.parse(Data(body.utf8))))
             default:
                 throw LiveTimeline.Failure.notPaired
@@ -478,8 +481,8 @@ final class LocalSourceFirstTests: XCTestCase {
         let timeline = LiveTimeline(
             client: { ProtoClient(transport: remoteSpy) },
             myNodeId: { "me" },
-            fetchBlob: { [photoHash] ticket, dest, progress in
-                try await remoteSpy.fetchBlob(hash: photoHash, ticket: ticket, dest: dest, progress: progress)
+            fetchBlob: { ticket, dest, progress in
+                try await remoteSpy.fetchBlob(hash: ticket, ticket: ticket, dest: dest, progress: progress)
             },
             logger: logs,
             localOriginals: LocalFirstOriginals(reader: reader, loadIndex: { index })
@@ -488,6 +491,13 @@ final class LocalSourceFirstTests: XCTestCase {
         _ = try await timeline.thumbnail(item(hash: photoHash, isMine: true), large: false)
         let url = try await timeline.original(item(hash: photoHash, isMine: true), progress: { _ in })
         LiveTimeline.discardShared(url)
+
+        // #1940：目录源视频同样强制回退远端，覆盖视频上行路径也不带 folder mediaId / 本地路径。
+        // 视频走远端 original 需要正数 bytes（与 fake fetchBlob 写出的字节数一致），否则会被 unknownSize 提前挡下。
+        let videoItem = item(hash: videoHash, isVideo: true, bytes: Int64(remoteJpeg.count), isMine: true)
+        _ = try await timeline.thumbnail(videoItem, large: false)
+        let videoURL = try await timeline.original(videoItem, progress: { _ in })
+        XCTAssertEqual(try Data(contentsOf: videoURL), remoteJpeg, "视频同走远端回退且拿回内容")
 
         let allWire = remoteSpy.wirePayloads.joined(separator: "\n")
         XCTAssertFalse(allWire.contains(secretMediaId), "PHAsset localIdentifier 绝不能出现在上行报文里")
@@ -646,6 +656,143 @@ final class LocalSourceFirstTests: XCTestCase {
         XCTAssertEqual(edited.version, "5:adj:\(digest)")
         XCTAssertFalse(edited.degraded)
     }
+
+    // MARK: - ⑤ (#1940) 缓存代次隔离 / 并发 .part 隔离 / 无 bytes 本机视频落 shareDir / 单调时钟回拨
+
+    /// 缩略图异步读取途中清空内存缓存：返回给调用方的图照常可用，但不得回填被清空过的 NSCache。
+    /// 反证：去掉 `storeIfCurrentGeneration` 的代次核对、无条件 `cache.setObject`，第二次调用直接命中旧缓存，
+    /// 本机读取次数停在 1，本用例红。
+    func test_clear_memory_cache_during_thumbnail_load_does_not_repopulate_stale_cache() async throws {
+        let remoteJpeg = try makeJpeg(width: 16, height: 16)
+        let remoteSpy = RemoteSpy(remoteJpeg: remoteJpeg, remoteBlob: remoteJpeg)
+        let gate = AsyncGate()
+        let localImage = try XCTUnwrap(UIImage(data: makeJpeg(width: 40, height: 30, color: .systemGreen)))
+        let reader = GatedThumbReader(gate: gate, image: localImage)
+        let index = LocalSourceIndex.of(try seedOrders([
+            (mediaId: photoMediaId, hash: photoHash, state: .confirmed, sourceMissing: false, sourceVersion: photoVersion),
+        ]))
+        let timeline = LiveTimeline(
+            client: { ProtoClient(transport: remoteSpy) },
+            myNodeId: { "me" },
+            fetchBlob: { ticket, dest, progress in
+                try await remoteSpy.fetchBlob(hash: ticket, ticket: ticket, dest: dest, progress: progress)
+            },
+            logger: LogCapture(),
+            localOriginals: LocalFirstOriginals(reader: reader, loadIndex: { index })
+        )
+        let target = item(hash: photoHash, isMine: true)
+
+        let task = Task { try await timeline.thumbnail(target, large: false) }
+        await gate.waitEntered()      // 已进入本机读取，尚未返回
+        timeline.clearMemoryCache()   // 读取途中清空缓存并推进代次
+        await gate.release()
+
+        let first = try await task.value
+        XCTAssertEqual(first.size, localImage.size, "清空缓存不影响本次调用方拿到结果")
+
+        _ = try await timeline.thumbnail(target, large: false)
+        XCTAssertEqual(reader.thumbCalls, 2, "旧读取结果不得回填已清空的缓存，第二次必须重新走本机读取")
+        XCTAssertEqual(remoteSpy.thumbCalls, 0, "两条路径都命中本机，远端 thumb.get 必须为 0")
+    }
+
+    /// 同一视频两个并发 `original` 请求：各自的 `.part` 暂存必须同时存在、互不删除，两路均成功返回。
+    /// 反证：暂存文件改回以 `item.id` 开头，第二路的 `completeCached(hasPrefix:)` 会删掉第一路仍在写入的 `.part`，
+    /// 两路只剩一份暂存，`parts.count` 变 1，本用例红。
+    func test_concurrent_original_for_same_video_keeps_both_inflight_parts() async throws {
+        let remoteJpeg = try makeJpeg(width: 16, height: 16)
+        let videoBytes = makeTinyMovHeader(extraBytes: 64)
+        let remoteSpy = RemoteSpy(remoteJpeg: remoteJpeg, remoteBlob: videoBytes)
+        let gate = StagedFetchGate()
+
+        let timeline = LiveTimeline(
+            client: { ProtoClient(transport: remoteSpy) },
+            myNodeId: { "me" },
+            fetchBlob: { [videoHash] _, dest, progress in
+                try videoBytes.write(to: dest) // 各自写进独立的 inflight-*.part
+                _ = await gate.arrive()        // 写完先停住，让两路暂存同时在盘
+                progress(UInt64(videoBytes.count))
+                return videoHash
+            },
+            logger: LogCapture(),
+            freeBytes: { Int64.max },
+            localOriginals: nil
+        )
+        let target = item(hash: videoHash, isVideo: true, bytes: Int64(videoBytes.count), isMine: false)
+
+        let first = Task { try await timeline.original(target, progress: { _ in }) }
+        await gate.waitFirstWritten()      // 第一路已写出暂存并挂起
+        let second = Task { try await timeline.original(target, progress: { _ in }) }
+        await gate.waitBothWritten()       // 第二路写出暂存，两路同时在途
+
+        let parts = ((try? FileManager.default.contentsOfDirectory(at: LiveTimeline.videoCacheDir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "part" }
+        XCTAssertEqual(parts.count, 2, "两个并发请求各自的 .part 暂存必须同时存在，不能被对方误删")
+        XCTAssertEqual(Set(parts.map(\.lastPathComponent)).count, 2, "两路暂存文件名必须互不相同")
+
+        await gate.release(0)
+        let url1 = try await first.value
+        await gate.release(1)
+        let url2 = try await second.value
+
+        XCTAssertEqual(try Data(contentsOf: url1), videoBytes, "第一路成功返回")
+        XCTAssertEqual(try Data(contentsOf: url2), videoBytes, "第二路成功返回")
+        XCTAssertEqual(remoteSpy.fetchBlobCalls, 0, "自定义 fetchBlob 桩，未走 spy")
+        let leftovers = ((try? FileManager.default.contentsOfDirectory(at: LiveTimeline.videoCacheDir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "part" }
+        XCTAssertTrue(leftovers.isEmpty, "完成后不留 .part 暂存")
+    }
+
+    /// 本机视频没有正数 `bytes`：落即用即清的 `shareDir`，且下一次调用不会把它当缓存残留误删报错。
+    /// 反证：本机视频一律落 `videoCacheDir` 时，第二次 `completeCached(item, in:)` 因 `bytes == nil` 把文件当残留删掉，
+    /// 随后本机文件已不在、远端又因 `unknownSize` 抛错，本用例红。
+    func test_local_video_without_bytes_lands_in_share_dir_and_survives_next_call() async throws {
+        let remoteJpeg = try makeJpeg(width: 16, height: 16)
+        let videoBytes = makeTinyMovHeader(extraBytes: 64)
+        let remoteSpy = RemoteSpy(remoteJpeg: remoteJpeg, remoteBlob: videoBytes)
+        let reader = FakeLocalReader(copyBytes: videoBytes)
+        let index = LocalSourceIndex.of(try seedOrders([
+            (mediaId: "VIDEO-LOCAL-ID/L0/002", hash: videoHash, state: .confirmed, sourceMissing: false, sourceVersion: videoVersion),
+        ]))
+        let timeline = LiveTimeline(
+            client: { ProtoClient(transport: remoteSpy) },
+            myNodeId: { "me" },
+            fetchBlob: { ticket, dest, progress in
+                try await remoteSpy.fetchBlob(hash: ticket, ticket: ticket, dest: dest, progress: progress)
+            },
+            logger: LogCapture(),
+            freeBytes: { 0 }, // 远端视频下载会被 noRoom 挡住，本机命中则不经远端预检
+            localOriginals: LocalFirstOriginals(reader: reader, loadIndex: { index })
+        )
+        let target = item(hash: videoHash, isVideo: true, bytes: nil, isMine: true)
+
+        let url1 = try await timeline.original(target, progress: { _ in })
+        XCTAssertEqual(url1.deletingLastPathComponent().standardizedFileURL.path,
+                       LiveTimeline.shareDir.standardizedFileURL.path,
+                       "无正数 bytes 的本机视频必须落 shareDir，不长期占视频缓存")
+        XCTAssertEqual(try Data(contentsOf: url1), videoBytes)
+        XCTAssertEqual(url1.pathExtension, "mov")
+
+        let url2 = try await timeline.original(target, progress: { _ in })
+        XCTAssertEqual(try Data(contentsOf: url2), videoBytes, "第二次调用照常命中本机，不被误清报错")
+        XCTAssertEqual(remoteSpy.ticketCalls, 0, "本机命中，不问电脑要票据")
+        XCTAssertEqual(remoteSpy.fetchBlobCalls, 0, "本机命中，不走远端下载")
+    }
+
+    /// 注入时钟发生回拨时 `localIndexReloadDue` 必须判到期，避免索引卡死不再刷新；默认时钟用单调时钟能正常加载。
+    func test_reload_due_when_clock_rewinds_and_default_monotonic_clock_loads() throws {
+        XCTAssertTrue(localIndexReloadDue(nowMs: 500, loadedAtMs: 1_000, hasEntries: true), "时钟回拨必须判到期")
+        XCTAssertTrue(localIndexReloadDue(nowMs: 0, loadedAtMs: 1_000, hasEntries: false), "空索引回拨同样判到期")
+
+        var loads = 0
+        let rows = try seedOrders([
+            (mediaId: photoMediaId, hash: photoHash, state: .confirmed, sourceMissing: false, sourceVersion: photoVersion),
+        ])
+        // 不传 clock → 走默认单调时钟；连续两次在 60s 窗口内只读一次。
+        let originals = LocalFirstOriginals(reader: FakeLocalReader(), loadIndex: { loads += 1; return LocalSourceIndex.of(rows) })
+        XCTAssertNotNil(originals.currentIndex().find(photoHash), "默认单调时钟能正常加载索引")
+        _ = originals.currentIndex()
+        XCTAssertEqual(loads, 1, "默认单调时钟下，60s 窗口内非空索引只读一次")
+    }
 }
 
 /// #1937 测试用：让「本机读取在进行中」与「外部取消」两件事有确定的先后顺序。
@@ -706,5 +853,69 @@ private final class OnceFlag: @unchecked Sendable {
         guard !done else { return false }
         done = true
         return true
+    }
+}
+
+/// #1940：本机缩略图读入后停住，等测试在读取途中清空缓存，再返回一张真实图片。
+private final class GatedThumbReader: LocalOriginalReading, @unchecked Sendable {
+    private let gate: AsyncGate
+    private let image: UIImage
+    private let lock = NSLock()
+    private var _thumbCalls = 0
+
+    init(gate: AsyncGate, image: UIImage) {
+        self.gate = gate
+        self.image = image
+    }
+
+    var thumbCalls: Int { lock.lock(); defer { lock.unlock() }; return _thumbCalls }
+
+    func thumb(mediaId: String, sourceVersion: String, isVideo: Bool, maxPx: Int) async -> UIImage? {
+        lock.lock(); _thumbCalls += 1; lock.unlock()
+        await gate.enter()
+        return image
+    }
+
+    func copy(mediaId: String, sourceVersion: String, isVideo: Bool, dest: URL,
+              progress: @escaping @Sendable (Double) -> Void) async -> Bool { false }
+}
+
+/// #1940：让两路并发取回按「先后写出暂存 → 两路都到齐 → 逐路放行」的确定性顺序推进，
+/// 用于验证两路 `inflight-*.part` 在盘上同时存在且互不删除。
+private actor StagedFetchGate {
+    private var nextIndex = 0
+    private var arrived = 0
+    private var firstWaiter: CheckedContinuation<Void, Never>?
+    private var bothWaiter: CheckedContinuation<Void, Never>?
+    private var pending: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var releasedIndexes = Set<Int>()
+
+    /// 登记一次写入并返回本次序号（0 = 先启动的那一路）。阻塞到测试 `release(该序号)`。
+    func arrive() async -> Int {
+        let idx = nextIndex
+        nextIndex += 1
+        arrived += 1
+        if let w = firstWaiter { firstWaiter = nil; w.resume() }
+        if arrived >= 2, let w = bothWaiter { bothWaiter = nil; w.resume() }
+        if releasedIndexes.contains(idx) { return idx }
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            pending[idx] = cont
+        }
+        return idx
+    }
+
+    func waitFirstWritten() async {
+        if arrived >= 1 { return }
+        await withCheckedContinuation { firstWaiter = $0 }
+    }
+
+    func waitBothWritten() async {
+        if arrived >= 2 { return }
+        await withCheckedContinuation { bothWaiter = $0 }
+    }
+
+    func release(_ idx: Int) {
+        releasedIndexes.insert(idx)
+        if let cont = pending.removeValue(forKey: idx) { cont.resume() }
     }
 }

@@ -10,6 +10,9 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
     /// 返回取回内容的 BLAKE3（64 hex），调用方据此校验。
     private let fetchBlob: (String, URL, @escaping @Sendable (UInt64) -> Void) async throws -> String
     private let cache = NSCache<NSString, UIImage>()
+    /// #1940：缩略图代次隔离——`clearMemoryCache()` 递增代次，读取途中返回的结果不再塞回已被清空的 NSCache。
+    private let cacheLock = NSLock()
+    private var cacheGeneration: UInt64 = 0
     private let logger: CoreLogger
     /// 下载视频前查的剩余空间（字节）；测试里换成固定值。
     private let freeBytes: () -> Int64?
@@ -92,8 +95,11 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
     func thumbnail(_ item: TimelineItem, large: Bool) async throws -> UIImage {
         let key = "\(item.id)-\(large ? 1024 : 256)" as NSString
         if let hit = cache.object(forKey: key) { return hit }
+        // #1940：读取代次快照。异步读取期间若 `clearMemoryCache()` 已清空缓存，返回给当前调用方的结果照样可用，
+        // 但不再写回内存缓存，避免旧图把清空后的缓存重新填脏。
+        let generation = cacheLock.withLock { cacheGeneration }
         if item.isMine == true, let local = await localOriginals?.thumb(hash: item.id, isVideo: item.isVideo, maxPx: large ? 1024 : 256) {
-            cache.setObject(local, forKey: key)
+            storeIfCurrentGeneration(local, forKey: key, generation: generation)
             return local
         }
         // #1937：本机读取因任务取消（网格快速滚走）返回 nil 时不再发远端缩略图请求，与 `original` 同口径。
@@ -105,8 +111,15 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
             return try DesktopThumb.decode(bytes) // 只认 JPEG、宽高 ≤1024；不合格的抛出原因，由 logged 记一行
 
         }
-        cache.setObject(image, forKey: key)
+        storeIfCurrentGeneration(image, forKey: key, generation: generation)
         return image
+    }
+
+    /// 只在读取开始后缓存未被清空（代次未变）时写回，防止旧读取结果污染已清空的缓存。
+    private func storeIfCurrentGeneration(_ image: UIImage, forKey key: NSString, generation: UInt64) {
+        cacheLock.withLock {
+            if cacheGeneration == generation { cache.setObject(image, forKey: key) }
+        }
     }
 
     /// 视频原图缓存目录（`Caches/ppass-videos/`）。断开清单里同名的那一行清的就是它（`OriginalCachePaths.videosDirName`）。
@@ -116,7 +129,10 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
 
     /// 清空缩略图的内存缓存与本机来源索引快照（断开清单的 `thumbnailMemoryCache` 行，#1119 / #1935）。
     func clearMemoryCache() {
-        cache.removeAllObjects()
+        cacheLock.withLock {
+            cacheGeneration &+= 1
+            cache.removeAllObjects()
+        }
         localOriginals?.invalidate()
     }
 
@@ -143,13 +159,18 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
 
         // #1935：本机来源先查内存映射并核对版本，命中则直接从本机相册或授权目录导出，失败静默回退远端。
         if item.isMine == true, let localOriginals {
-            let localRaw = dir.appendingPathComponent("\(item.id).\(UUID().uuidString).part")
+            // #1940：本机视频没有正数 `bytes` 时无从按字节数校验并复用缓存，落即用即清的 `shareDir`，
+            // 不长期占 `Caches/ppass-videos/`（1x 占盘）；有正数 `bytes` 的仍进视频缓存目录复用。
+            let localDir = (item.isVideo && (item.bytes ?? 0) <= 0) ? Self.shareDir : dir
+            try fm.createDirectory(at: localDir, withIntermediateDirectories: true)
+            // #1940：暂存文件不以 `item.id` 开头，避免同一视频并发取回时 `completeCached(hasPrefix:)` 误删另一路仍在写入的 .part。
+            let localRaw = localDir.appendingPathComponent("inflight-\(UUID().uuidString).part")
             let copied = await localOriginals.copy(hash: item.id, isVideo: item.isVideo, dest: localRaw) { p in progress(p) }
             if copied, !Task.isCancelled {
                 let actualSize = (try? localRaw.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
                 let sizeMatches = (item.bytes == nil || (item.bytes ?? 0) <= 0 || actualSize == item.bytes)
                 if sizeMatches {
-                    let named = dir.appendingPathComponent(item.id).appendingPathExtension(Self.fileExtension(of: localRaw, isVideo: item.isVideo))
+                    let named = localDir.appendingPathComponent(item.id).appendingPathExtension(Self.fileExtension(of: localRaw, isVideo: item.isVideo))
                     try? fm.removeItem(at: named)
                     if (try? fm.moveItem(at: localRaw, to: named)) != nil {
                         return named
@@ -164,7 +185,8 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
         if item.isVideo { try checkVideoStart(item) }
         guard let client = client() else { throw Failure.notPaired }
         let ticket = try await client.call(Methods.assetBlobTicket, BlobTicketRequest(hash: item.id), as: BlobTicketResponse.self).ticket
-        let raw = dir.appendingPathComponent(item.id + ".part")
+        // #1940：远端暂存文件同样不以 `item.id` 开头，避免并发取回同一视频时被彼此的前缀清理误删。
+        let raw = dir.appendingPathComponent("inflight-\(UUID().uuidString).part")
         try? fm.removeItem(at: raw)
         let total = Double(max(item.bytes ?? 0, 1))
         // 视频收到的字节一超过声明大小就中止取回（对位 Android DeclaredSizeGuard）。
@@ -229,8 +251,17 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
     /// 分享面板关闭 / 存相册完成后删掉那份原图。
     static func discardShared(_ url: URL) { try? FileManager.default.removeItem(at: url) }
 
-    /// App 启动时清一次上次崩溃 / 被杀留下的残留（视频缓存 `Caches/ppass-videos/` 不动）。
-    static func clearShareDir() { try? FileManager.default.removeItem(at: shareDir) }
+    /// App 启动时清一次上次崩溃 / 被杀留下的残留：`shareDir` 整目录清掉；
+    /// 视频缓存目录只清 `inflight-*.part` 暂存（可能是上次进程崩溃留下的半截文件，1x 占盘），
+    /// 已完成的视频原图不动（运行期 `completeCached` 负责复用与清理）。
+    static func clearShareDir() {
+        let fm = FileManager.default
+        try? fm.removeItem(at: shareDir)
+        let leftovers = (try? fm.contentsOfDirectory(at: videoCacheDir, includingPropertiesForKeys: nil)) ?? []
+        for f in leftovers where f.pathExtension == "part" {
+            try? fm.removeItem(at: f)
+        }
+    }
 
     /// 缓存命中判据同 Android MOB-115：文件长度必须等于元数据里的字节数；不符或无从校验就删掉重下。
     private static func completeCached(_ item: TimelineItem, in dir: URL) -> URL? {
