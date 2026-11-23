@@ -134,6 +134,15 @@ printf '%s\n' docs/a.md | bash "$G" classify --repo "${TMP}/repo" | grep -qx ui 
 # 用法错误
 bash "$G" check >/dev/null 2>&1; [ $? = 2 ] && ok "缺参数 → 退出码 2" || bad "缺参数退出码不对"
 
+# V3 封条 SHA256 核验（#1954）
+mkdir -p "${TMP}/repo/tests"
+printf 'x = 1\n' >"${TMP}/repo/tests/locked_t.py"
+LOCKED_H="$(python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "${TMP}/repo/tests/locked_t.py")"
+SEAL_B="$(printf 'closes #1\n```v3-seal\n{"mode":"fix","exam_rel":"tests/locked_t.py","exam_sha256":"%s"}\n```' "$LOCKED_H")"
+gate 0 "V3 封条：锁定测试 SHA256 一致 → 绿" "docs/a.md" "$SEAL_B"
+printf 'x = 2\n' >"${TMP}/repo/tests/locked_t.py"
+gate 1 "反证：V3 封条锁定测试被篡改 → acceptance gate 判红" "docs/a.md" "$SEAL_B"
+
 echo
 echo "通过 ${PASS}，失败 ${FAIL}"
 [ "$FAIL" -eq 0 ]

@@ -6,8 +6,8 @@ CHECK=check-autostart.py
 new_repo autostart-registry.txt 'autostart|crates/base/src/host.rs|guard:user_stopped|基线：先判 user_stopped'
 
 echo "尊重用户停服务门禁自测"
-put crates/base/src/host.rs 'pub fn user_stopped() -> bool { false }
-fn boot() { if user_stopped() { return; } Command::new("launchctl").args(["bootstrap", "gui/501"]); }'
+put crates/base/src/host.rs 'pub fn user_stopped(state: &std::path::Path) -> bool { state.exists() }
+fn boot(s: &std::path::Path) { if user_stopped(s) { return; } Command::new("launchctl").args(["bootstrap", "gui/501"]); }'
 expect_green "基线：已登记且守卫符号存在"
 
 put apps/android/app/src/main/java/a/New.kt 'fun go(c: Context) { WorkManager.getInstance(c).enqueueUniqueWork("n", p, req) }'
@@ -30,12 +30,15 @@ put apps/ios/P/Bg.swift 'try BGTaskScheduler.shared.submit(request)'
 expect_red "iOS 新增 BGTaskScheduler.submit" "apps/ios/P/Bg.swift"
 unput apps/ios/P/Bg.swift; expect_green "还原：全部"
 
-# 守卫符号被改名 / 删除：登记还在、代码里没了 → 红
+# 守卫符号被改名 / 删除，或退化为恒返回字面量布尔桩：必须判红
 put crates/base/src/host.rs 'fn boot() { Command::new("launchctl").args(["bootstrap", "gui/501"]); }'
 expect_red "守卫函数被删（只剩拉起调用）" "user_stopped"
 put crates/base/src/host.rs 'pub fn user_stopped() -> bool { false }
 fn boot() { if user_stopped() { return; } Command::new("launchctl").args(["bootstrap", "gui/501"]); }'
-expect_green "还原：守卫"
+expect_red "守卫函数退化为恒返回 false 空壳（T5 式绕过拦截）" "退化为恒返回布尔字面量"
+put crates/base/src/host.rs 'pub fn user_stopped(state: &std::path::Path) -> bool { state.exists() }
+fn boot(s: &std::path::Path) { if user_stopped(s) { return; } Command::new("launchctl").args(["bootstrap", "gui/501"]); }'
+expect_green "还原：真实守卫"
 
 # 保护字段不合规 / 登记缺说明
 cp "$R/tools/autostart-registry.txt" "$TMP/base.txt"

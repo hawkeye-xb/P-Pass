@@ -235,6 +235,13 @@ def test_semantic_merge_conflict_repair(seed_dir: str) -> None:
         # Fail-closed check: mode="feature" without review_fn must fail with REVIEW_MISSING
         dig_no_rev = harness.run_v3_queue([tasks[0]], repo, sem_root, sem_worker, None, max_attempts=1, timeout_sec=10)
         assert dig_no_rev[0]["status"] == "SUSPENDED_CIRCUIT_BREAK" and "REVIEW_MISSING" in dig_no_rev[0]["reason"], dig_no_rev
+        # Fail-closed check: dirty main_repo aborts _squash_merge -> SUSPENDED_MERGE_FAILED + preserves branch -> next run SUSPENDED_BRANCH_EXISTS
+        Path(os.path.join(repo, "minippass/status.py")).write_text('STATUS_BANNER = "DIRTY"\n', encoding="utf-8")
+        t_mf = dict(tasks[0], id="SMF")
+        dig_mf = harness.run_v3_queue([t_mf], repo, sem_root, lambda cid, pr, cw, t: (Path(cw, "minippass/cli.py").write_text(Path(cw, "minippass/cli.py").read_text(encoding="utf-8") + "\n# x\n", encoding="utf-8") and 0) or (0, "ok", 0.01), deterministic_reviewer, max_attempts=1, timeout_sec=10)
+        assert dig_mf[0]["status"] == "SUSPENDED_MERGE_FAILED", dig_mf
+        dig_mf2 = harness.run_v3_queue([t_mf], repo, sem_root, sem_worker, deterministic_reviewer, max_attempts=1, timeout_sec=10)
+        assert dig_mf2[0]["status"] == "SUSPENDED_BRANCH_EXISTS", dig_mf2
     finally:
         shutil.rmtree(sem_root, ignore_errors=True)
 
@@ -317,7 +324,8 @@ def run_live(model: str) -> None:
 
         def cli_worker(tid: str, prompt: str, cwd: str, timeout_sec: int) -> tuple[int, str, float]:
             t0 = time.time()
-            env = {**os.environ, "PATH": f"{shim_bin}:{os.environ.get('PATH', '')}", "PPASS_V3_TASK_STORE": task_store, "PPASS_GH_AUDIT_LOG": audit_log}
+            env = {k: v for k, v in os.environ.items() if k not in harness._GIT_LOC_VARS}
+            env.update({"PATH": f"{shim_bin}:{env.get('PATH', '')}", "PPASS_V3_TASK_STORE": task_store, "PPASS_GH_AUDIT_LOG": audit_log})
             try:
                 r = subprocess.run([agent_bin, "-p", "--model", model, prompt], cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout_sec)
                 return r.returncode, (r.stdout + r.stderr)[-600:], round(time.time() - t0, 2)
@@ -330,7 +338,8 @@ def run_live(model: str) -> None:
                 f"目标：{task['goal']}\nDiff:\n{diff_txt}\n"
                 '只输出一行 JSON：{"decision": "PASS" 或 "BLOCK", "reason": "原因"}'
             )
-            r = subprocess.run([agent_bin, "-p", "--model", model, "--allowedTools", "", prompt], cwd=root, capture_output=True, text=True, timeout=60)
+            clean_env = {k: v for k, v in os.environ.items() if k not in harness._GIT_LOC_VARS}
+            r = subprocess.run([agent_bin, "-p", "--model", model, "--allowedTools", "", prompt], cwd=root, env=clean_env, capture_output=True, text=True, timeout=60)
             matches = re.findall(r"\{[^{}]*\"decision\"[^{}]*\}", r.stdout)
             if not matches:
                 return False, f"review parse error: {r.stdout[-160:]}"

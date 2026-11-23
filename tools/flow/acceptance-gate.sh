@@ -103,10 +103,55 @@ classify() {
 # PR 自己加进来的方案文件不算（没合进 main 就不是已采纳）。
 adopted_in_body() { (cd "$REPO" && adopted_adrs "$(cat "$BODY_F")"); }
 
+# V3 链外封条 SHA256 核验（#1954）：若关联卡或传入正文中带有 ```v3-seal 块，核验 PR 检出中锁定测试文件的哈希一致（防篡改测试）。
+verify_v3_seals() {
+  local body_txt cards c ibody
+  body_txt="$(cat "$BODY_F")"
+  if printf '%s\n' "$body_txt" | grep -q '^```v3-seal'; then
+    python3 -I - "$REPO" "$BODY_F" <<'PY' || exit 1
+import hashlib, json, os, re, sys
+from pathlib import Path
+repo, bf = Path(sys.argv[1]), Path(sys.argv[2])
+for m in re.finditer(r"```v3-seal\s*\n(.*?)```", bf.read_text(encoding="utf-8"), re.S):
+    s = json.loads(m.group(1).strip())
+    rel, want = s.get("exam_rel", ""), s.get("exam_sha256", "")
+    if rel and want:
+        p = repo / rel
+        got = hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else ""
+        if got != want:
+            print(f"acceptance gate ❌：锁定验收测试 `{rel}` SHA256 被篡改或缺失（期望 {want[:12]}…，实际 {got[:12] or 'MISSING'}）", file=sys.stderr)
+            sys.exit(1)
+PY
+  fi
+  if [ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
+    cards="$(printf '%s\n' "$body_txt" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' | grep -oE '[0-9]+' | sort -u || true)"
+    for c in $cards; do
+      ibody="$(gh issue view "$c" --json body --jq .body 2>/dev/null || true)"
+      if [ -n "$ibody" ] && printf '%s\n' "$ibody" | grep -q '^```v3-seal'; then
+        python3 -I - "$REPO" "$ibody" <<'PY' || exit 1
+import hashlib, json, re, sys
+from pathlib import Path
+repo, text = Path(sys.argv[1]), sys.argv[2]
+for m in re.finditer(r"```v3-seal\s*\n(.*?)```", text, re.S):
+    s = json.loads(m.group(1).strip())
+    rel, want = s.get("exam_rel", ""), s.get("exam_sha256", "")
+    if rel and want:
+        p = repo / rel
+        got = hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else ""
+        if got != want:
+            print(f"acceptance gate ❌：关联卡锁定的验收测试 `{rel}` SHA256 不匹配（期望 {want[:12]}…，实际 {got[:12] or 'MISSING'}）", file=sys.stderr)
+            sys.exit(1)
+PY
+      fi
+    done
+  fi
+}
+
 case "$MODE" in
   classify) classify ;;
   check)
     [ -f "$FILES_F" ] && [ -f "$BODY_F" ] || usage
+    verify_v3_seals
     KIND="$(classify <"$FILES_F")"
     case "$KIND" in
       none)

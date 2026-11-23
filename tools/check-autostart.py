@@ -20,7 +20,17 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from fitness_lib import compare, die, load_registry, parse_args, read_product, symbol_exists, tracked_files
+from fitness_lib import (
+    assert_zero_product_imports,
+    compare,
+    die,
+    guard_symbol_compromised,
+    load_registry,
+    parse_args,
+    read_product,
+    symbol_exists,
+    tracked_files,
+)
 
 PATTERNS = re.compile(
     r"startForegroundService\(|\bstartService\(|PeriodicWorkRequest|enqueueUnique(Periodic)?Work\(|"
@@ -33,6 +43,7 @@ EXT = (".kt", ".java", ".rs", ".swift", ".nsh", ".xml", ".plist")
 
 
 def main() -> None:
+    assert_zero_product_imports(__file__)
     args = parse_args("尊重用户停服务门禁")
     root = Path(args.root)
     reg = load_registry(Path(args.registry or root / "tools/autostart-registry.txt"), {"autostart": 4})
@@ -56,9 +67,13 @@ def main() -> None:
             errs.append(f"✗ {key}：保护字段必须是 guard:<符号> 或 test:<符号>，现为 `{prot}`")
         elif not symbol_exists(root, m.group(2)):
             errs.append(f"✗ {key}：登记的{m.group(1)}符号 `{m.group(2)}` 在仓库里找不到（改名或删除了？）\n    → 更新登记，且确认新的守卫仍先检查用户停过")
+        elif m.group(1) == "guard":
+            bad_rel = guard_symbol_compromised(root, m.group(2))
+            if bad_rel:
+                errs.append(f"✗ {key}：守卫函数 `{m.group(2)}` 在 {bad_rel} 被退化为恒返回布尔字面量（禁止写死放行绕过门禁）")
     if errs:
         die(errs)
-    print(f"ok: 自启 / 拉起调用点与 tools/autostart-registry.txt 一致（{len(reg)} 处，守卫符号均存在）")
+    print(f"ok: 自启 / 拉起调用点与 tools/autostart-registry.txt 一致（{len(reg)} 处，守卫符号均存在且非恒真/恒假桩）")
 
 
 if __name__ == "__main__":

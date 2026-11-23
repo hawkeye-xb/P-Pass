@@ -76,7 +76,7 @@ fake_cmd() {
 BIN="${TMP}/pathbin"
 mkdir -p "$BIN"
 for c in git bash env sh sed awk tar mktemp cat tr head tail grep rm cp chmod touch sort cmp \
-  basename dirname mkdir mv cut wc ls diff df uname rmdir date sleep; do
+  basename dirname mkdir mv cut wc ls diff df uname rmdir date sleep python3; do
   fake_cmd "$BIN" "$c" || {
     echo "找不到命令 ${c}，无法搭测试环境"
     exit 1
@@ -907,9 +907,9 @@ DONE "$W" >/dev/null 2>&1 && bad "android-test 红时 done 仍成功" || ok "and
 has_lbl 128 "status:doing" && ! has_lbl 128 "status:blocked" && ok "挑选后的门禁红 → 卡保持 doing，不打 blocked" || bad "挑选后的门禁红改写了状态：$(labels_of 128)"
 rm -f "${FAKE_GH}/ci_fail"
 
-# 核心改动无 core 标签 → blocked（即使提交里把工作区的 .github/core-paths.txt 删空，done 仍按基线 origin/main 核心规则拦截）
+# 核心改动无 core 标签 → blocked（即使提交里把工作区的 .github/core-paths.txt 改成仅含不相关的 + unrelated/**，done 仍按基线 origin/main 核心规则拦截）
 W="$(card 24 "[T-24] core hit" "core/** src/**")"
-printf '# emptied\n' >"$W/.github/core-paths.txt"
+printf '+ unrelated/**\n' >"$W/.github/core-paths.txt"
 commit_file "$W" core/x.txt
 if DONE "$W" >/dev/null 2>&1; then bad "无 core 标签（且篡改本地 core-paths.txt）却放行了核心改动"; else ok "核心改动无 core 标签（即使篡改分支 core-paths.txt）→ 按基线核心规则拒绝"; fi
 has_lbl 24 "status:blocked" && ok "核心命中时打 status:blocked" || bad "核心命中没打 blocked"
@@ -1339,6 +1339,64 @@ if DONE "$UW" >"${TMP}/o66" 2>&1; then bad "done 放行并推送了未登记 E1 
 grep -q '未登记' "${TMP}/o66" && ok "done 报错说明命令未登记" || bad "done 未登记命令的报错不清楚：$(tail -5 "${TMP}/o66")"
 [ ! -e "$PWN" ] && ok "done 没执行卡面注入的 shell" || bad "done 执行了卡面注入的 shell"
 on_origin "$UBR" && bad "未登记命令的分支被推送了" || ok "反证：未登记命令时未推送"
+
+echo "== V3 四类任务门禁分流（#1954）=="
+mkdir -p "${M}/tests"
+printf 'VALUE = 1\n' >"${M}/src/val.py"
+git -C "$M" add src/val.py && git -C "$M" commit -q -s -m "seed val.py" && git -C "$M" push -q origin HEAD:refs/heads/main
+
+# 1) fix 卡：偷改锁定测试判红 → 还原测试且修好业务（基线反证变红 + 分支变绿）放行
+EXAM_FIX='import sys, unittest
+sys.path.insert(0, "src")
+import val
+class TestVal(unittest.TestCase):
+    def test_v(self): self.assertEqual(val.VALUE, 2)
+'
+FIX_SHA="$(printf '%s' "$EXAM_FIX" | python3 -I -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+SEAL_FIX="$(printf '```v3-seal\n{"mode":"fix","exam_rel":"tests/test_v3_fix.py","exam_sha256":"%s"}\n```' "$FIX_SHA")"
+issue 201 "status:ready" "[T-201] v3 fix" "" "Bug" "$SEAL_FIX"
+W201="$(START 201 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/201-"*)"
+mkdir -p "$W201/tests"
+printf '# tampered\n' >"$W201/tests/test_v3_fix.py"
+commit_file "$W201" src/val.py 'VALUE = 2'
+if DONE "$W201" >"${TMP}/o201a" 2>&1; then bad "V3 fix 卡偷改锁定测试仍放行"; else ok "V3 fix 卡：篡改锁定验收测试 SHA256 → 判红拦截"; fi
+printf 'status:doing' >"${FAKE_GH}/201.labels"
+printf '%s' "$EXAM_FIX" >"$W201/tests/test_v3_fix.py"
+git -C "$W201" add -A && git -C "$W201" commit -q -s -m "restore locked exam"
+DONE "$W201" >"${TMP}/o201b" 2>&1 && on_origin "fix/201-v3-fix" && ok "V3 fix 卡：锁定测试无篡改 + 基线反证变红 + 分支全绿 → 放行推送" || bad "V3 fix 卡正向失败：$(tail -6 "${TMP}/o201b")"
+
+# 2) feature 卡：新增基线不存在的函数（跳过旧基线编译运行，防 ImportError 误杀）
+EXAM_FEAT='import sys, unittest
+sys.path.insert(0, "src")
+from val import brand_new_fn
+class TestFeat(unittest.TestCase):
+    def test_fn(self): self.assertEqual(brand_new_fn(), 42)
+'
+FEAT_SHA="$(printf '%s' "$EXAM_FEAT" | python3 -I -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+SEAL_FEAT="$(printf '```v3-seal\n{"mode":"feature","exam_rel":"tests/test_v3_feat.py","exam_sha256":"%s"}\n```' "$FEAT_SHA")"
+issue 202 "status:ready" "[T-202] v3 feature" "" "Feature" "$SEAL_FEAT"
+W202="$(START 202 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/202-"*)"
+mkdir -p "$W202/tests"
+printf '%s' "$EXAM_FEAT" >"$W202/tests/test_v3_feat.py"
+commit_file "$W202" src/val.py $'VALUE = 1\ndef brand_new_fn(): return 42'
+DONE "$W202" >"${TMP}/o202" 2>&1 && on_origin "feat/202-v3-feature" && ok "V3 feature 卡：锁测试哈希并跳过旧基线编译运行 → 放行推送" || bad "V3 feature 卡失败：$(tail -6 "${TMP}/o202")"
+
+# 3) verify 卡：源码零改动 + 如实交付 FAIL 判决 → 直接交差转 status:review，不推分支
+EXAM_VER='import sys, unittest
+sys.path.insert(0, "src")
+import val
+class TestVer(unittest.TestCase):
+    def test_must_fail(self): self.assertEqual(val.VALUE, 999)
+'
+printf '%s' "$EXAM_VER" >"${M}/tests/test_v3_ver.py"
+git -C "$M" add tests/test_v3_ver.py && git -C "$M" commit -q -s -m "seed verify test" && git -C "$M" push -q origin HEAD:refs/heads/main
+VER_SHA="$(printf '%s' "$EXAM_VER" | python3 -I -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+SEAL_VER="$(printf '```v3-seal\n{"mode":"verify","exam_rel":"tests/test_v3_ver.py","exam_sha256":"%s"}\n```' "$VER_SHA")"
+issue 203 "status:ready" "[T-203] v3 verify" "" "Task" "$SEAL_VER"
+W203="$(START 203 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/203-"*)"
+printf '{"verdict":"FAIL","root_cause":"src/val.py still defines VALUE = 1 instead of 999"}\n' >"$W203/verdict.json"
+DONE "$W203" >"${TMP}/o203" 2>&1 && has_lbl 203 "status:review" && ! on_origin "ci/203-v3-verify" &&
+  ok "V3 verify 卡：源码零改动且如实报告 FAIL → 合格交差（status:review，不推分支）" || bad "V3 verify 卡失败：$(tail -6 "${TMP}/o203")"
 
 echo
 echo "通过 ${PASS}，失败 ${FAIL}"

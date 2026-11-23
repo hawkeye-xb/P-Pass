@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from fitness_lib import compare, die, load_registry, parse_args, read_product, tracked_files
+from fitness_lib import assert_zero_product_imports, compare, die, load_registry, parse_args, read_product, tracked_files
 
 RS = re.compile(
     r"\b(reqwest|ureq|hyper_util|isahc|attohttpc|tauri_plugin_updater|TcpStream::connect|UdpSocket::bind|"
@@ -71,6 +71,7 @@ def dep_re(name: str):
 
 
 def main() -> None:
+    assert_zero_product_imports(__file__)
     args = parse_args("无遥测 / 不新增外联门禁")
     root = Path(args.root)
     reg = load_registry(Path(args.registry or root / "tools/egress-allowlist.txt"), {"site": 3, "host": 3, "dep": 3})

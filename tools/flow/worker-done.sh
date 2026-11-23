@@ -40,10 +40,15 @@ case " ${CARDS} " in *" ${N} "*) ;; *) CARDS="${N}${CARDS:+ ${CARDS}}" ;; esac
 for c in $CARDS; do [[ "$c" =~ ^[0-9]+$ ]] || die "分支记录的卡号「${c}」不对" "git config --get branch.${BRANCH}.ppasscards"; done
 CARDS_SHOW="#$(printf '%s' "$CARDS" | sed 's/  */、#/g')"
 
-[ -z "$(git status --porcelain)" ] || die "工作区有未提交的改动" "$(git status --short | head -5)" \
+dirty_non_verdict="$(git status --porcelain | grep -vE '^\?\? verdict\.json$' || true)"
+[ -z "$dirty_non_verdict" ] || die "工作区有未提交的改动" "$(printf '%s\n' "$dirty_non_verdict" | head -5)" \
   "先 git add + git commit -s；不该提交的改动撤掉。"
 git fetch -q origin "+refs/heads/main:refs/remotes/origin/main" || die "取不到 origin/main（离线？）"
-[ "$(git rev-list --count origin/main..HEAD)" -gt 0 ] || die "本分支相对 origin/main 没有任何提交" "先提交改动，或没有改动就 just stuck。"
+HAS_VERIFY_VERDICT=0
+[ -f "${TOP}/verdict.json" ] && HAS_VERIFY_VERDICT=1
+if [ "$(git rev-list --count origin/main..HEAD)" -eq 0 ] && [ "$HAS_VERIFY_VERDICT" -eq 0 ]; then
+  die "本分支相对 origin/main 没有任何提交" "先提交改动，或没有改动就 just stuck。"
+fi
 # 落后 main：没有冲突只提示（照推）；有冲突才停（git merge-tree 判，git ≥ 2.38；判不了只提示）。
 check_main() { # check_main <时机说明>
   local behind rc=0
@@ -132,9 +137,56 @@ BASE_CORE_RULES="${EVID_DIR}/base-core-paths.txt"
 if ! MSYS_NO_PATHCONV=1 git show origin/main:.github/core-paths.txt >"$BASE_CORE_RULES" 2>/dev/null || [ ! -s "$BASE_CORE_RULES" ]; then
   cp "${TOP}/.github/core-paths.txt" "$BASE_CORE_RULES" 2>/dev/null || : >"$BASE_CORE_RULES"
 fi
-CORE="$(printf '%s\n' "$FILES" | bash "$FLOW_PATHS" core - "$BASE_CORE_RULES" --diff "$BRANCH_DIFF" 2>/dev/null)"
+CORE="false"
+if [ -n "$FILES" ]; then
+  CORE="$(printf '%s\n' "$FILES" | bash "$FLOW_PATHS" core - "$BASE_CORE_RULES" --diff "$BRANCH_DIFF" 2>/dev/null)"
+fi
 if [ "$CORE" != "false" ] && [ "$IS_CORE" = 0 ]; then
   fail_blocked "核心判定" "" "改动命中基线核心路径（origin/main:.github/core-paths.txt）而 ${CARDS_SHOW} 都没有 core 标签：只写复现、根因和两个修法，撤回代码改动，just stuck ${N} \"命中核心：…\"。"
+fi
+
+# ── 1a. V3 四类任务门禁分流（卡正文含 ```v3-seal 封条块时自动执行：fix / speculate_then_fix / feature / verify，#1954）──
+MAIN_ROOT="$(flow_main_root)"
+BASE_MERGE_SHA="$(git merge-base origin/main HEAD)"
+V3_SEAL_MODE=""
+V3_SEAL_OUT=""
+for c in $CARDS; do
+  flow_load_issue "$c"
+  if printf '%s\n' "$I_BODY" | grep -q '^```v3-seal'; then
+    V3_SEAL_MODE="$(printf '%s\n' "$I_BODY" | python3 -I "${HERE}/v3_harness.py" parse-seal | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["mode"])' 2>/dev/null || echo invalid)"
+    v3_core_arg=()
+    [ "$IS_CORE" = 1 ] && v3_core_arg+=(--core-approved)
+    V3_LOG="${EVID_DIR}/v3-gate.log"
+    if ! printf '%s\n' "$I_BODY" | python3 -I "${HERE}/v3_harness.py" check-card "$TOP" "$MAIN_ROOT" "$BASE_MERGE_SHA" ${v3_core_arg[@]+"${v3_core_arg[@]}"} >"$V3_LOG" 2>&1; then
+      fail_blocked "V3 四类任务门禁（mode=${V3_SEAL_MODE}）" "$V3_LOG"
+    fi
+    V3_SEAL_OUT="$(tail -n 1 "$V3_LOG" | scrub)"
+    echo "✅ V3 门禁通过（#${c}）：${V3_SEAL_OUT}"
+  fi
+done
+if [ "$V3_SEAL_MODE" = "verify" ]; then
+  tmp_v="$(mktemp)"
+  {
+    echo "**纯验证卡已交差（源码零改动）**"
+    echo
+    echo "- 分支：\`${BRANCH}\`"
+    echo "- V3 验证判决：\`${V3_SEAL_OUT}\`"
+    echo "- 结构化结论（\`verdict.json\`）："
+    echo '```json'
+    cat "${TOP}/verdict.json" | scrub
+    echo
+    echo '```'
+  } >"$tmp_v"
+  for c in $CARDS; do
+    flow_comment "$c" "$tmp_v"
+    flow_labels "$c" "status:review" "status:doing,status:blocked"
+  done
+  rm -f "$tmp_v" "$FAILS_FILE"
+  echo "✅ ${CARDS_SHOW} 纯验证卡已如实交付判决，无需推送代码分支。"
+  exit 0
+fi
+if [ "$(git rev-list --count origin/main..HEAD)" -eq 0 ]; then
+  die "本分支相对 origin/main 没有任何提交" "非 verify 卡请先提交改动，或没有改动就 just stuck。"
 fi
 
 # ── 1b. 推送前机械提示（不生成自查文档）────────────────────────────────
