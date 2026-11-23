@@ -183,4 +183,29 @@ final class PeerClosedPairingLossTests: XCTestCase {
         let parts = text.components(separatedBy: "---")
         return Data(parts.dropFirst(2).joined(separator: "---").trimmingCharacters(in: .whitespacesAndNewlines).utf8)
     }
+
+    /// 源文本接线断言（对位 Android UI17 的做法）：两个页面真的消费唯一状态，而不是留着旧的二元判断。
+    /// 只钉纯函数映射、正文不用它，这套断言会红（Android #1883 评审抓到的正是这种「接线没断」）。
+    /// 读宿主源码，必须在 `tools/ios/host-only-tests.txt` 的宿主测试类里跑（#1904）。
+    func testStorageDetailAndPhotosScreensReadTheUnifiedConnection() throws {
+        let diag = try String(contentsOf: RepoPaths.root.appendingPathComponent(
+            "apps/ios/PPass/Diagnostics/DiagnosticsScreen.swift"), encoding: .utf8)
+        let photos = try String(contentsOf: RepoPaths.root.appendingPathComponent(
+            "apps/ios/PPass/Photos/PhotosScreen.swift"), encoding: .utf8)
+
+        XCTAssertTrue(diag.contains("storageDetailBody(app.connection"), "详情页正文必须读 app.connection")
+        XCTAssertTrue(diag.contains("storageDetailDotColor(app.connection.status)"), "状态点必须读同一份状态")
+        XCTAssertTrue(diag.contains("storage_detail_offline"), "详情页必须说「未连接」而不是一律「已连接」")
+        XCTAssertFalse(diag.contains("app.pairingLost ? PPColor.act : PPColor.safe"),
+                       "状态点不得退回只看配对有效性")
+        XCTAssertFalse(diag.contains("if app.pairingLost { return L.s(\"storage_detail_lost\") }"),
+                       "正文不得退回只剩二元配对判断")
+
+        XCTAssertTrue(photos.contains("app.connection"), "照片页必须读唯一连接状态")
+        XCTAssertTrue(photos.contains("TimelineLiveChrome(connection: conn)"), "提示由唯一状态驱动")
+        XCTAssertTrue(photos.contains("conn.needsRepair"))
+        XCTAssertTrue(photos.contains("conn.daysUnreachable"), "失联天数由同一个状态携带")
+        XCTAssertFalse(photos.contains("app.pairingLost"), "照片页不得再各自读 pairingLost")
+        XCTAssertFalse(photos.contains("model.live"), "照片页不得再各自读订阅状态")
+    }
 }
