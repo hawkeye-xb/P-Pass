@@ -167,6 +167,7 @@ enum PPUI {
     enum Layout {
         /// iOS 覆盖（Android 20px）：见 iosOverrides["mobile-ui.layout.page-gutter"]
         // pageGutter: system（原生默认，不生成常量）
+        static let photosGutter: CGFloat = 20
         static let pageTop: CGFloat = 14
         static let cardGap: CGFloat = 18
         /// iOS 覆盖（Android 20px）：见 iosOverrides["mobile-ui.layout.card-padding"]
@@ -196,7 +197,7 @@ enum PPUI {
         "mobile-ui.type.pair-name": ("22px", "24px", "iOS 只用 PPFont 现成语义样式：电脑名取 PPFont.title3（衬线 24，随 title3 缩放，封顶 AX4——title3 涨得比 largeTitle 快，不封顶 AX5 会反超验证码）；Android 是 titleLarge 无衬线粗体 22。"),
         "mobile-ui.type.pair-code": ("45px", "34px", "iOS 只用系统语义样式：验证码取 PPFont.pairCode（系统等宽 largeTitle 档 34 粗体，随系统字号缩放）；Android displayMedium 45。"),
         "mobile-ui.type.pair-identity": ("12px", "13px", "iOS 只用 PPFont 现成语义样式：标识取 PPFont.monoSmall（系统等宽 footnote 档 13）；Android bodySmall 12。"),
-        "mobile-ui.layout.page-gutter": ("20px", "system", "原生 insetGrouped 的分组边距（iPhone 16 / iOS 26 实测 16pt），与系统「设置」App 一致；改成 20 要覆盖系统布局，没有收益。"),
+        "mobile-ui.layout.page-gutter": ("20px", "system", "这是设置页的 List 行距：原生 insetGrouped 的分组边距（iPhone 16 / iOS 26 实测 16pt），与系统「设置」App 一致；改成 20 要覆盖系统布局，没有收益。照片页不是 List（失联卡、引导条、筛选条、网格、提示条都不在 List 里），不适用本项，改用 mobile-ui.layout.photos-gutter = 20pt 与 Android 对齐，见 $behavior.photos-page-gutter。"),
         "mobile-ui.layout.card-padding": ("20px", "system", "英雄卡是 List 的一行，内边距由系统行距决定（实测左右 16、上下约 17–21，差 1–4pt）；硬设 20 要和系统最小行高较劲。"),
         "mobile-ui.surface.settings-card": ("paper", "linen", "insetGrouped 的分组画不了 1px 描边，paper 底放在 paper 页面上看不出卡片边界，改用 linen（内嵌卡片色）。"),
     ]

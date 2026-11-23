@@ -384,7 +384,7 @@ internal fun PhotosScreen(
                 color = PPColor.ActBg,
                 shape = RoundedCornerShape(PPSize.RadiusCard),
                 border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.3f)),
-                modifier = Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
+                modifier = Modifier.fillMaxWidth().padding(PPSize.PageGutter, 0.dp, PPSize.PageGutter, 12.dp),
             ) {
                 Column(Modifier.padding(18.dp)) {
                     Text(
@@ -462,7 +462,7 @@ internal fun PhotosScreen(
             Text(
                 stringResource(R.string.photos_live_reconnecting),
                 fontSize = 13.sp, color = PPColor.Ink40,
-                modifier = Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
+                modifier = Modifier.fillMaxWidth().padding(PPSize.PageGutter, 0.dp, PPSize.PageGutter, 12.dp),
             )
         }
 
@@ -470,7 +470,7 @@ internal fun PhotosScreen(
         // "连不上"+手动重试（UX-11 同款：有界等待→亮错误→交给用户）。
         if (chrome.showExhaustedRetry) {
             Row(
-                Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
+                Modifier.fillMaxWidth().padding(PPSize.PageGutter, 0.dp, PPSize.PageGutter, 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -492,7 +492,7 @@ internal fun PhotosScreen(
             Text(
                 scopeEmptyHint,
                 fontSize = 13.sp, color = PPColor.Ink40,
-                modifier = Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
+                modifier = Modifier.fillMaxWidth().padding(PPSize.PageGutter, 0.dp, PPSize.PageGutter, 12.dp),
             )
         }
 

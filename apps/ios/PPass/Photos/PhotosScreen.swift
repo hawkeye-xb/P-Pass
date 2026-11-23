@@ -51,7 +51,7 @@ struct PhotosScreen: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(PPColor.actBg, in: RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous).stroke(PPColor.act.opacity(0.3), lineWidth: 1))
-        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
+        .padding(.horizontal, PPUI.Layout.photosGutter).padding(.top, 8).padding(.bottom, 12)
     }
 
     /// 引导位（对位 Android `PhotosGuideCard`）：一句话 + 动作 + ×，用现成提示条 `NoticeRow`。
@@ -63,7 +63,7 @@ struct PhotosScreen: View {
         // 复用现成提示条 NoticeRow 的 × 一行版式（C1），不另起组件；左右 20，与筛选条、照片网格、失联卡同一条线（#1405）。
         return NoticeRow(text: text, action: (action, { app.guideAction(guide) }),
                          close: (L.s("photos_guide_close"), { app.dismissGuide() }), standalone: true)
-        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
+        .padding(.horizontal, PPUI.Layout.photosGutter).padding(.top, 8).padding(.bottom, 12)
         .onAppear { AppLog.log("photos-guide: shown \(guide.logName)") }
         .id(guide)
     }
@@ -73,7 +73,7 @@ struct PhotosScreen: View {
         Text(hint).font(PPFont.sans(13)).foregroundStyle(PPColor.ink40)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 20).padding(.bottom, 12)
+            .padding(.horizontal, PPUI.Layout.photosGutter).padding(.bottom, 12)
             .background(PPColor.paper)
             .onAppear { AppLog.log("photos-guide: scope empty hint") }
             .accessibilityIdentifier("photosScopeEmptyHint")
@@ -94,7 +94,7 @@ struct PhotosScreen: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 20).padding(.top, app.pairingLost || guideShown ? 0 : 8).padding(.bottom, 12) // 提示条、筛选条、照片网格左右同一条线（#1405）
+        .padding(.horizontal, PPUI.Layout.photosGutter).padding(.top, app.pairingLost || guideShown ? 0 : 8).padding(.bottom, 12) // 提示条、筛选条、照片网格左右同一条线（#1405）
         .background(PPColor.paper)
     }
 
@@ -106,7 +106,7 @@ struct PhotosScreen: View {
         if chrome.showReconnecting {
             Text(L.s("photos_live_reconnecting")).font(PPFont.sans(13)).foregroundStyle(PPColor.ink40)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 20).padding(.bottom, 12)
+                .padding(.horizontal, PPUI.Layout.photosGutter).padding(.bottom, 12)
                 .background(PPColor.paper)
         }
         if chrome.showExhaustedRetry {
@@ -116,7 +116,7 @@ struct PhotosScreen: View {
                 Button(L.s("photos_live_retry")) { model.retryLive() }
                     .font(PPFont.sans(13, .semibold)).foregroundStyle(PPColor.ink).padding(6)
             }
-            .padding(.horizontal, 20).padding(.bottom, 12)
+            .padding(.horizontal, PPUI.Layout.photosGutter).padding(.bottom, 12)
             .background(PPColor.paper)
         }
     }
@@ -143,7 +143,7 @@ struct PhotosScreen: View {
         }
     }
 
-    /// 网格对齐 Android：3 列、4pt 间隔、左右 20pt 边距（page-gutter）、缩略图圆角 10；月份组头 serif 18，不吸顶。
+    /// 网格对齐 Android：3 列、4pt 间隔、左右 photos-gutter（20pt）、缩略图圆角 10；月份组头 serif 18，不吸顶。
     private var grid: some View {
         ScrollView {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 3), spacing: 4) {
@@ -161,7 +161,7 @@ struct PhotosScreen: View {
                     }
                 }
             }
-            .padding(.horizontal, 20).padding(.bottom, 8)
+            .padding(.horizontal, PPUI.Layout.photosGutter).padding(.bottom, 8)
         }
         .refreshable { await model.loadFirst(reason: .pull) }
     }
