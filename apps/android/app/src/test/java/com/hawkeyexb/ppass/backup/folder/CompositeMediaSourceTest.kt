@@ -160,7 +160,8 @@ class CompositeMediaSourceTest {
         assertNull(composite.existingIds(folderIds + 3L))
     }
 
-    // lookup 按命名空间分发：folder ID（bit 62）走 folder 段，MediaStore ID 走 primary。    @Test
+    // lookup 按命名空间分发：folder ID（bit 62）走 folder 段，MediaStore ID 走 primary。
+    @Test
     fun `lookup dispatches by id namespace`() {
         val primary = FakeMedia().also { it.put(FakePhoto(3L, 100L, 10L, "c3", 1L)) }
         val root = tmp.newFolder("media-root")

@@ -99,7 +99,9 @@ class ContentResolverMediaSnapshotSource(
     private val absenceTrusted: () -> Boolean = { mediaAbsenceTrustedNow(context) },
 ) : MediaSnapshotSource {
 
-    private val external = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+    // 延迟到首次使用：JVM 单测里 android.jar 的 MediaStore 只是 stub，构造期调用会抛 "Stub!"，
+    // 而 #1771 的 existingIds 契约单测需要在没有真实 Android 运行时的情况下真实构造本类。
+    private val external: Uri by lazy { MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL) }
 
     /**
      * API ≥ 30 用 `GENERATION_MODIFIED`；API < 30 没有这一列，退回 `DATE_MODIFIED`。
