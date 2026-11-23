@@ -419,33 +419,52 @@ struct BucketScreen: View {
 }
 
 /// 双列来源卡的统一外壳（对齐 Android SourceCard）：圆角 16；选中 paper 底 + 2pt ink 描边，
-/// 未选 linen 底 + 1pt border 描边。
-private struct SourceCardChrome: ViewModifier {
+/// 未选 linen 底 + 1pt border 描边。视觉值由计算属性给出，单测逐项钉住（#1961 评审）。
+struct SourceCardChrome: ViewModifier {
     let selected: Bool
 
+    /// 圆角 16（对齐 Android SourceCard 的 RoundedCornerShape(16.dp)）。
+    var cornerRadius: CGFloat { 16 }
+    /// 选中 paper / 未选 linen（对齐 Android SourceCard 的 sourceCardColors）。
+    var backgroundColor: Color { selected ? PPColor.paper : PPColor.linen }
+    /// 选中 ink / 未选 border（对齐 Android SourceCard 的 border）。
+    var borderColor: Color { selected ? PPColor.ink : PPColor.border }
+    /// 选中 2pt / 未选 1pt。
+    var borderLineWidth: CGFloat { selected ? 2 : 1 }
+
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         return content
-            .background(selected ? PPColor.paper : PPColor.linen, in: shape)
+            .background(backgroundColor, in: shape)
             .clipShape(shape)
-            .overlay(shape.strokeBorder(selected ? PPColor.ink : PPColor.border, lineWidth: selected ? 2 : 1))
+            .overlay(shape.strokeBorder(borderColor, lineWidth: borderLineWidth))
     }
 }
 
 /// 右上勾选角标（Android SelectBadge）：22 圆；选中 = ink 底 paper 勾，未选 = paper-dim 底 + 1.5 border-strong 圈。
-private struct SelectBadge: View {
+/// 视觉值由计算属性给出，单测逐项钉住（#1961 评审）。
+struct SelectBadge: View {
     let selected: Bool
+
+    /// 直径 22（对齐 Android SelectBadge 的 size(24.dp) 内圆）。
+    var diameter: CGFloat { 22 }
+    /// 选中 ink / 未选 paper-dim。
+    var fillColor: Color { selected ? PPColor.ink : PPColor.paperDim }
+    /// 未选态的描边色。
+    var unselectedBorderColor: Color { PPColor.borderStrong }
+    /// 未选态的描边宽度。
+    var unselectedBorderWidth: CGFloat { 1.5 }
 
     var body: some View {
         ZStack {
-            Circle().fill(selected ? PPColor.ink : PPColor.paperDim)
+            Circle().fill(fillColor)
             if selected {
                 Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(PPColor.paper)
             } else {
-                Circle().strokeBorder(PPColor.borderStrong, lineWidth: 1.5)
+                Circle().strokeBorder(unselectedBorderColor, lineWidth: unselectedBorderWidth)
             }
         }
-        .frame(width: 22, height: 22)
+        .frame(width: diameter, height: diameter)
         .accessibilityHidden(true)
     }
 }

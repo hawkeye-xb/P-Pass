@@ -1,4 +1,5 @@
 import PPassCore
+import SwiftUI
 import XCTest
 @testable import PPass
 
@@ -28,6 +29,32 @@ final class BucketAccessNoticeTests: XCTestCase {
                        "完整授权：全部显示")
         XCTAssertEqual(BucketScreen.visibleAlbums([], checked: ["a"], photoAccess: .none).map(\.id), [],
                        "拒绝授权且 albums() 为空：一张都展示不了（编辑态相册部分由刷新清空）")
+    }
+
+    /// #1961：来源卡外壳与勾选角标的视觉值必须来自设计 token（对齐 Android SourceCard / SelectBadge），
+    /// 并且相册卡、文件夹卡、添加卡都真实套用同一个 `SourceCardChrome`。
+    /// 反证：删掉 `SourceCardChrome` / `SelectBadge` 会编译失败；把 paper/linen、ink/border、2pt/1pt、
+    /// 22pt、borderStrong 1.5 改成别的值，对应断言红。只改回旧样式而不删结构同样红。
+    func test_source_card_chrome_and_badge_match_design_tokens() {
+        let selectedCard = SourceCardChrome(selected: true)
+        let unselectedCard = SourceCardChrome(selected: false)
+        XCTAssertEqual(selectedCard.cornerRadius, 16)
+        XCTAssertEqual(unselectedCard.cornerRadius, 16)
+        XCTAssertEqual(selectedCard.backgroundColor, PPColor.paper, "选中卡 paper 底")
+        XCTAssertEqual(unselectedCard.backgroundColor, PPColor.linen, "未选卡 linen 底")
+        XCTAssertEqual(selectedCard.borderColor, PPColor.ink, "选中卡 ink 描边")
+        XCTAssertEqual(unselectedCard.borderColor, PPColor.border, "未选卡 border 描边")
+        XCTAssertEqual(selectedCard.borderLineWidth, 2, "选中卡 2pt 描边")
+        XCTAssertEqual(unselectedCard.borderLineWidth, 1, "未选卡 1pt 描边")
+
+        let on = SelectBadge(selected: true)
+        let off = SelectBadge(selected: false)
+        XCTAssertEqual(on.diameter, 22)
+        XCTAssertEqual(off.diameter, 22)
+        XCTAssertEqual(on.fillColor, PPColor.ink, "选中角标 ink 底")
+        XCTAssertEqual(off.fillColor, PPColor.paperDim, "未选角标 paper-dim 底")
+        XCTAssertEqual(off.unselectedBorderColor, PPColor.borderStrong, "未选角标 border-strong 圈")
+        XCTAssertEqual(off.unselectedBorderWidth, 1.5, "未选角标 1.5pt 圈")
     }
 
     /// #1961：未完整权限提示改用与 Android 共享的词条（元数据在 Localizable.strings，iOS 不再手写一份），
