@@ -249,7 +249,7 @@ identity-check:
   @./tools/test-commit-identity-gate.sh
   @./tools/check-commit-identity.sh
 
-# 本地提交拦截（核心 + 范围），说明见 docs/runbook/local-hooks.md。
+# 本地提交拦截（本机安全链 + 核心禁区黑名单），说明见 docs/runbook/local-hooks.md。
 # hooks-test：临时仓库 + 假 gh 跑全部判据与反证，进 ci / ci-docs（纯 shell，几秒）。
 # hooks-check：检查本机是否装好（core.hooksPath 与转发器），没装好非 0 退出，修复跑 just setup。
 hooks-test:
@@ -879,18 +879,20 @@ test-dogfood-assets:
 # worker 只需这三条：start → 改代码、git commit -s → done；卡住用 stuck。
 # 标签流转、worktree、推送、回执全由命令完成。说明见 AGENTS.md「交付流程」。
 
-# 领卡：校验 ready + 有范围 → 建 worktree 与分支 → ready→doing，打印下一步。
-# 同一个功能的几张卡领到一条分支：just start <号> <号>… [--name <功能名>]（范围取并集）。
+# 领卡：校验 ready + 验收场景（无人模式 --unattended 先查设备在线/未锁屏，遇阻 0s SUSPENDED_ENV 跳过）→ 建 worktree → ready→doing。
+# 同一个功能的几张卡领到一条分支：just start <号> <号>… [--name <功能名>] [--unattended]。
 start n *args:
     bash tools/flow/worker-start.sh {{n}} {{args}}
 
-# 交卡（在卡 worktree 里跑）：范围核对 + 机械漏改提示（不阻断）+ 门禁。卡上写明「真机验证：需要」才跑 just verify（代码没变复用上次结果），
-# 全绿才推送、每张卡贴回执，doing→review，单独一行打印开 PR 的命令（gh pr create …，closes 全部卡），由执行者自己运行；
-# 流程红线不推送并打 blocked；本地门禁或 verify 红不推送、不改卡状态、不刷 issue。落后 main 只提示，有冲突才停。三级都打印正式 PR 命令；
-# 用户看得到的改动正文写「随版本验收」，不在 PR 上验收（#1471）。
-# 卡上写明「真机验证：需要」才跑真机验证，不默认跑。
+# 交卡（在卡 worktree 里跑）：基线核心禁区校验 + V3 四类任务门禁（v3-seal）+ 改动路径门禁（--rebase 或 --unattended 自动变基重验 + 两轮熔断）。
+# 全绿才推送、每张卡贴回执，doing→review，单独一行打印开 PR 命令（gh pr create …，closes 全部卡），由执行者自己运行；
+# 核心违规打 blocked；本地门禁或 verify 红不推送、不改卡状态、不刷 issue（无人模式连续 2 轮未过自动熔断跳过）。
 done *args:
     bash tools/flow/worker-done.sh {{args}}
+
+# V3 模拟演练场入口：改流程/门禁规则前先做本地 2 秒对抗自测（selftest）或真模型预演（live [model]），不直接拿真仓试错。
+flow-bench *args:
+    python3 tools/flow/bench/bench.py {{args}}
 
 # 按版本验收（#1471）：从 git 算候选版相对上一个正式版、用户看得见的改动（PR + 级别 + 卡上的验收场景）。
 #   just release-scope [--since <tag>] [--to <ref>]                列范围（--since 给上个 test 包 = 数自上个包以来的用户可见 PR）

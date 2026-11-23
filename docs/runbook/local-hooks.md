@@ -22,9 +22,13 @@
 **落后 main（提交时）**：卡分支提交时先现取一次 `origin/main`，下面两种情况拒绝，并提示 `git fetch origin && git rebase origin/main`：落后超过 20 个提交（`PPASS_HOOK_MAX_BEHIND` 可调）；或 main 上已有本卡还没拿到的提交改过本次暂存的同一个文件（合并必冲突）。取不到 `origin/main`（离线）时只告警，不拒绝。
 
 **合并 main 解冲突**：卡分支上 `git merge origin/main` 解完冲突后提交，与 MERGE_HEAD 内容完全相同的文件
-是从 main 原样带进来的、已经过审，不算本卡改动；冲突解法和顺手做的改动照常判核心与范围。
+是从 main 原样带进来的、已经过审，不算本卡改动；冲突解法和顺手做的改动照常判基线核心禁区。
 合并的不是 main（MERGE_HEAD 不在 `origin/main` 里），或离线认不出来时，按全部改动判。
 `git rebase` 过程中解冲突不触发 pre-commit，不受影响。
+
+**有人 / 无人模式交卡与自动变基重验（#1955）**：
+- 本机专属安全层（`~/.git-allowed-identities`、个人/公司隔离钩子、`gitleaks`、`.claude/settings.local.json`）永远只留在本机并经 `dispatch.sh` 优先执行；远端守身份白名单、基线核心禁区、`v3-seal` 哈希锁与 `review/agent`。
+- 无人模式（`just done --unattended` 或 `--rebase`）在推送前若检测到 `origin/main` 前进，会自动执行 `git rebase origin/main` 并重跑 V3 封条门禁、路径门禁与 `just verify`（使用 `--force-with-lease` 安全更新已推过的卡分支）；发生行冲突时立即 `git rebase --abort` 零残留退出（`SUSPENDED_CONFLICT`）；连续 2 轮未过门禁触发 `SUSPENDED_CIRCUIT_BREAK` 熔断跳过。
 
 **推送（pre-push）**：推送卡分支前，hook 会现取一次远端的 `main`。卡分支与它有冲突时拒绝
 （`git merge-tree --write-tree` 判），并提示 `git rebase origin/main`；只是落后、没有冲突，只提示落后几个提交，照推。

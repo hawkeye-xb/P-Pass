@@ -96,6 +96,7 @@ jobs:
         env:
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.PPASS_REVIEW_API_KEY }}
           ANTHROPIC_BASE_URL: ${{ vars.PPASS_REVIEW_BASE_URL || 'https://api.deepseek.com/anthropic' }}
+          CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8192"
         run: bash tools/flow/ci-review.sh agent
       - name: 发布结论（必需检查 review/agent 与评论；job 永远成功）
         if: ${{ !cancelled() }}

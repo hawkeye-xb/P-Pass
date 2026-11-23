@@ -20,7 +20,16 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=worker-lib.sh
 . "${HERE}/worker-lib.sh"
 
-[ "$#" -eq 0 ] || die "用法: just done（#1471 起用户看得到的改动随版本验收，不再有 --accepted）"
+UNATTENDED="${PPASS_UNATTENDED:-0}"
+REBASE_GATE="${PPASS_REBASE_GATE:-0}"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --unattended) UNATTENDED=1; shift ;;
+    --rebase) REBASE_GATE=1; shift ;;
+    *) die "用法: just done [--unattended] [--rebase]（#1471 起用户看得到的改动随版本验收，不再有 --accepted）" ;;
+  esac
+done
+[ "$UNATTENDED" = "1" ] && REBASE_GATE=1
 
 command -v gh >/dev/null 2>&1 || die "找不到 gh"
 TOP="$(git rev-parse --show-toplevel 2>/dev/null)" || die "不在 git 仓库里"
@@ -49,11 +58,21 @@ HAS_VERIFY_VERDICT=0
 if [ "$(git rev-list --count origin/main..HEAD)" -eq 0 ] && [ "$HAS_VERIFY_VERDICT" -eq 0 ]; then
   die "本分支相对 origin/main 没有任何提交" "先提交改动，或没有改动就 just stuck。"
 fi
-# 落后 main：没有冲突只提示（照推）；有冲突才停（git merge-tree 判，git ≥ 2.38；判不了只提示）。
+# 落后 main：--rebase（或无人模式）下自动执行 git rebase origin/main（撞冲突立即 git rebase --abort 并报 SUSPENDED_CONFLICT，零残留），
+# 变基后在新树上强制跑全套门禁防语义冲突；有人模式默认没有冲突只提示、有冲突才停。
 check_main() { # check_main <时机说明>
   local behind rc=0
   git merge-base --is-ancestor origin/main HEAD && return 0
   behind="$(git rev-list --count HEAD..origin/main)"
+  if [ "$REBASE_GATE" = "1" ]; then
+    echo "==> ${1}分支落后 origin/main ${behind} 个提交：自动执行 git rebase origin/main 并重跑门禁重验"
+    if ! git rebase origin/main >/dev/null 2>&1; then
+      git rebase --abort >/dev/null 2>&1 || true
+      echo "SUSPENDED_CONFLICT: auto-rebase onto origin/main failed (behind ${behind}); safely aborted" >&2
+      exit 3
+    fi
+    return 0
+  fi
   git merge-tree --write-tree --no-messages origin/main HEAD >/dev/null 2>&1 || rc=$?
   case "$rc" in
     0) echo "⚠ ${1}分支落后 origin/main ${behind} 个提交，没有冲突：照推（PR 上的 CI 测合并后的结果）。" ;;
@@ -102,13 +121,18 @@ fail_blocked() { # fail_blocked <停在哪> <日志文件|空> [补充行]
   exit 1
 }
 
-# 普通验证失败是开发迭代，不是需要别人接手的 blocked：保留本地证据，卡与 issue 都不改。
+# 普通验证失败是开发迭代，不是需要别人接手的 blocked：保留本地证据，卡与 issue 都不改；
+# 无人模式下连续 2 轮未过门禁即刻触发两轮熔断（SUSPENDED_CIRCUIT_BREAK，#1955），禁止无限重试。
 fail_local() { # fail_local <停在哪> <日志文件>
   local step="$1" log="$2" cnt
   cnt=$(($(cat "$FAILS_FILE" 2>/dev/null || echo 0) + 1))
   printf '%s' "$cnt" >"$FAILS_FILE"
   printf '\n✗ 本地验证失败：%s。未推送；不改卡状态，不写 issue。\n' "$step" >&2
   [ -z "$log" ] || { printf '  日志：%s/%s\n' "$EVID_SHOW" "$(basename "$log")" >&2; tail -n 15 "$log" >&2; }
+  if [ "$UNATTENDED" = "1" ] && [ "$cnt" -ge 2 ]; then
+    printf 'SUSPENDED_CIRCUIT_BREAK #%s: 连续 %s 轮未过门禁（%s），自动熔断挂起跳下一张\n' "$N" "$cnt" "$step" >&2
+    exit 4
+  fi
   if [ "$cnt" -ge 3 ]; then
     printf '  已累计失败 %s 次：别再重复同一方法；确实卡住就 just stuck %s "连红 %s 次：%s"。\n' "$cnt" "$N" "$cnt" "$step" >&2
   else
@@ -148,35 +172,43 @@ fi
 # ── 1a. V3 四类任务门禁分流（卡正文含 ```v3-seal 封条块时自动执行：fix / speculate_then_fix / feature / verify，#1954）──
 MAIN_ROOT="$(flow_main_root)"
 BASE_MERGE_SHA="$(git merge-base origin/main HEAD)"
-V3_SEAL_MODE=""
-V3_SEAL_OUT=""
-V3_VERIFY_COUNT=0
-V3_NON_VERIFY_COUNT=0
-for c in $CARDS; do
-  flow_load_issue "$c"
-  if printf '%s\n' "$I_BODY" | python3 -B -I "${HERE}/v3_harness.py" has-seal; then
-    V3_SEAL_MODE="$(printf '%s\n' "$I_BODY" | python3 -B -I "${HERE}/v3_harness.py" parse-seal | python3 -B -I -c 'import json,sys; print(json.load(sys.stdin)["mode"])' 2>/dev/null || echo invalid)"
-    v3_core_arg=()
-    [ "$IS_CORE" = 1 ] && v3_core_arg+=(--core-approved)
-    V3_LOG="${EVID_DIR}/v3-gate.log"
-    if ! printf '%s\n' "$I_BODY" | python3 -B -I "${HERE}/v3_harness.py" check-card "$TOP" "$MAIN_ROOT" "$BASE_MERGE_SHA" ${v3_core_arg[@]+"${v3_core_arg[@]}"} >"$V3_LOG" 2>&1; then
-      if grep -q 'CORE_PATH_BLOCKED' "$V3_LOG" 2>/dev/null; then
-        fail_blocked "V3 四类任务门禁（mode=${V3_SEAL_MODE}）" "$V3_LOG"
-      else
-        fail_local "V3 四类任务门禁（mode=${V3_SEAL_MODE}）" "$V3_LOG"
-      fi
+run_v3_seal_checks() {
+  local base_sha="$1" c v3_core_arg
+  V3_SEAL_MODE=""
+  V3_SEAL_OUT=""
+  V3_VERIFY_COUNT=0
+  V3_NON_VERIFY_COUNT=0
+  for c in $CARDS; do
+    flow_load_issue "$c"
+    HAS_SEAL_LOG="${EVID_DIR}/v3-has-seal.log"
+    if ! HAS_SEAL_ANS="$(printf '%s\n' "$I_BODY" | python3 -B -I "${HERE}/v3_harness.py" has-seal 2>"$HAS_SEAL_LOG")"; then
+      fail_local "V3 封条探测异常（v3_harness.py has-seal 失败，按 fail-closed 拒绝）" "$HAS_SEAL_LOG"
     fi
-    if [ "$V3_SEAL_MODE" = "verify" ]; then
-      V3_VERIFY_COUNT=$((V3_VERIFY_COUNT + 1))
+    if [ "$HAS_SEAL_ANS" = "yes" ]; then
+      V3_SEAL_MODE="$(printf '%s\n' "$I_BODY" | python3 -B -I "${HERE}/v3_harness.py" parse-seal | python3 -B -I -c 'import json,sys; print(json.load(sys.stdin)["mode"])' 2>/dev/null || echo invalid)"
+      v3_core_arg=()
+      [ "$IS_CORE" = 1 ] && v3_core_arg+=(--core-approved)
+      V3_LOG="${EVID_DIR}/v3-gate.log"
+      if ! printf '%s\n' "$I_BODY" | python3 -B -I "${HERE}/v3_harness.py" check-card "$TOP" "$MAIN_ROOT" "$base_sha" ${v3_core_arg[@]+"${v3_core_arg[@]}"} >"$V3_LOG" 2>&1; then
+        if grep -q 'CORE_PATH_BLOCKED' "$V3_LOG" 2>/dev/null; then
+          fail_blocked "V3 四类任务门禁（mode=${V3_SEAL_MODE}）" "$V3_LOG"
+        else
+          fail_local "V3 四类任务门禁（mode=${V3_SEAL_MODE}）" "$V3_LOG"
+        fi
+      fi
+      if [ "$V3_SEAL_MODE" = "verify" ]; then
+        V3_VERIFY_COUNT=$((V3_VERIFY_COUNT + 1))
+      else
+        V3_NON_VERIFY_COUNT=$((V3_NON_VERIFY_COUNT + 1))
+      fi
+      V3_SEAL_OUT="$(tail -n 1 "$V3_LOG" | scrub)"
+      echo "✅ V3 门禁通过（#${c}）：${V3_SEAL_OUT}"
     else
       V3_NON_VERIFY_COUNT=$((V3_NON_VERIFY_COUNT + 1))
     fi
-    V3_SEAL_OUT="$(tail -n 1 "$V3_LOG" | scrub)"
-    echo "✅ V3 门禁通过（#${c}）：${V3_SEAL_OUT}"
-  else
-    V3_NON_VERIFY_COUNT=$((V3_NON_VERIFY_COUNT + 1))
-  fi
-done
+  done
+}
+run_v3_seal_checks "$BASE_MERGE_SHA"
 if [ "$V3_VERIFY_COUNT" -gt 0 ] && [ "$V3_NON_VERIFY_COUNT" -gt 0 ]; then
   fail_local "多卡分支不允许将纯验证卡（mode=verify）与改代码卡混在同一条分支" ""
 fi
@@ -304,13 +336,34 @@ fi
 REUSE_NOTE=""
 [ -z "$REUSED" ] || REUSE_NOTE="（复用 ${REUSED} 的验证：代码没变，树 \`${TREE:0:10}\`）"
 
-# 门禁期间 main 可能又动了：推之前再判一次冲突（pre-push hook 同口径，这里提前给出明白话）。
+# 门禁期间 main 可能又动了：若开启 --rebase（或无人模式）且 main 在门禁期间再次前进，必须变基并在新树上重跑完整验证（V3 封条门禁 + 路径门禁 + just verify）防语义冲突！
+DID_REBASE=0
+[ "$REBASE_GATE" = "1" ] && DID_REBASE=1
 git fetch -q origin "+refs/heads/main:refs/remotes/origin/main" || die "取不到 origin/main（离线？），没推"
-check_main "门禁期间 origin/main 前进了："
+if [ "$REBASE_GATE" = "1" ] && ! git merge-base --is-ancestor origin/main HEAD; then
+  check_main "门禁期间 origin/main 前进了："
+  rm -f "$VERIFIED"
+  run_v3_seal_checks "$(git merge-base origin/main HEAD)"
+  for g in "${GATES[@]}"; do
+    printf '\n==> [rebase re-verify] %s\n' "$g" >>"${EVID_DIR}/gate.log"
+    # shellcheck disable=SC2086
+    run_logged "${EVID_DIR}/gate.log" $g || fail_local "变基后重验 ${g}" "${EVID_DIR}/gate.log"
+  done
+  GATE_TAIL="$(tail -n 5 "${EVID_DIR}/gate.log" | scrub)"
+  if [ "$DO_VERIFY" = 1 ]; then
+    run_logged "${EVID_DIR}/verify.log" just verify "$N" || fail_local "变基后重验 just verify ${N}" "${EVID_DIR}/verify.log"
+    VERIFY_STATE="passed"
+    VERIFY_TAIL="$(tail -n 8 "${EVID_DIR}/verify.log" | scrub)"
+  fi
+else
+  check_main "门禁期间 origin/main 前进了："
+fi
 
-# ── 4. 推送（显式 refspec，不依赖上游设置）──────────────────────────────
+# ── 4. 推送（显式 refspec；开启 --rebase 时带 --force-with-lease 兼容重跑已推送过的卡分支）──
 PUSH_LOG="${EVID_DIR}/push.log"
-git push -u origin "HEAD:refs/heads/${BRANCH}" >"$PUSH_LOG" 2>&1 || fail_blocked "git push" "$PUSH_LOG"
+push_extra=()
+[ "$DID_REBASE" = "1" ] && push_extra+=(--force-with-lease)
+git push -u ${push_extra[@]+"${push_extra[@]}"} origin "HEAD:refs/heads/${BRANCH}" >"$PUSH_LOG" 2>&1 || fail_blocked "git push" "$PUSH_LOG"
 
 # ── 5. 回执（贴到每张卡）────────────────────────────────────────────────
 if [ "$VERIFY_STATE" = "passed" ]; then

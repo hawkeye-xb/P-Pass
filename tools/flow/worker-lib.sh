@@ -60,7 +60,7 @@ flow_load_issue() { # flow_load_issue <号>
 
 has_label() { case ",${I_LABELS}," in *",$1,"*) return 0 ;; esac; return 1; }
 
-# 「范围」代码块解析（可选提示：供门禁预检与类型推断参考；普通文件不再强制列范围，#1953）。
+# 「范围」代码块解析（可选提示：供分支类型推断参考；普通文件不再强制列范围，#1953）。
 flow_parse_scope() { # flow_parse_scope <issue 正文>
   local scope g
   scope="$(printf '%s\n' "$1" | awk '
@@ -93,11 +93,6 @@ flow_field_text() { # flow_field_text <正文> <字段名>
     grab && /^#/ { exit }
     grab { print }
   ' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$'
-}
-
-# 一个文件是否在 GLOBS 里（用 tools/ci-paths.sh hit，与 hook 同一套 glob 语义）。
-flow_in_scope() { # flow_in_scope <文件>
-  [ "$(printf '%s\n' "$1" | bash "$FLOW_PATHS" hit - "${GLOBS[@]}" 2>/dev/null)" = "true" ]
 }
 
 # 改标签，失败返回非 0、不退出：多卡一次处理时，一张失败不能把其余卡撂下。

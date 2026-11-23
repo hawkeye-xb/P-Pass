@@ -122,7 +122,7 @@ do_agent() {
     local run=("$claude" "${args[@]}")
     if command -v timeout >/dev/null 2>&1; then run=(timeout "$limit" "${run[@]}"); fi
     rc=0
-    (cd "${STATE}/checkout" && "${run[@]}" <"${STATE}/prompt.txt" >"${STATE}/agent.out" 2>"${STATE}/agent.err") || rc=$?
+    (cd "${STATE}/checkout" && CLAUDE_CODE_MAX_OUTPUT_TOKENS="${CLAUDE_CODE_MAX_OUTPUT_TOKENS:-8192}" "${run[@]}" <"${STATE}/prompt.txt" >"${STATE}/agent.out" 2>"${STATE}/agent.err") || rc=$?
     last="$(grep -v '^[[:space:]]*$' "${STATE}/agent.out" 2>/dev/null | tail -n 1 | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || true)"
     if [ "$rc" -eq 0 ] && { [ "$last" = "VERDICT: PASS" ] || [ "$last" = "VERDICT: FAIL" ]; }; then
       echo 0 >"${STATE}/agent.rc"
