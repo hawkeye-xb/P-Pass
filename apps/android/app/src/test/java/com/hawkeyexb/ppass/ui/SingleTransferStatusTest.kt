@@ -1,9 +1,11 @@
 package com.hawkeyexb.ppass.ui
 
+import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.backup.flow.InMemoryPickedStore
 import com.hawkeyexb.ppass.backup.picked.NewPicked
 import com.hawkeyexb.ppass.backup.picked.PickedBatchSummary
 import com.hawkeyexb.ppass.backup.picked.PickedState
+import com.hawkeyexb.ppass.runPickedEnqueue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -149,6 +151,114 @@ class SingleTransferStatusTest {
         assertTrue(
             "summary() 必须是全表聚合，不许再按 MAX(batch_id) 过滤（改回去本条红）",
             !summarySql.contains("WHERE"),
+        )
+    }
+
+    // ── #1864 单次传输入队失败：给用户提示，不静默 ─────────────────
+
+    /** #1864：用户选了东西而 PickedUploads.enqueue 抛异常——弹出既有 command_failed 提示，
+     *  不进成功路径（不 clearSettled、不刷新汇总、不唤醒传输循环），异常原样交给调用方记日志。 */
+    @Test
+    fun picked_enqueue_exception_notifies_the_user_and_skips_the_success_path() {
+        var success = 0
+        val notices = mutableListOf<Int>()
+        val failures = mutableListOf<Throwable?>()
+        val ok = runPickedEnqueue(
+            uriCount = 2,
+            enqueue = { throw IllegalStateException("disk full") },
+            onSuccess = { success++ },
+            onFailure = { failures.add(it) },
+            notifyFailure = { notices.add(it) },
+        )
+        assertFalse("入队抛异常不算登记成功", ok)
+        assertEquals("失败不进成功路径", 0, success)
+        assertEquals("失败只报一次既有提示", listOf(R.string.command_failed), notices)
+        assertTrue("异常原样交给调用方记日志", failures.single() is IllegalStateException)
+    }
+
+    /** #1864：enqueue 正常返回但一个都没登记上（返回 0）——同样提示，同样不进成功路径。 */
+    @Test
+    fun picked_enqueue_registering_nothing_notifies_the_user() {
+        var success = 0
+        val notices = mutableListOf<Int>()
+        val failures = mutableListOf<Throwable?>()
+        val ok = runPickedEnqueue(
+            uriCount = 3,
+            enqueue = { 0 },
+            onSuccess = { success++ },
+            onFailure = { failures.add(it) },
+            notifyFailure = { notices.add(it) },
+        )
+        assertFalse(ok)
+        assertEquals(0, success)
+        assertEquals(listOf(R.string.command_failed), notices)
+        assertNull("没有异常时 onFailure 收到 null", failures.single())
+    }
+
+    /** #1864：登记成功——进成功路径，不弹失败提示。反证：去掉 notifyFailure 调用只影响失败分支。 */
+    @Test
+    fun picked_enqueue_success_runs_the_success_path_without_a_notice() {
+        var enqueued = 0
+        var success = 0
+        var notices = 0
+        val ok = runPickedEnqueue(
+            uriCount = 4,
+            enqueue = { enqueued++; 3 },
+            onSuccess = { success++ },
+            onFailure = { throw AssertionError("成功路径不应走失败回调") },
+            notifyFailure = { notices++ },
+        )
+        assertTrue(ok)
+        assertEquals(1, enqueued)
+        assertEquals(1, success)
+        assertEquals("成功时不弹失败提示", 0, notices)
+    }
+
+    /** #1864：用户取消选择（空列表）不是错误——不登记、不提示，也不当成失败日志。 */
+    @Test
+    fun cancelling_the_picker_is_not_an_error() {
+        var enqueued = 0
+        var success = 0
+        var notices = 0
+        var failures = 0
+        val ok = runPickedEnqueue(
+            uriCount = 0,
+            enqueue = { enqueued++; 1 },
+            onSuccess = { success++ },
+            onFailure = { failures++ },
+            notifyFailure = { notices++ },
+        )
+        assertFalse(ok)
+        assertEquals("取消时不入队", 0, enqueued)
+        assertEquals(0, success)
+        assertEquals("取消时不弹错误提示", 0, notices)
+        assertEquals(0, failures)
+    }
+
+    /** #1864：首页相册、首页文件、决定页三处单次入口都接到失败反馈链路（源文本门禁，只能证明写法）。 */
+    @Test
+    fun all_three_single_transfer_entries_surface_enqueue_failures_to_the_user() {
+        val main = mainActivity()
+        assertTrue(
+            "Snackbar 宿主必须在单次选择回调之前声明（回调里要用同一个 hostState）",
+            main.indexOf("val snackbarHostState") in 0 until main.indexOf("val pickPhotosLauncher"),
+        )
+        val photos = main.substringAfter("val pickPhotosLauncher").substringBefore("val filePickLauncher")
+        val files = main.substringAfter("val filePickLauncher").substringBefore("androidx.compose.runtime.LaunchedEffect")
+        val decision = main.substringAfter("val decisionPickLauncherResult:").substringBefore("val launchDecisionFile:")
+        listOf("首页相册" to photos, "首页文件" to files, "决定页" to decision).forEach { (name, block) ->
+            assertTrue("${name}入口必须走 runPickedEnqueue 的统一失败反馈", block.contains("runPickedEnqueue("))
+            assertTrue("${name}入口失败要弹 Snackbar", block.contains("showSnackbar"))
+        }
+        assertTrue(
+            "决定页入队失败必须解锁按钮，留在决定页重试",
+            decision.contains("decisionLock.unlock()"),
+        )
+        val hostAt = main.indexOf("SnackbarHost(")
+        assertTrue(
+            "Snackbar 宿主挂在页面最外层（在 when (val s = screen) 之外），首页与决定页都能看到",
+            main.indexOf("when (val s = screen)") in 0 until hostAt &&
+                main.substring(hostAt).contains("hostState = snackbarHostState"),
         )
     }
 
