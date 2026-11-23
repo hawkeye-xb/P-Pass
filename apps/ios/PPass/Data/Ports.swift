@@ -289,10 +289,19 @@ protocol BackupEngine: AnyObject {
 
 /// #1763 素材文件夹二级页一行的投影：不携带书签数据（ADR §2：书签只留 App 私有 Registry）。
 /// available=false =「等待重新授权」（书签不可解析或根不可达）。
+/// #1961：`count` 是范围页文件夹卡片上的「N 张」，可用时按图片 / 视频扩展名在同口径下数出；不可用或读不到 = 0。
 struct FolderSourceInfo: Equatable, Identifiable {
     let id: String
     let displayName: String
     let available: Bool
+    let count: Int
+
+    init(id: String, displayName: String, available: Bool, count: Int = 0) {
+        self.id = id
+        self.displayName = displayName
+        self.available = available
+        self.count = count
+    }
 }
 
 /// 一次运行用的全部端口。

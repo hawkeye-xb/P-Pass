@@ -78,7 +78,8 @@ final class FolderSettingsTests: XCTestCase {
     func testFolderStringsPresentInBothLanguages() throws {
         let keys = ["folder_sources_add", "folder_sources_status_ok", "folder_sources_status_wait",
                     "folder_sources_reauth", "folder_sources_remove", "folder_sources_remove_confirm_title",
-                    "folder_sources_remove_confirm_body", "folder_sources_add_failed"]
+                    "folder_sources_remove_confirm_body", "folder_sources_add_failed",
+                    "folder_sources_reauth_failed", "folder_sources_remove_failed"]
         for lang in ["zh-Hans", "en"] {
             let path = try XCTUnwrap(Bundle.main.path(forResource: lang, ofType: "lproj"), "缺 \(lang).lproj")
             let bundle = try XCTUnwrap(Bundle(path: path))
@@ -87,6 +88,53 @@ final class FolderSettingsTests: XCTestCase {
                 XCTAssertNotEqual(value, "\u{1}", "\(lang) 缺文案 key：\(key)")
             }
         }
+    }
+
+    // #1961：移除确认标题带文件夹名（%@），中英都要真的插进去。反证：标题退回「移除这个文件夹？」无占位符，本条红。
+    func testRemoveConfirmTitleInterpolatesFolderName() throws {
+        for lang in ["zh-Hans", "en"] {
+            let path = try XCTUnwrap(Bundle.main.path(forResource: lang, ofType: "lproj"))
+            let bundle = try XCTUnwrap(Bundle(path: path))
+            let template = bundle.localizedString(forKey: "folder_sources_remove_confirm_title", value: "\u{1}", table: "IOS")
+            XCTAssertNotEqual(template, "\u{1}", "\(lang) 缺移除确认标题")
+            XCTAssertTrue(template.contains("%@"), "\(lang) 标题要带文件夹名占位符")
+            let rendered = String(format: template, "Blackmagic Cam")
+            XCTAssertTrue(rendered.contains("Blackmagic Cam"), "\(lang) 标题没插入文件夹名：\(rendered)")
+        }
+    }
+
+    // #1961：文件夹卡片的「N 张」——默认 0（兼容既有构造），相等性包含张数。
+    func testFolderSourceInfoCarriesMediaCount() {
+        XCTAssertEqual(FolderSourceInfo(id: "f", displayName: "F", available: true).count, 0)
+        XCTAssertEqual(FolderSourceInfo(id: "f", displayName: "F", available: true, count: 7).count, 7)
+        XCTAssertNotEqual(FolderSourceInfo(id: "f", displayName: "F", available: true, count: 7),
+                          FolderSourceInfo(id: "f", displayName: "F", available: true, count: 8))
+    }
+
+    // #1961：张数按图片 / 视频扩展名递归统计（与 FolderMediaSource 的过滤同口径），子目录里的媒体也计入，
+    // 非媒体文件不计。反证：不过滤扩展名（把 notes.txt 算进去）或只数顶层（漏 nested/c.png），本条红。
+    func testFolderMediaCountCountsImagesAndVideosRecursively() async throws {
+        let url = try makeFolder(name: "counted")
+        try "x".write(to: url.appendingPathComponent("b.mp4"), atomically: true, encoding: .utf8)
+        try "x".write(to: url.appendingPathComponent("notes.txt"), atomically: true, encoding: .utf8)
+        let nested = url.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try "x".write(to: nested.appendingPathComponent("c.png"), atomically: true, encoding: .utf8)
+        let id = try registry.addFolder(at: url, displayName: "counted")
+        let record = try XCTUnwrap(registry.record(id: id))
+        let count = await LiveBackend.folderMediaCount(record: record, registry: registry, logger: logger)
+        XCTAssertEqual(count, 3, "a.jpg + b.mp4 + nested/c.png（notes.txt 不算）")
+    }
+
+    // #1961：书签坏了读不到目录时张数记 0（卡片同时显示「等待重新授权」），不编数字。
+    func testFolderMediaCountIsZeroWhenUnavailable() async throws {
+        let url = try makeFolder(name: "count-broken")
+        let id = try registry.addFolder(at: url, displayName: "broken")
+        var record = try XCTUnwrap(registry.record(id: id))
+        record.bookmark = Data("not-a-bookmark".utf8)
+        registry.upsert(record)
+        let count = await LiveBackend.folderMediaCount(record: record, registry: registry, logger: logger)
+        XCTAssertEqual(count, 0)
     }
 
     // MARK: refreshFolderSources 的复用与退役（#1763 评审建议1 判红）

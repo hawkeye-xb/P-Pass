@@ -1,4 +1,5 @@
 import PPassCore
+import SwiftUI
 import XCTest
 @testable import PPass
 
@@ -30,32 +31,75 @@ final class BucketAccessNoticeTests: XCTestCase {
                        "拒绝授权且 albums() 为空：一张都展示不了（编辑态相册部分由刷新清空）")
     }
 
-    /// 定稿文案中英都在（缺 key 时 bundle 返回占位值）。
-    func test_copy_exists_in_both_languages() throws {
+    /// #1961：来源卡外壳与勾选角标的视觉值必须来自设计 token（对齐 Android SourceCard / SelectBadge），
+    /// 并且相册卡、文件夹卡、添加卡都真实套用同一个 `SourceCardChrome`。
+    /// 反证：删掉 `SourceCardChrome` / `SelectBadge` 会编译失败；把 paper/linen、ink/border、2pt/1pt、
+    /// 22pt、borderStrong 1.5 改成别的值，对应断言红。只改回旧样式而不删结构同样红。
+    func test_source_card_chrome_and_badge_match_design_tokens() {
+        let selectedCard = SourceCardChrome(selected: true)
+        let unselectedCard = SourceCardChrome(selected: false)
+        XCTAssertEqual(selectedCard.cornerRadius, 16)
+        XCTAssertEqual(unselectedCard.cornerRadius, 16)
+        XCTAssertEqual(selectedCard.backgroundColor, PPColor.paper, "选中卡 paper 底")
+        XCTAssertEqual(unselectedCard.backgroundColor, PPColor.linen, "未选卡 linen 底")
+        XCTAssertEqual(selectedCard.borderColor, PPColor.ink, "选中卡 ink 描边")
+        XCTAssertEqual(unselectedCard.borderColor, PPColor.border, "未选卡 border 描边")
+        XCTAssertEqual(selectedCard.borderLineWidth, 2, "选中卡 2pt 描边")
+        XCTAssertEqual(unselectedCard.borderLineWidth, 1, "未选卡 1pt 描边")
+
+        let on = SelectBadge(selected: true)
+        let off = SelectBadge(selected: false)
+        XCTAssertEqual(on.diameter, 22)
+        XCTAssertEqual(off.diameter, 22)
+        XCTAssertEqual(on.fillColor, PPColor.ink, "选中角标 ink 底")
+        XCTAssertEqual(off.fillColor, PPColor.paperDim, "未选角标 paper-dim 底")
+        XCTAssertEqual(off.unselectedBorderColor, PPColor.borderStrong, "未选角标 border-strong 圈")
+        XCTAssertEqual(off.unselectedBorderWidth, 1.5, "未选角标 1.5pt 圈")
+    }
+
+    /// #1961：未完整权限提示改用与 Android 共享的词条（元数据在 Localizable.strings，iOS 不再手写一份），
+    /// 旧的 `bucket_no_access_*` / `bucket_request_access_action` 已删除；来源卡类型词也走共享词条。
+    /// 反证：把 BucketScreen 或 IOS.strings 改回旧 key，本条红。
+    func test_shared_scope_copy_is_used_and_legacy_keys_are_gone() throws {
         let expected: [String: [String: String]] = [
             "en": [
-                "bucket_no_access_title": "Photos access is incomplete",
-                "bucket_no_access_body": "Photos won't be backed up automatically. Back up folders only, or send selected photos.",
-                "bucket_no_access_action": "Open Settings",
-                "bucket_request_access_action": "Allow Access",
+                "scope_album_no_access_title": "Photos access is incomplete",
+                "scope_album_no_access_body": "P-Pass can’t read photos on this phone, so it can’t back them up.",
+                "scope_album_no_access_action": "Allow access to photos",
+                "auto_backup_blocked_action": "Open settings",
+                "source_kind_album": "Album",
+                "source_kind_folder": "Folder",
                 "hero_mixed_album_incomplete": "Backing up folders · Photos access incomplete",
                 "hero_adjust_scope_action": "Adjust scope",
                 "welcome_scan": "Scan to connect to a computer",
             ],
             "zh-Hans": [
-                "bucket_no_access_title": "相册未完整授权",
-                "bucket_no_access_body": "相册不会自动备份。可以只备份文件夹，或先挑几张传。",
-                "bucket_no_access_action": "去设置",
-                "bucket_request_access_action": "允许访问",
+                "scope_album_no_access_title": "相册未完整授权",
+                "scope_album_no_access_body": "无法读取这台手机上的照片，没法备份。",
+                "scope_album_no_access_action": "允许访问照片",
+                "auto_backup_blocked_action": "去设置",
+                "source_kind_album": "相册",
+                "source_kind_folder": "文件夹",
                 "hero_mixed_album_incomplete": "文件夹备份中 · 相册未完整授权",
                 "hero_adjust_scope_action": "调整范围",
             ],
+        ]
+        let legacyKeys = [
+            "bucket_no_access_title", "bucket_no_access_body",
+            "bucket_no_access_action", "bucket_request_access_action",
         ]
         for (lang, keys) in expected {
             let path = try XCTUnwrap(Bundle.main.path(forResource: lang, ofType: "lproj"))
             let bundle = try XCTUnwrap(Bundle(path: path))
             for (key, text) in keys {
                 XCTAssertEqual(L.s(key, bundle: bundle), text, "\(lang) \(key)")
+            }
+            for key in legacyKeys {
+                let missing = "\u{1}"
+                XCTAssertEqual(bundle.localizedString(forKey: key, value: missing, table: "IOS"), missing,
+                               "\(lang) 旧词条 \(key) 必须已从 IOS.strings 删除")
+                XCTAssertEqual(bundle.localizedString(forKey: key, value: missing, table: nil), missing,
+                               "\(lang) 旧词条 \(key) 不能被任何表兜底命中")
             }
         }
     }

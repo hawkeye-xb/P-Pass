@@ -1,7 +1,9 @@
 package com.hawkeyexb.ppass.ui
 
 import com.hawkeyexb.ppass.backup.MediaAccess
+import com.hawkeyexb.ppass.backup.MediaScanner
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -56,7 +58,7 @@ class UI08BucketScreenTest {
     @Test
     fun same_name_sources_get_distinct_type_labels() {
         val source = bucketScreenSource()
-        val albumBlock = source.substringAfter("items(buckets").substringBefore("items(folderBuckets")
+        val albumBlock = source.substringAfter("items(visibleAlbumBuckets").substringBefore("items(folderBuckets")
         val folderBlock = source.substringAfter("items(folderBuckets").substringBefore("item(key = \"add-folder\")")
         assertTrue(
             "相册卡要带相册类型词",
@@ -129,23 +131,41 @@ class UI08BucketScreenTest {
     }
 
     /**
-     * #1794：范围页始终能进（对齐 iOS），没有相册权限时相册区不给选、只说明现状并给申请入口，
-     * 文件夹区和「添加文件夹」照常可用。反证：相册卡不做权限门控或「添加文件夹」被并进门控里，本条红。
+     * #1794 / #1961：范围页始终能进（对齐 iOS）。相册自动备份只认完整照片权限：只有 FULL 给选相册，
+     * PARTIAL / NONE 都只说明现状并给开启入口；文件夹区和「添加文件夹」照常可用。
+     * 反证：把 PARTIAL 重新放宽成可选相册（旧 `access != NONE`），本条红。
      */
     @Test
-    fun without_photo_access_albums_are_not_selectable_but_folders_still_are() {
+    fun only_full_photo_access_offers_album_choices_but_folders_still_work() {
+        assertFalse("部分照片权限对相册自动备份与无权限相同，不给选相册", bucketScreenOffersAlbumChoices(MediaAccess.PARTIAL))
         assertFalse("没有相册权限时不给选相册", bucketScreenOffersAlbumChoices(MediaAccess.NONE))
-        assertTrue(bucketScreenOffersAlbumChoices(MediaAccess.PARTIAL))
-        assertTrue(bucketScreenOffersAlbumChoices(MediaAccess.FULL))
+        assertTrue("完整照片权限才给选相册", bucketScreenOffersAlbumChoices(MediaAccess.FULL))
         val source = bucketScreenSource()
-        val gated = source.substringAfter("if (offersAlbums) {").substringBefore("items(folderBuckets")
-        assertTrue("相册卡按相册权限门控", gated.contains("items(buckets"))
-        assertTrue("无权限时相册区要有申请入口", source.contains("onRequestAlbumAccess"))
-        assertTrue("申请入口用无权限文案", source.contains("R.string.scope_album_no_access_action"))
+        assertTrue(
+            "相册卡只展示可见相册（完整授权全部 / 未完整授权仅已勾选）",
+            source.contains("items(visibleAlbumBuckets(buckets, checked, albumAccess)"),
+        )
+        assertTrue("未完整授权时相册区要有开启入口", source.contains("onRequestAlbumAccess"))
+        assertTrue("开启入口用共享词条", source.contains("R.string.scope_album_no_access_action"))
         val addFolder = source.indexOf("item(key = \"add-folder\")")
         val folderItems = source.indexOf("items(folderBuckets")
         assertTrue("「添加文件夹」无条件出现", addFolder > folderItems)
-        assertFalse("「添加文件夹」不能被相册权限门控", gated.contains("add-folder"))
+        assertFalse("「添加文件夹」不能被相册权限门控", source.substring(folderItems, addFolder).contains("offersAlbums"))
+    }
+
+    /**
+     * #1961 / #1811：未完整授权（含部分权限）时不展示没勾选的受限相册，避免诱使用户误选；
+     * 已勾选的仍保留可见以便取消，完整授权显示全部。反证：`visibleAlbumBuckets` 在 PARTIAL 下
+     * 直接返回全部或直接返回空列表，本条红。
+     */
+    @Test
+    fun visible_album_buckets_keep_only_checked_ones_until_full_access() {
+        val a = MediaScanner.Bucket(1L, "A", 3)
+        val b = MediaScanner.Bucket(2L, "B", 4)
+        assertEquals("完整授权显示全部", listOf(a, b), visibleAlbumBuckets(listOf(a, b), emptySet(), MediaAccess.FULL))
+        assertEquals("部分权限下已勾选的保留、没勾的不展示", listOf(a), visibleAlbumBuckets(listOf(a, b), setOf(1L), MediaAccess.PARTIAL))
+        assertEquals("无权限下同样只保留已勾选的（可取消）", listOf(a), visibleAlbumBuckets(listOf(a, b), setOf(1L), MediaAccess.NONE))
+        assertEquals("部分权限下一个都没勾就不展示任何相册", emptyList<MediaScanner.Bucket>(), visibleAlbumBuckets(listOf(a, b), emptySet(), MediaAccess.PARTIAL))
     }
 
     /**
@@ -161,11 +181,14 @@ class UI08BucketScreenTest {
         )
     }
 
-    /** 没有相册权限时读不到照片，不能把「读不到」说成整机没有照片。 */
+    /** 只有完整权限才读得到全部照片：部分权限同样不能把「只能读一部分」说成整机没有照片。 */
     @Test
-    fun whole_phone_empty_copy_needs_readable_photo_access() {
+    fun whole_phone_empty_copy_needs_full_photo_access() {
         assertTrue(bucketScreenEmptyNoticeVisible(bucketsEmpty = true, foldersEmpty = true, access = MediaAccess.FULL))
-        assertTrue(bucketScreenEmptyNoticeVisible(bucketsEmpty = true, foldersEmpty = true, access = MediaAccess.PARTIAL))
+        assertFalse(
+            "部分照片权限时读不到全部照片，不得声称整机没有照片",
+            bucketScreenEmptyNoticeVisible(bucketsEmpty = true, foldersEmpty = true, access = MediaAccess.PARTIAL),
+        )
         assertFalse(
             "没有相册权限时不得声称整机没有照片",
             bucketScreenEmptyNoticeVisible(bucketsEmpty = true, foldersEmpty = true, access = MediaAccess.NONE),

@@ -84,15 +84,12 @@ fun sinceWidened(previousSinceSec: Long?, newSinceSec: Long?): Boolean =
     previousSinceSec != null && (newSinceSec == null || newSinceSec < previousSinceSec)
 
 /**
- * 选范围页一进来勾着哪些相册：这台电脑存过范围就是存下的那些；首次选（onboarding、这台电脑从没存过）默认勾上
- * 相机相册——有「从今天起」兜着，不会一次传很多；识别不到相机相册（个别机型路径不同）就不勾，退回原行为。
- * 从设置里进来、但从没存过范围的，也按原行为一个都不勾。
+ * 选范围页一进来勾着哪些相册：这台电脑存过范围就是存下的那些；首次选（onboarding）一律一个都不勾
+ * （#1811 / 产品负责人 2026-11-17 定案：由用户显式勾选来源，空范围明写未选择任何来源）。
+ * 从设置里进来、但从没存过范围的，同样一个都不勾。
  */
-fun initialSelection(saved: Set<Long>?, firstTime: Boolean, cameraBucketIds: Set<Long>): Set<Long> = when {
-    saved != null -> saved
-    firstTime -> cameraBucketIds
-    else -> emptySet()
-}
+fun initialSelection(saved: Set<Long>?, firstTime: Boolean, cameraBucketIds: Set<Long>): Set<Long> =
+    saved ?: emptySet()
 
 /**
  * 相机相册的识别：`RELATIVE_PATH` 为 `DCIM/Camera/`（API 29+），更早的系统看 `_data` 里有没有 `/DCIM/Camera/`。
