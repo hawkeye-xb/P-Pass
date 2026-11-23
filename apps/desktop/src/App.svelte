@@ -411,11 +411,13 @@
       // 的基础；拿不到时回退数量（老 daemon 升级过渡）。
       // 每项可能是 {name}（新 daemon）或纯字符串（老 daemon）——
       // 统一 normalize 成对象。
+      let pendingKnown = false;
       try {
         const p = await call("pairing.pending", {});
         pendingList = (p.pending ?? []).map((x) =>
           typeof x === "string" ? { name: x } : x
         );
+        pendingKnown = true;
       } catch (_) {
         pendingList = [];
       }
@@ -423,7 +425,18 @@
       // 内容立即可用——不管二维码弹窗开没开；首页横幅只是关掉弹窗后的再入口。
       // 弹窗何时收起由块决定（open 条件），不看队列是否为空。
       const synced = syncRequests(pairRequests, pendingList);
-      pairRequests = synced.rows;
+      // #1875：非码错的提交失败（如连不上后台）发生时，队列往往也读不到——
+      // 这时按队列对齐会把这块连同弹窗内的错误一起收掉，用户什么也看不到。
+      // 队列读不到就留着带错误的块；队列读到了、里面确实没有它，才随「请求被
+      // 移除」一起消失（下面的清理顺手把它的错误也清掉）。
+      const keptOnError = pendingKnown
+        ? []
+        : pairRequests.filter((r) => pairErrors[r.id] && !synced.rows.some((x) => x.id === r.id));
+      pairRequests = [...synced.rows, ...keptOnError];
+      const liveIds = new Set(pairRequests.map((r) => r.id));
+      if (Object.keys(pairErrors).some((id) => !liveIds.has(id))) {
+        pairErrors = Object.fromEntries(Object.entries(pairErrors).filter(([id]) => liveIds.has(id)));
+      }
       if (synced.added.length > 0) {
         showPairModal = false;
         // 弹窗同时只留一个：确认弹窗打开时把还开着的大图查看器关掉。两个遮罩
@@ -693,12 +706,31 @@
   // 重新扫码是新申请，从干净状态开始。
   let pairRequests = $state([]);
   let pairCodes = $state({});
+  // #1875：配对确认弹窗里「非码错」的提交失败（连不上后台、IO 错等），按申请 id
+  // 存 errMessage 形状。弹窗打开期间背景整树 inert（dialog.svelte），顶层 toast
+  // 也在 inert 里——读屏播报和键盘都到不了，所以这类错误改成在弹窗内用
+  // role="alert" 呈现；重新提交、改验证码、请求被移除或服务恢复后清掉。
+  let pairErrors = $state({});
 
   // Esc / 右上角关闭 / 点遮罩：只收起弹窗，不等于拒绝——请求留在首页「待处理」，可再打开。
   // 已作废的块随之确认掉（主人已经看到了）。
   function closeConfirmModal() {
     showConfirmModal = false;
     pairRequests = pairRequests.filter((r) => r.phase !== "failed");
+  }
+
+  // #1875：弹窗内错误按申请 id 存，清的时候只动这一条（一次失败不该抹掉
+  // 另一台设备刚报出来的原因）。
+  function clearPairError(id) {
+    if (!(id in pairErrors)) return;
+    const next = { ...pairErrors };
+    delete next[id];
+    pairErrors = next;
+  }
+
+  // 弹窗内的「重启后台服务」：服务回来后，这条「连不上后台」的错误就过时了，清掉。
+  async function restartPairService(id) {
+    if (await restartDaemonProcess("recover")) clearPairError(id);
   }
 
   // 作废块的「重新显示二维码」：关掉这一块，收起确认弹窗，走首页「显示配对二维码」同一个入口。
@@ -713,6 +745,8 @@
     const id = requestId(item);
     const row = pairRequests.find((r) => r.id === id);
     if (row?.phase === "busy" || row?.phase === "failed") return;
+    // 重新提交 = 上一次失败的那条提示已经过时，等这次的结果说话。
+    clearPairError(id);
     pairRequests = setPhase(pairRequests, id, "busy");
     try {
       // UX-08: 逐台处理——pairing.confirm 精确确认该台。#1044：横幅与弹窗
@@ -740,9 +774,16 @@
       if (accept && errKey(e) === "ui.err_pair_code_wrong") {
         // #1118：码错 = 这次申请作废（daemon 已撤）。块停在终态，主人点「知道了」才消失。
         pairRequests = setPhase(pairRequests, id, "failed");
-      } else {
-        flashError(e, "ui.confirm_failed");
+      } else if (showConfirmModal) {
+        // #1875：弹窗开着时非码错失败不走走顶层的 flashError——弹窗打开期间背景整树
+        // inert，那条 toast（连同「重启后台服务」按钮）读屏和键盘都够不到。错误留在
+        // 这一块里，弹窗内用 role="alert" 播报，恢复操作也放进弹窗。
+        pairErrors = { ...pairErrors, [id]: errMessage(e, "ui.confirm_failed") };
         // 还在队列里就回到可输入；不在了下一轮对齐会收掉。
+        pairRequests = setPhase(pairRequests, id, "input");
+      } else {
+        // 首页横幅上的「拒绝」不经过弹窗（背景不 inert），照旧用 toast 说。
+        flashError(e, "ui.confirm_failed");
         pairRequests = setPhase(pairRequests, id, "input");
       }
     } finally {
@@ -1217,21 +1258,25 @@
   let restartingService = $state(false);
   // purpose：`update` = 设置页「立即重启」（服务还是旧版本）；`recover` = 失联报错 toast /
   // 首页阻断卡上的「重启后台服务」。两种场景对「版本没变」的说法不同（lib/restartOutcome.js）。
+  // 返回值：重启命令跑完了（true）还是被取消/失败了（false）——#1875 的弹窗内
+  // 恢复按钮靠它决定能不能把那条陈旧错误清掉。
   async function restartDaemonProcess(purpose = "update") {
-    if (restartingService) return;
+    if (restartingService) return false;
     const yes = await confirmDialog(t("ui.restart_service_confirm_body"), {
       title: t("ui.restart_service_confirm_title"),
       kind: "warning",
     });
-    if (!yes) return;
+    if (!yes) return false;
     restartingService = true;
     try {
       // DESK-44 (#606)：宽限期内 daemon **还没答上** ⇒ **不说失败**（still_starting），
       // 3 秒状态轮询会在版本一致后自己把这一行收掉。
       const m = restartOutcomeMessage(await invoke("restart_daemon_process"), purpose);
       flashMessage(t(m.key, m.params), m.tone);
+      return true;
     } catch (e) {
       flashError(e, "ui.restart_service_failed");
+      return false;
     } finally {
       restartingService = false;
     }
@@ -2490,15 +2535,34 @@
                   spellcheck={false}
                   disabled={req.phase === "busy"}
                   value={code}
-                  oninput={(e) => (pairCodes = { ...pairCodes, [req.id]: onDigitsInput(e.currentTarget) })}
+                  oninput={(e) => {
+                    // #1875：改验证码 = 用户在重试，上一次的失败原因不再代表这次。
+                    clearPairError(req.id);
+                    pairCodes = { ...pairCodes, [req.id]: onDigitsInput(e.currentTarget) };
+                  }}
                   onpaste={(e) => {
                     e.preventDefault();
+                    clearPairError(req.id);
                     pairCodes = { ...pairCodes, [req.id]: onDigitsPaste(e.currentTarget, e.clipboardData?.getData("text") ?? "") };
                   }}
                   onkeydown={(e) => { if (e.key === "Enter" && isPairCode(code)) confirmPair(true, item, code); }}
                 />
               </div>
               <p class="pending-hint">{t("ui.pair_code_hint")}</p>
+              <!-- #1875：非码错的提交失败留在弹窗里播报（背景 inert 时顶层 toast
+                   读屏和键盘都到不了）；连不上后台的几类错误就地给恢复按钮。 -->
+              {#if pairErrors[req.id]}
+                <p class="pending-error" role="alert" data-testid="pair-confirm-error">
+                  {pairErrors[req.id].text}<span class="mt-[2px] block text-[12px]">{errCodeLine(pairErrors[req.id])}</span>
+                </p>
+                {#if offersServiceRestart(pairErrors[req.id].key)}
+                  <div class="pending-actions" data-testid="pair-error-actions">
+                    <Button variant="secondary" disabled={restartingService} onclick={() => restartPairService(req.id)}>
+                      {restartingService ? t("ui.restarting_service") : t("ui.restart_service")}
+                    </Button>
+                  </div>
+                {/if}
+              {/if}
               <div class="pending-actions" data-testid="pending-actions">
                 <Button variant="secondary" disabled={req.phase === "busy"} onclick={() => confirmPair(false, item)}>{t("ui.deny")}</Button>
                 <!-- DEV-04: 按钮跟标题走：重连是「允许重连」，不是「允许加入」。 -->
