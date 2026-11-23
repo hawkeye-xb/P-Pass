@@ -5,11 +5,8 @@
 #   2. 相册卡带类型 desc 与 checkable（选中语义不丢）；
 #   3. 看图页走到且带「返回」可点节点；
 #   4. crash buffer 干净；
-#   5. 触控目标 48dp 硬判红——任何可点节点 <48dp 都 FAIL，只有两个显式豁免：
-#      a) 范围页时间筛选 Chip（选中枚 1.5x 下触控区 32dp，round3 §四1 已取证未修，
-#         修复卡 #1882；chips 文本按 subtree 匹配「…以后 / 含以前的照片 / …onward /
-#         Include older photos」，豁免只盖这两枚 Chip，修掉后应删除本条）；
-#      b) 被滚动视口裁掉半截的行（dump 只见可见部分，真实高度要对相邻行看，
+#   5. 触控目标 48dp 硬判红——任何可点节点 <48dp 都 FAIL，只有一条显式豁免：
+#      a) 被滚动视口裁掉半截的行（dump 只见可见部分，真实高度要对相邻行看，
 #         不是真小目标）——仍记 WARN 量表；
 #   6. 最大字体「无关键截断」归人工判定：dump 里 a11y 文本永远是全文，视觉截断
 #      （Ellipsis/断词）只能看截图。judge 强制要求 manual-bigfont.md 里有且只有一行
@@ -23,7 +20,7 @@
 #      （写入没生效）会让证据其实是 1.0x，不许判过。
 #
 # 需要：候选 debug 包与配对桩（同 a11y-semantics）。语种默认 zh-CN en-US 两语都跑。
-DESC="1.5x 大字体+减少动态效果逐页取证：关键信息仍在、无崩溃、48dp 硬判红（#1882 Chip 白名单）、截断归人工判定"
+DESC="1.5x 大字体+减少动态效果逐页取证：关键信息仍在、无崩溃、48dp 硬判红、截断归人工判定"
 COUNTER=off
 LOCALES="${E3_A11Y_LOCALES:-zh-CN en-US}"
 
@@ -222,8 +219,6 @@ LANG = {
                   entry=['Choose from Photos', 'Choose from Files'], kind='Album', viewer_back='Back'),
 }
 REQUIRED = ['settings.xml', 'settings-scrolled.xml', 'scope-open.xml', 'viewer.xml', 'density.txt']
-# 范围页时间筛选 Chip 的 subtree 文本（#1882 白名单认卡的凭据，见文件头 5a）
-CHIP_TEXT = re.compile(r'以后$|含以前的照片|onward$|Include older photos')
 CLIP_TOL = 8  # px：节点边缘贴着滚动视口边缘 ≤8px 视为被裁剪
 
 def load(path):
@@ -337,24 +332,14 @@ for d in locale_dirs:
             check(any(x.get('clickable') == 'true' and subtree_has_back(x) for x in nodes),
                   f"{d.name}/viewer.xml 要带可点的「{L['viewer_back']}」出口（没走到看图页？）")
 
-    # 4. 触控目标 48dp 硬判红（豁免两条，见文件头 5a/5b）
+    # 4. 触控目标 48dp 硬判红（唯一豁免：被滚动视口裁剪的可见高度，见文件头 5a）
     for name, loaded in all_nodes + ([(scope_path.name, scope_loaded)] if scope_loaded else []) + \
             ([(viewer_path.name, load(viewer_path))] if viewer_path.is_file() and load(viewer_path) else []):
         nodes, parent, children = loaded
         for x in nodes:
             if x.get('clickable') != 'true': continue
             if height_dp(x, dpi) >= 48.0: continue
-            # subtree 文本（children 邻接表）
-            stack, sub = [x], []
-            while stack:
-                cur = stack.pop()
-                sub.append(cur)
-                stack.extend(children.get(cur, []))
-            sub_texts = [text_of(c) or cd_of(c) for c in sub]
             desc = f"{d.name}/{name} 可点节点高 {height_dp(x, dpi):.1f}dp <48dp text={text_of(x)!r} cd={cd_of(x)!r} bounds={x.get('bounds')}"
-            if any(CHIP_TEXT.search(t) for t in sub_texts if t):
-                warns.append(f"WARN {desc} —— #1882 已知项：1.5x 选中时间 Chip 触控区缩到 32dp（另卡修，修掉后删此豁免）")
-                continue
             x1, y1, x2, y2 = bounds(x)
             clipped = False
             cur = parent.get(x)
