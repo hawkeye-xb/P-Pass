@@ -227,6 +227,73 @@ class HomeScreenSemanticsTest {
         }
     }
 
+    /** 按文本点一个整行入口（TalkBack 双击走同一个 ACTION_CLICK）。 */
+    private fun clickByLabel(label: String) {
+        val target = awaitNode("「$label」可点节点") {
+            it.text?.toString() == label || it.contentDescription?.toString() == label
+        }.clickableSelfOrAncestor()
+            ?: throw AssertionError("「$label」必须整行可点；树：\n${describeTree()}")
+        assertTrue("ACTION_CLICK 必须被「$label」接受", target.performAction(AccessibilityNodeInfo.ACTION_CLICK))
+    }
+
+    /** 等一个 heading 语义的标题节点：按文本找，API>=P 时同时要求 isHeading，从而与
+     *  「同文本但未标 heading 的入口行」（如首页「更多」行）区分开，等的是二级页页标题。 */
+    private fun awaitHeading(label: String): AccessibilityNodeInfo =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            awaitNode("标题（heading）「$label」") { it.text?.toString() == label && it.isHeading }
+        } else {
+            awaitNode("标题「$label」") { it.text?.toString() == label }
+        }
+
+    /** #1888：首页「更多」二级页的 24sp 页标题必须带 heading 语义（TalkBack 按标题导航直达本页，
+     *  与 BucketScreen 页标题同款，WCAG 2.2 AA 2.4.1 Section Headings）。
+     *  反证：撤掉生产里 MorePage 标题的 `.semantics { heading() }`，本用例超时变红。 */
+    @Test
+    fun more_page_title_carries_heading_semantics() {
+        host {
+            clickByLabel(testContext.getString(R.string.more_label))
+            val title = awaitHeading(testContext.getString(R.string.more_label))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                assertTrue("「更多」二级页标题必须带 heading 语义", title.isHeading)
+            }
+            saveTree("homescreen-more-title.txt", a11yRoot())
+        }
+    }
+
+    /** #1888：从「更多」进「存储电脑」详情页，其 24sp 页标题必须带 heading 语义。
+     *  反证：撤掉 StorageComputerDetail 标题的 `.semantics { heading() }`，本用例超时变红。 */
+    @Test
+    fun storage_detail_title_carries_heading_semantics() {
+        host {
+            clickByLabel(testContext.getString(R.string.more_label))
+            awaitHeading(testContext.getString(R.string.more_label))
+            clickByLabel(testContext.getString(R.string.storage_computer))
+            val title = awaitHeading(testContext.getString(R.string.storage_computer))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                assertTrue("「存储电脑」详情页标题必须带 heading 语义", title.isHeading)
+            }
+            saveTree("homescreen-storage-title.txt", a11yRoot())
+        }
+    }
+
+    /** #1888：英雄区主状态行（idleLine）会随状态变化（等待原因/空闲裁决文案），必须 liveRegion=polite——
+     *  TalkBack 在变化后主动播报一句。默认 host（Idle + 自动备份开 + 仅 Wi-Fi）下主状态行就是
+     *  `idle_auto_hint`；它是本屏该状态下唯一的 polite 区域（单次传输行此时不渲染）。
+     *  反证：撤掉生产里 idleLine Text 的 `.semantics { liveRegion = LiveRegionMode.Polite }`，本用例变红。 */
+    @Test
+    fun hero_idle_line_announces_via_polite_live_region() {
+        host {
+            val expected = testContext.getString(R.string.idle_auto_hint)
+            val node = awaitNode("英雄区主状态行「$expected」") { it.text?.toString() == expected }
+            assertEquals(
+                "英雄区主状态行会随状态变化，必须 liveRegion=polite（TalkBack 变化后主动播报）",
+                View.ACCESSIBILITY_LIVE_REGION_POLITE,
+                node.liveRegion,
+            )
+            saveTree("homescreen-idle-line.txt", a11yRoot())
+        }
+    }
+
     /** 英雄区状态行（进行中）：open>0 时报「Sending x/y」，与 round3「正在传 2/2」同口径。 */
     @Test
     fun hero_line_reads_single_transfer_progress() {
