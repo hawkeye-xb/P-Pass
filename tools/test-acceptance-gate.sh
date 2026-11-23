@@ -12,7 +12,7 @@ ok() { printf '  ✅ %s\n' "$1"; PASS=$((PASS + 1)); }
 bad() { printf '  ❌ %s\n' "$1"; FAIL=$((FAIL + 1)); }
 
 mkdir -p "${TMP}/repo/tools/flow" "${TMP}/repo/.github"
-cp "${SRC}/tools/flow/acceptance-gate.sh" "${SRC}/tools/flow/owner-triage.sh" "${SRC}/tools/flow/decision-lib.sh" "${TMP}/repo/tools/flow/"
+cp "${SRC}/tools/flow/acceptance-gate.sh" "${SRC}/tools/flow/v3_harness.py" "${SRC}/tools/flow/owner-triage.sh" "${SRC}/tools/flow/decision-lib.sh" "${TMP}/repo/tools/flow/"
 cp "${SRC}/tools/ci-paths.sh" "${TMP}/repo/tools/"
 # core/** 是用户看不见的核心（如发布链脚本）；apps/android/core/** 是用户看得见的核心（如配对界面背后的代码）。
 printf '+ core/**\n+ apps/android/core/**\n+ apps/desktop/src-tauri/tauri.conf.json\n' >"${TMP}/repo/.github/core-paths.txt"
@@ -134,14 +134,31 @@ printf '%s\n' docs/a.md | bash "$G" classify --repo "${TMP}/repo" | grep -qx ui 
 # 用法错误
 bash "$G" check >/dev/null 2>&1; [ $? = 2 ] && ok "缺参数 → 退出码 2" || bad "缺参数退出码不对"
 
-# V3 封条 SHA256 核验（#1954）
-mkdir -p "${TMP}/repo/tests"
+# V3 封条 SHA256 核验（#1954）：覆盖缩进围栏、缺失哈希拒绝、路径穿越拒绝、refs 关联卡校验与 gh 读卡失败 fail-closed
+mkdir -p "${TMP}/repo/tests" "${TMP}/ghbin"
 printf 'x = 1\n' >"${TMP}/repo/tests/locked_t.py"
 LOCKED_H="$(python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "${TMP}/repo/tests/locked_t.py")"
-SEAL_B="$(printf 'closes #1\n```v3-seal\n{"mode":"fix","exam_rel":"tests/locked_t.py","exam_sha256":"%s"}\n```' "$LOCKED_H")"
-gate 0 "V3 封条：锁定测试 SHA256 一致 → 绿" "docs/a.md" "$SEAL_B"
+SEAL_B="$(printf 'closes #1\n  ```v3-seal\n{"mode":"fix","exam_rel":"tests/locked_t.py","exam_sha256":"%s"}\n  ```' "$LOCKED_H")"
+gate 0 "V3 封条（含两空格缩进）：锁定测试 SHA256 一致 → 绿" "docs/a.md" "$SEAL_B"
 printf 'x = 2\n' >"${TMP}/repo/tests/locked_t.py"
 gate 1 "反证：V3 封条锁定测试被篡改 → acceptance gate 判红" "docs/a.md" "$SEAL_B"
+printf 'x = 1\n' >"${TMP}/repo/tests/locked_t.py"
+gate 1 "V3 封条缺少 exam_sha256 → 拒绝放行" "docs/a.md" $'closes #1\n```v3-seal\n{"mode":"fix","exam_rel":"tests/locked_t.py"}\n```'
+gate 1 "V3 封条绝对路径 / 路径穿越 → 拒绝放行" "docs/a.md" "$(printf 'closes #1\n```v3-seal\n{"mode":"fix","exam_rel":"/etc/hosts","exam_sha256":"%s"}\n```' "$LOCKED_H")"
+
+cat >"${TMP}/ghbin/gh" <<'STUB'
+#!/usr/bin/env bash
+[ -e "$FAKE_AG_GH_FAIL" ] && { echo "network timeout" >&2; exit 1; }
+cat "$FAKE_AG_ISSUE_BODY"
+STUB
+chmod +x "${TMP}/ghbin/gh"
+printf '%s\n' "$SEAL_B" >"${TMP}/card201.md"
+printf 'x = 2\n' >"${TMP}/repo/tests/locked_t.py"
+(export PATH="${TMP}/ghbin:${PATH}" GH_TOKEN=stub FAKE_AG_ISSUE_BODY="${TMP}/card201.md"; printf 'docs/a.md\n' >"${TMP}/files"; printf 'refs #201\n' >"${TMP}/body"; bash "$G" check --repo "${TMP}/repo" --files "${TMP}/files" --body "${TMP}/body" >/dev/null 2>&1) &&
+  bad "refs #201 关联卡锁定测试被篡改仍放行" || ok "refs #201 关联卡封条哈希不匹配 → 判红拦截"
+printf 'x = 1\n' >"${TMP}/repo/tests/locked_t.py"
+(export PATH="${TMP}/ghbin:${PATH}" GH_TOKEN=stub FAKE_AG_ISSUE_BODY="${TMP}/card201.md" FAKE_AG_GH_FAIL=1; touch "$FAKE_AG_GH_FAIL" 2>/dev/null; printf 'docs/a.md\n' >"${TMP}/files"; printf 'closes #201\n' >"${TMP}/body"; FAKE_AG_GH_FAIL="${TMP}/card201.md" bash "$G" check --repo "${TMP}/repo" --files "${TMP}/files" --body "${TMP}/body" >/dev/null 2>&1) &&
+  bad "gh 读取关联卡失败时静默放行" || ok "gh 读取关联卡失败 → fail-closed 判红"
 
 echo
 echo "通过 ${PASS}，失败 ${FAIL}"

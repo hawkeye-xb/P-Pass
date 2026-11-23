@@ -1,8 +1,8 @@
 """适应度函数（architectural fitness functions）共用库：外部物理扫描仓库 + 比对登记表。
 
 外部物理独立性铁律（V3 #1954）：
-  适应度脚本只许通过外部文件读取、正则/AST 扫描与 git 清单独立断言，严禁 import 或调用任何业务包（crates/、apps/）内的
-  自判辅助函数（防止模型修改业务自判函数恒返回 true 绕过只读门禁）。`assert_zero_product_imports()` 在启动时自检。
+  适应度脚本与本共享库只许通过外部文件读取、正则/AST 扫描与 git 清单独立断言，严禁 import 或调用任何业务包（crates/、apps/）
+  内的自判辅助函数。`assert_zero_product_imports()` 在启动时同时自检入口脚本与 `fitness_lib.py` 本身的 AST。
 """
 from __future__ import annotations
 
@@ -22,26 +22,30 @@ _TEST_PATH = re.compile(
 _COMMENT = re.compile(r"^\s*(//|\*|/\*|#|<!--)")
 _TRIVIAL_GUARD_BODY = re.compile(
     r"(?:\bfn\s+{sym}\s*\([^)]*\)\s*(?:->\s*bool\s*)?\{{\s*(?:return\s+)?(?:true|false)\s*;?\s*\}})"
-    r"|(?:\bfun\s+{sym}\s*\([^)]*\)\s*(?::\s*Boolean\s*)?=\s*(?:true|false)\b)"
+    r"|(?:\bfun\s+{sym}\s*\([^)]*\)\s*(?::\s*Boolean\s*)?=\s*(?:true|false)\s*(?:;|$))"
     r"|(?:\bfun\s+{sym}\s*\([^)]*\)\s*(?::\s*Boolean\s*)?\{{\s*return\s+(?:true|false)\s*;?\s*\}})"
-    r"|(?:\bfunc\s+{sym}\s*\([^)]*\)\s*(?:->\s*Bool\s*)?\{{\s*(?:return\s+)?(?:true|false)\s*\}})"
+    r"|(?:\b(?:boolean|Boolean)\s+{sym}\s*\([^)]*\)\s*\{{\s*return\s+(?:true|false)\s*;\s*\}})"
+    r"|(?:\bfunc\s+{sym}\s*\([^)]*\)\s*(?:->\s*Bool\s*)?\{{\s*(?:return\s+)?(?:true|false)\s*\}})",
+    re.M | re.S,
 )
 
 
 def assert_zero_product_imports(script_file: str) -> None:
-    """自检：确保门禁脚本自身 AST 零导入任何非标准库/非 fitness_lib 的业务包。"""
-    tree = ast.parse(Path(script_file).read_text(encoding="utf-8"), filename=script_file)
+    """自检：确保门禁入口脚本与共享库 `fitness_lib.py` 自身 AST 零导入任何非标准库的业务包。"""
     allowed = {"__future__", "argparse", "ast", "fnmatch", "glob", "hashlib", "json", "os", "pathlib", "re", "shutil", "subprocess", "sys", "tempfile", "fitness_lib"}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            mods = [a.name.split(".")[0] for a in node.names]
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            mods = [node.module.split(".")[0]]
-        else:
-            continue
-        bad = [m for m in mods if m not in allowed]
-        if bad:
-            die([f"✗ 适应度门禁违反外部物理原语铁律：{script_file} 导入了外部/业务模块 {bad}"])
+    targets = {str(Path(script_file).resolve()), str(Path(__file__).resolve())}
+    for target in sorted(targets):
+        tree = ast.parse(Path(target).read_text(encoding="utf-8"), filename=target)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                mods = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                mods = [node.module.split(".")[0]]
+            else:
+                continue
+            bad = [m for m in mods if m not in allowed]
+            if bad:
+                die([f"✗ 适应度门禁违反外部物理原语铁律：{target} 导入了外部/业务模块 {bad}"])
 
 
 def parse_args(desc: str) -> argparse.Namespace:
@@ -126,7 +130,7 @@ def symbol_exists(root: Path, symbol: str) -> bool:
 
 def guard_symbol_compromised(root: Path, symbol: str) -> str | None:
     """外部物理扫描产品代码中的守卫函数定义，拦截把守卫函数直接改成恒返回字面量 true/false 的 T5 式退化绕过。"""
-    pat = re.compile(_TRIVIAL_GUARD_BODY.pattern.format(sym=re.escape(symbol)), re.S)
+    pat = re.compile(_TRIVIAL_GUARD_BODY.pattern.format(sym=re.escape(symbol)), re.M | re.S)
     for rel in tracked_files(root):
         if not rel.endswith((".rs", ".kt", ".java", ".swift")):
             continue

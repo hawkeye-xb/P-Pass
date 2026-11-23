@@ -259,9 +259,16 @@ def run_selftest() -> dict:
         os.makedirs(dev_dir, exist_ok=True)
         Path(os.path.join(dev_dir, "device-a.state")).write_text("SCREEN_LOCKED", encoding="utf-8")
 
-        # 1. 验证 parse_issue_seal
-        seal = harness.parse_issue_seal('text\n```v3-seal\n{"mode":"fix","exam_rel":"tests/a.py","exam_sha256":"abc","core_approved":false}\n```\n')
-        assert seal["mode"] == "fix" and seal["exam_sha256"] == "abc"
+        # 1. 验证 parse_issue_seal（要求 64 位小写 hex SHA256，支持前导缩进，拒绝短哈希/空哈希）
+        valid_sha = "a" * 64
+        seal = harness.parse_issue_seal(f'text\n  ```v3-seal\n{{"mode":"fix","exam_rel":"tests/a.py","exam_sha256":"{valid_sha}","core_approved":false}}\n  ```\n')
+        assert seal["mode"] == "fix" and seal["exam_sha256"] == valid_sha
+        for bad_sha in ("abc", ""):
+            try:
+                harness.parse_issue_seal(f'```v3-seal\n{{"mode":"fix","exam_rel":"tests/a.py","exam_sha256":"{bad_sha}"}}\n```')
+                raise AssertionError(f"accepted bad sha: {bad_sha}")
+            except ValueError:
+                pass
 
         # 2. 验证只读 gh 垫片放行 issue view、物理拦截 issue edit 与写操作 api
         shim_env = {**os.environ, "PATH": f"{shim_bin}:{os.environ.get('PATH', '')}", "PPASS_V3_TASK_STORE": task_store, "PPASS_GH_AUDIT_LOG": audit_log}

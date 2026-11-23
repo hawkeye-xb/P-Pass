@@ -36,9 +36,24 @@ expect_red "守卫函数被删（只剩拉起调用）" "user_stopped"
 put crates/base/src/host.rs 'pub fn user_stopped() -> bool { false }
 fn boot() { if user_stopped() { return; } Command::new("launchctl").args(["bootstrap", "gui/501"]); }'
 expect_red "守卫函数退化为恒返回 false 空壳（T5 式绕过拦截）" "退化为恒返回布尔字面量"
+put apps/android/app/src/main/java/a/Guard.java 'class Guard { boolean user_stopped() { return false; } }'
+expect_red "Java 守卫方法退化为恒返回 false 空壳 → 判红" "退化为恒返回布尔字面量"
+unput apps/android/app/src/main/java/a/Guard.java
+put apps/android/app/src/main/java/a/KtGuard.kt 'fun user_stopped(state: java.io.File): Boolean = false || state.exists()'
 put crates/base/src/host.rs 'pub fn user_stopped(state: &std::path::Path) -> bool { state.exists() }
 fn boot(s: &std::path::Path) { if user_stopped(s) { return; } Command::new("launchctl").args(["bootstrap", "gui/501"]); }'
-expect_green "还原：真实守卫"
+expect_green "Kotlin 完整复合布尔表达式（= false || state.exists()）不误判 + 还原真实守卫"
+unput apps/android/app/src/main/java/a/KtGuard.kt
+
+# 反证：在共享库 fitness_lib.py 中违规 import 业务包必须判红
+mkdir -p "$TMP/mut_tools"
+cp "$REPO/tools/check-autostart.py" "$REPO/tools/fitness_lib.py" "$TMP/mut_tools/"
+printf '\nimport minippass_fake_pkg\n' >>"$TMP/mut_tools/fitness_lib.py"
+if python3 -I "$TMP/mut_tools/check-autostart.py" --root "$R" >/dev/null 2>&1; then
+  bad "fitness_lib.py 导入业务包仍通过"
+else
+  ok "反证：fitness_lib.py 导入业务模块时 AST 自检判红"
+fi
 
 # 保护字段不合规 / 登记缺说明
 cp "$R/tools/autostart-registry.txt" "$TMP/base.txt"

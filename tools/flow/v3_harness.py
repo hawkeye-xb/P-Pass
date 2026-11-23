@@ -9,17 +9,16 @@ from typing import Callable
 WorkerFn = Callable[[str, str, str, int], tuple[int, str, float]]
 ReviewFn = Callable[[dict, str], tuple[bool, str]]
 GIT_LOCK = threading.Lock()
-SEAL_BLOCK_RE = re.compile(r"```v3-seal\s*\n(.*?)```", re.S)
+SEAL_START_RE = re.compile(r"^[ \t]*```v3-seal(?:[ \t]|$)", re.M)
+SEAL_BLOCK_RE = re.compile(r"^[ \t]*```v3-seal[ \t]*\n(.*?)^[ \t]*```[ \t]*$", re.M | re.S)
 _GIT_LOC_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_PREFIX", "GIT_NAMESPACE")
 
 
 def sha256_file(path: str) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest() if os.path.isfile(path) else ""
 
-
 def has_issue_seal(issue_body: str) -> bool:
-    return re.search(r"^\s*```v3-seal\b", issue_body or "", re.M) is not None
-
+    return SEAL_START_RE.search(issue_body or "") is not None
 
 def parse_issue_seal(issue_body: str) -> dict:
     m = SEAL_BLOCK_RE.search(issue_body or "")
@@ -34,7 +33,10 @@ def parse_issue_seal(issue_body: str) -> dict:
     rel = str(raw.get("exam_rel", "")).strip()
     if not rel or rel.startswith(("/", "-")) or ".." in Path(rel).parts or not re.fullmatch(r"[A-Za-z0-9_./-]+", rel):
         raise ValueError(f"unsafe exam_rel in v3-seal: {rel!r}")
-    return {"mode": raw["mode"], "exam_rel": rel, "exam_sha256": str(raw.get("exam_sha256", "")).strip()}
+    sha = str(raw.get("exam_sha256", "")).strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", sha):
+        raise ValueError(f"invalid or missing 64-hex exam_sha256 in v3-seal: {sha!r}")
+    return {"mode": raw["mode"], "exam_rel": rel, "exam_sha256": sha}
 
 
 def run_cmd(cmd: list[str], cwd: str, timeout: int = 120, extra_path: str | None = None) -> subprocess.CompletedProcess:
@@ -53,15 +55,13 @@ def run_cmd(cmd: list[str], cwd: str, timeout: int = 120, extra_path: str | None
 def git_head(repo: str) -> str:
     return run_cmd(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
 
-
 def check_device_ready(dev_dir: str, device_name: str | None, unattended: bool = True) -> tuple[bool, str]:
     if not device_name:
         return True, "no_device_needed"
     state_file = os.path.join(dev_dir, f"{device_name}.state")
     state = Path(state_file).read_text(encoding="utf-8").strip() if os.path.exists(state_file) else "OFFLINE"
     if state != "UNLOCKED":
-        mode_tag = "unattended mode skips human unlock" if unattended else "device requires human unlock"
-        return False, f"device {device_name} unavailable (state={state}); {mode_tag}"
+        return False, f"device {device_name} unavailable (state={state}); {'unattended mode skips human unlock' if unattended else 'device requires human unlock'}"
     lock_file = os.path.join(dev_dir, f"{device_name}.lock")
     if os.path.exists("/usr/bin/lockf") and subprocess.run(["/usr/bin/lockf", "-k", "-t", "0", lock_file, "true"], capture_output=True).returncode != 0:
         return False, f"device {device_name} lock busy"
@@ -104,13 +104,11 @@ def core_rules_from_git(repo: str, sha: str) -> tuple[list[str], list[str], list
 
 def is_core_path(rel_path: str, rules: tuple[list[str], list[str], list[str]]) -> bool:
     plus, zones, minus = rules
-    return any(_glob_match(rel_path, p) for p in plus) or (
-        any(_glob_match(rel_path, z) for z in zones) and not any(_glob_match(rel_path, m) for m in minus)
-    )
+    return any(_glob_match(rel_path, p) for p in plus) or (any(_glob_match(rel_path, z) for z in zones) and not any(_glob_match(rel_path, m) for m in minus))
 
 
 def _default_cmds(wt_dir: str, exam_rel: str, task: dict) -> tuple[list[str], list[str], list[str]]:
-    exam_cmd = task.get("exam_cmd") or [sys.executable, "-m", "unittest", exam_rel]
+    exam_cmd = task.get("exam_cmd") or (["bash", exam_rel] if exam_rel.endswith(".sh") else [sys.executable, "-m", "unittest", exam_rel])
     suite_cmd = task.get("suite_cmd") or ([sys.executable, "-m", "unittest", "discover", "-s", "tests"] if os.path.isdir(os.path.join(wt_dir, "tests")) else exam_cmd)
     fit_cmd = task["fitness_cmd"] if task.get("fitness_cmd") is not None else (
         [sys.executable, "tools/fitness_check.py"] if os.path.isfile(os.path.join(wt_dir, "tools/fitness_check.py"))
@@ -126,8 +124,8 @@ def _is_compile_or_syntax_error(out_text: str) -> bool:
 def verify_gate(wt_dir: str, main_repo: str, base_sha: str, task: dict, locked_sha: str, review_fn: ReviewFn | None = None) -> tuple[bool, str]:
     mode, exam_rel = task["mode"], task["exam_rel"]
     exam_abs = os.path.join(wt_dir, exam_rel)
-    if sha256_file(exam_abs) != locked_sha:
-        return False, f"TAMPER_BLOCKED: locked test {exam_rel} SHA256 mismatch"
+    if not re.fullmatch(r"[0-9a-f]{64}", (locked_sha or "").lower()) or sha256_file(exam_abs) != locked_sha.lower():
+        return False, f"TAMPER_BLOCKED: locked test {exam_rel} SHA256 mismatch or invalid seal"
     exam_cmd, suite_cmd, fitness_cmd = _default_cmds(wt_dir, exam_rel, task)
     try:
         changed = [f for f in changed_files_since(wt_dir, base_sha) if f != exam_rel]
@@ -184,9 +182,13 @@ def verify_gate(wt_dir: str, main_repo: str, base_sha: str, task: dict, locked_s
                 run_cmd(["git", "worktree", "remove", "--force", base_wt], cwd=main_repo)
             shutil.rmtree(base_wt, ignore_errors=True)
 
-    ut = run_cmd(suite_cmd, cwd=wt_dir, timeout=120)
-    if ut.returncode != 0:
-        return False, f"TESTS_RED: {(ut.stdout + ut.stderr)[-240:]}"
+    ex = run_cmd(exam_cmd, cwd=wt_dir, timeout=90)
+    if ex.returncode != 0:
+        return False, f"EXAM_RED: {(ex.stdout + ex.stderr)[-240:]}"
+    if suite_cmd != exam_cmd:
+        ut = run_cmd(suite_cmd, cwd=wt_dir, timeout=120)
+        if ut.returncode != 0:
+            return False, f"TESTS_RED: {(ut.stdout + ut.stderr)[-240:]}"
     ft = run_cmd(fitness_cmd, cwd=wt_dir, timeout=60)
     if ft.returncode != 0:
         return False, f"FITNESS_RED: {(ft.stderr or ft.stdout).strip()[-240:]}"
@@ -216,8 +218,7 @@ def speculate_repro(task: dict, main_repo: str, worker_fn: WorkerFn, timeout_sec
         if not os.path.isfile(exam_abs):
             return None, "speculate produced no test file"
         cp = run_cmd(exam_cmd, cwd=spec_wt, timeout=60)
-        combined = (cp.stdout or "") + "\n" + (cp.stderr or "")
-        if cp.returncode in (0, 124) or _is_compile_or_syntax_error(combined):
+        if cp.returncode in (0, 124) or _is_compile_or_syntax_error((cp.stdout or "") + "\n" + (cp.stderr or "")):
             return None, f"speculate test did not fail at runtime (rc={cp.returncode})"
         fd, locked_copy = tempfile.mkstemp(prefix=f"v3_locked_{task['id']}_", suffix=os.path.splitext(exam_rel)[1])
         os.close(fd)
@@ -242,15 +243,17 @@ def develop_in_worktree(
     task: dict, main_repo: str, wt: str, base_sha: str, worker_fn: WorkerFn, review_fn: ReviewFn | None,
     max_attempts: int, timeout_sec: int, initial_reason: str = "", id_prefix: str = "",
 ) -> tuple[bool, str, int]:
-    tid, mode, exam_rel = task["id"], task["mode"], task["exam_rel"]
-    exam_src, locked_sha = task["exam_src"], task["exam_sha256"]
+    tid, mode, exam_rel, exam_src, locked_sha = task["id"], task["mode"], task["exam_rel"], task["exam_src"], task["exam_sha256"]
     exam_abs = os.path.join(wt, exam_rel)
     os.makedirs(os.path.dirname(exam_abs), exist_ok=True)
     rules = core_rules_from_git(main_repo, base_sha)
     last_reason, used = initial_reason, 0
     for attempt in range(1, max_attempts + 1):
         used = attempt
-        _restore_protected_files(wt, base_sha, rules, bool(task.get("core_approved", False)), mode)
+        try:
+            _restore_protected_files(wt, base_sha, rules, bool(task.get("core_approved", False)), mode)
+        except RuntimeError as e:
+            return False, f"GIT_STATE_ERROR: {e}", used
         shutil.copy2(exam_src, exam_abs)
         fb = f"\n【上次门禁打回原因】：{last_reason}\n请按打回原因修正（严禁修改 `{exam_rel}` 或未授权核心文件）。" if last_reason else ""
         prompt = f"验证卡 {tid}：{task['title']}\n{task['goal']}{fb}" if mode == "verify" else f"任务 {tid}（mode={mode}, core_approved={task.get('core_approved', False)}）：{task['title']}\n目标：{task['goal']}\n只读锁定验收测试：`{exam_rel}`（严禁修改）。{fb}"
@@ -284,9 +287,7 @@ def run_v3_queue(
 ) -> list[dict]:
     wt_root = os.path.join(main_repo, ".worktrees")
     os.makedirs(wt_root, exist_ok=True)
-    digest: list[dict] = []
-    spec_temps: list[str] = []
-    idx = 0
+    digest, spec_temps, idx = [], [], 0
     try:
         while idx < len(tasks):
             grp = tasks[idx].get("parallel_group")
@@ -321,12 +322,10 @@ def run_v3_queue(
                     run_cmd(["git", "worktree", "add", "-b", f"goal/{tid}", wt, start_sha], cwd=main_repo)
                 active.append((tc, wt, time.time()))
 
-            def _exec_one(item):
-                tc, wt, t0 = item
-                ok, msg, used = develop_in_worktree(tc, main_repo, wt, start_sha, worker_fn, review_fn, max_attempts, timeout_sec)
-                return tc, wt, ok, msg, used, round(time.time() - t0, 2)
-
-            results = list(ThreadPoolExecutor(max_workers=len(active)).map(_exec_one, active)) if active else []
+            results = list(ThreadPoolExecutor(max_workers=len(active)).map(
+                lambda item: (item[0], item[1], *develop_in_worktree(item[0], main_repo, item[1], start_sha, worker_fn, review_fn, max_attempts, timeout_sec), round(time.time() - item[2], 2)),
+                active,
+            )) if active else []
             for tc, wt, ok, msg, used, elapsed in results:
                 tid, mode, keep_branch = tc["id"], tc["mode"], False
                 try:
@@ -389,7 +388,7 @@ def main_cli(argv: list[str]) -> int:
             return 1
         seal["core_approved"] = ("--core-approved" in argv[5:])
         seal["defer_review_to_pr"] = True
-        ok, msg = verify_gate(wt_dir, main_repo, base_sha, seal, seal.get("exam_sha256", ""), None)
+        ok, msg = verify_gate(wt_dir, main_repo, base_sha, seal, seal["exam_sha256"], None)
         print(msg, file=(sys.stdout if ok else sys.stderr))
         return 0 if ok else 1
     print("usage: v3_harness.py [parse-seal | check-card <wt> <main_repo> <base_sha> [--core-approved]] < issue.md", file=sys.stderr)

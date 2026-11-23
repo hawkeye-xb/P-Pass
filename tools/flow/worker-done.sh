@@ -150,21 +150,37 @@ MAIN_ROOT="$(flow_main_root)"
 BASE_MERGE_SHA="$(git merge-base origin/main HEAD)"
 V3_SEAL_MODE=""
 V3_SEAL_OUT=""
+V3_VERIFY_COUNT=0
+V3_NON_VERIFY_COUNT=0
 for c in $CARDS; do
   flow_load_issue "$c"
   if printf '%s\n' "$I_BODY" | grep -Eq '^[[:space:]]*```v3-seal([[:space:]]|$)'; then
-    V3_SEAL_MODE="$(printf '%s\n' "$I_BODY" | python3 -I "${HERE}/v3_harness.py" parse-seal | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["mode"])' 2>/dev/null || echo invalid)"
+    V3_SEAL_MODE="$(printf '%s\n' "$I_BODY" | python3 -B -I "${HERE}/v3_harness.py" parse-seal | python3 -B -I -c 'import json,sys; print(json.load(sys.stdin)["mode"])' 2>/dev/null || echo invalid)"
     v3_core_arg=()
     [ "$IS_CORE" = 1 ] && v3_core_arg+=(--core-approved)
     V3_LOG="${EVID_DIR}/v3-gate.log"
-    if ! printf '%s\n' "$I_BODY" | python3 -I "${HERE}/v3_harness.py" check-card "$TOP" "$MAIN_ROOT" "$BASE_MERGE_SHA" ${v3_core_arg[@]+"${v3_core_arg[@]}"} >"$V3_LOG" 2>&1; then
-      fail_blocked "V3 四类任务门禁（mode=${V3_SEAL_MODE}）" "$V3_LOG"
+    if ! printf '%s\n' "$I_BODY" | python3 -B -I "${HERE}/v3_harness.py" check-card "$TOP" "$MAIN_ROOT" "$BASE_MERGE_SHA" ${v3_core_arg[@]+"${v3_core_arg[@]}"} >"$V3_LOG" 2>&1; then
+      if grep -q 'CORE_PATH_BLOCKED' "$V3_LOG" 2>/dev/null; then
+        fail_blocked "V3 四类任务门禁（mode=${V3_SEAL_MODE}）" "$V3_LOG"
+      else
+        fail_local "V3 四类任务门禁（mode=${V3_SEAL_MODE}）" "$V3_LOG"
+      fi
+    fi
+    if [ "$V3_SEAL_MODE" = "verify" ]; then
+      V3_VERIFY_COUNT=$((V3_VERIFY_COUNT + 1))
+    else
+      V3_NON_VERIFY_COUNT=$((V3_NON_VERIFY_COUNT + 1))
     fi
     V3_SEAL_OUT="$(tail -n 1 "$V3_LOG" | scrub)"
     echo "✅ V3 门禁通过（#${c}）：${V3_SEAL_OUT}"
+  else
+    V3_NON_VERIFY_COUNT=$((V3_NON_VERIFY_COUNT + 1))
   fi
 done
-if [ "$V3_SEAL_MODE" = "verify" ]; then
+if [ "$V3_VERIFY_COUNT" -gt 0 ] && [ "$V3_NON_VERIFY_COUNT" -gt 0 ]; then
+  fail_local "多卡分支不允许将纯验证卡（mode=verify）与改代码卡混在同一条分支" ""
+fi
+if [ "$V3_VERIFY_COUNT" -gt 0 ]; then
   tmp_v="$(mktemp)"
   {
     echo "**纯验证卡已交差（源码零改动）**"

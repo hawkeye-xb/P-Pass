@@ -147,6 +147,7 @@ jobs:
           bash tools/test-release-acceptance.sh
       - name: 核心方案检查
         env:
+          GH_TOKEN: ${{ github.token }}
           PR_BODY: ${{ github.event.pull_request.body }}
           BASE_REF: ${{ github.base_ref }}
         run: |

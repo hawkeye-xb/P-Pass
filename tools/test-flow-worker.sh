@@ -1360,7 +1360,7 @@ mkdir -p "$W201/tests"
 printf '# tampered\n' >"$W201/tests/test_v3_fix.py"
 commit_file "$W201" src/val.py 'VALUE = 2'
 if DONE "$W201" >"${TMP}/o201a" 2>&1; then bad "V3 fix 卡偷改锁定测试仍放行"; else ok "V3 fix 卡：篡改锁定验收测试 SHA256 → 判红拦截"; fi
-printf 'status:doing' >"${FAKE_GH}/201.labels"
+has_lbl 201 "status:doing" && ! has_lbl 201 "status:blocked" && ok "  本地 V3 门禁失败走 fail_local（保持 doing，不刷 issue）" || bad "  本地失败误打了 blocked：$(labels_of 201)"
 printf '%s' "$EXAM_FIX" >"$W201/tests/test_v3_fix.py"
 git -C "$W201" add -A && git -C "$W201" commit -q -s -m "restore locked exam"
 DONE "$W201" >"${TMP}/o201b" 2>&1 && on_origin "fix/201-v3-fix" && ok "V3 fix 卡：锁定测试无篡改 + 基线反证变红 + 分支全绿 → 放行推送" || bad "V3 fix 卡正向失败：$(tail -6 "${TMP}/o201b")"
@@ -1410,6 +1410,22 @@ issue 205 "status:ready" "[T-205] v3 seal unclosed" "" "Feature" $'```v3-seal\n{
 W205="$(START 205 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/205-"*)"
 commit_file "$W205" src/val.py 'VALUE = 3'
 if DONE "$W205" >"${TMP}/o205" 2>&1; then bad "未闭合 v3-seal 围栏被静默放行"; else ok "安全拦截：未闭合 v3-seal 围栏 fail-closed 判红"; fi
+
+# 5) 锁定测试不在 unittest discover 默认模式（如 tests/locked_custom.py）且运行失败时，exam_cmd 显式执行必须判红；空哈希封条必须判红
+EXAM_NONDISC='import unittest
+class CustomLocked(unittest.TestCase):
+    def test_red(self): self.assertEqual(1, 2)
+'
+ND_SHA="$(printf '%s' "$EXAM_NONDISC" | python3 -I -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
+issue 206 "status:ready" "[T-206] v3 nondiscoverable red" "" "Feature" "$(printf '```v3-seal\n{"mode":"feature","exam_rel":"tests/locked_custom.py","exam_sha256":"%s"}\n```' "$ND_SHA")"
+W206="$(START 206 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/206-"*)"
+mkdir -p "$W206/tests"; printf '%s' "$EXAM_NONDISC" >"$W206/tests/locked_custom.py"
+commit_file "$W206" src/val.py 'VALUE = 5'
+if DONE "$W206" >"${TMP}/o206" 2>&1; then bad "非 test*.py 命名的锁定测试失败仍放行"; else ok "显式运行 exam_cmd：非 discover 默认命名的锁定测试失败照样判红"; fi
+issue 207 "status:ready" "[T-207] v3 empty sha" "" "Feature" $'```v3-seal\n{"mode":"feature","exam_rel":"tests/missing.py","exam_sha256":""}\n```'
+W207="$(START 207 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/207-"*)"
+commit_file "$W207" src/val.py 'VALUE = 6'
+if DONE "$W207" >"${TMP}/o207" 2>&1; then bad "空 exam_sha256 + 缺失测试文件混过了 feature 门禁"; else ok "安全拦截：空 exam_sha256 封条判红拒绝"; fi
 
 echo
 echo "通过 ${PASS}，失败 ${FAIL}"
