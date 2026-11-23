@@ -576,7 +576,7 @@ bump-version-test:
 # 已在 ci-docs.yml、ci-identity.yml 的其它 job 里跑，留在 ci-docs 的直接依赖里。
 # justfile 里每个 *-test recipe 要么在这里，要么登记在 tools/test-flow-tests-wired.sh 的例外表里（flow-tests-wired-test 会挡）。
 # heavy-lock-test 依赖 macOS 才有的 lockf，ubuntu 上会 SKIP 假绿，不进这里；登记为例外（#1502），本地 ci / ci-docs 直接依赖它。
-flow-tests: hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test macos-runner-test main-red-test flow-tests-wired-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test
+flow-tests: hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test flow-v3-harness-test macos-runner-test main-red-test flow-tests-wired-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test
   @echo "==> flow-tests: green ✅"
 
 # #1468 的 lane 不变量（#1489）：三个 Windows job 在 PR 上跳过、五条 lane 有 push: branches [main]、
@@ -946,6 +946,10 @@ flow-gate-status-test:
 # worker 三条命令的判据测试：临时仓库 + 假 gh / just，每条拒绝配反证；进 ci / ci-docs。
 flow-worker-test:
     @bash tools/test-flow-worker.sh
+
+# V3 协作工作流门禁核心与模拟演练场的判据测试（13 场景对抗自测 + 三组变异反证；进 flow-tests / ci-docs）。
+flow-v3-harness-test:
+    @bash tools/test-flow-v3-harness.sh
 
 # ── owner 流程（tools/flow/owner-*.sh，说明见 docs/runbook/owner.md）──────────
 # 每一步自动判定；红了或判定不了就经 owner-stuck 写 issue 并停下，脚本里没有跳过。
