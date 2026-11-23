@@ -152,7 +152,7 @@ V3_SEAL_MODE=""
 V3_SEAL_OUT=""
 for c in $CARDS; do
   flow_load_issue "$c"
-  if printf '%s\n' "$I_BODY" | grep -q '^```v3-seal'; then
+  if printf '%s\n' "$I_BODY" | grep -Eq '^[[:space:]]*```v3-seal([[:space:]]|$)'; then
     V3_SEAL_MODE="$(printf '%s\n' "$I_BODY" | python3 -I "${HERE}/v3_harness.py" parse-seal | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["mode"])' 2>/dev/null || echo invalid)"
     v3_core_arg=()
     [ "$IS_CORE" = 1 ] && v3_core_arg+=(--core-approved)

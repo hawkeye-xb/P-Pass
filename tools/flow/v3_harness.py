@@ -18,17 +18,23 @@ def sha256_file(path: str) -> str:
 
 
 def has_issue_seal(issue_body: str) -> bool:
-    return SEAL_BLOCK_RE.search(issue_body or "") is not None
+    return re.search(r"^\s*```v3-seal\b", issue_body or "", re.M) is not None
 
 
 def parse_issue_seal(issue_body: str) -> dict:
     m = SEAL_BLOCK_RE.search(issue_body or "")
     if not m:
-        raise ValueError("missing ```v3-seal block in issue body")
-    data = json.loads(m.group(1).strip())
-    if data.get("mode") not in ("fix", "speculate_then_fix", "feature", "verify"):
-        raise ValueError(f"invalid v3-seal mode: {data.get('mode')}")
-    return data
+        raise ValueError("missing or unclosed ```v3-seal block in issue body")
+    raw = json.loads(m.group(1).strip())
+    if not isinstance(raw, dict) or raw.get("mode") not in ("fix", "speculate_then_fix", "feature", "verify"):
+        raise ValueError(f"invalid v3-seal mode: {raw.get('mode') if isinstance(raw, dict) else type(raw)}")
+    bad_keys = set(raw) - {"mode", "exam_rel", "exam_sha256", "core_approved"}
+    if bad_keys:
+        raise ValueError(f"forbidden keys in v3-seal: {sorted(bad_keys)}")
+    rel = str(raw.get("exam_rel", "")).strip()
+    if not rel or rel.startswith(("/", "-")) or ".." in Path(rel).parts or not re.fullmatch(r"[A-Za-z0-9_./-]+", rel):
+        raise ValueError(f"unsafe exam_rel in v3-seal: {rel!r}")
+    return {"mode": raw["mode"], "exam_rel": rel, "exam_sha256": str(raw.get("exam_sha256", "")).strip()}
 
 
 def run_cmd(cmd: list[str], cwd: str, timeout: int = 120, extra_path: str | None = None) -> subprocess.CompletedProcess:
@@ -71,9 +77,7 @@ def changed_files_since(wt_dir: str, base_sha: str) -> list[str]:
 
 
 def _glob_match(rel_path: str, pat: str) -> bool:
-    pat = pat.strip()
-    while pat.startswith("./"):
-        pat = pat[2:]
+    pat = re.sub(r"^(?:\./)+", "", pat.strip())
     if not pat:
         return False
     rx = "^" + re.escape(pat).replace(r"\*\*/", "(?:.*/)?").replace(r"\*\*", ".*").replace(r"\*", "[^/]*").replace(r"\?", "[^/]") + "$"
@@ -84,22 +88,16 @@ def core_rules_from_git(repo: str, sha: str) -> tuple[list[str], list[str], list
     plus, zones, minus = [], [], []
     for candidate in (".github/core-paths.txt", ".core-paths.txt"):
         r = run_cmd(["git", "show", f"{sha}:{candidate}"], cwd=repo)
-        if r.returncode == 124:
-            return ["**"], [], []
         if r.returncode == 0 and r.stdout.strip():
             plus.append(candidate)
             for raw in r.stdout.splitlines():
                 ln = raw.strip()
                 if not ln or ln.startswith("#"):
                     continue
-                if ln.startswith("+ "):
-                    plus.append(ln[2:].strip())
-                elif ln.startswith("zone "):
-                    zones.append(ln[5:].strip())
-                elif ln.startswith("- "):
-                    minus.append(ln[2:].strip())
-                else:
-                    plus.append(ln)
+                if ln.startswith("+ "): plus.append(ln[2:].strip())
+                elif ln.startswith("zone "): zones.append(ln[5:].strip())
+                elif ln.startswith("- "): minus.append(ln[2:].strip())
+                else: plus.append(ln)
             return plus, zones, minus
     return ["**"], [], []
 
@@ -384,8 +382,12 @@ def main_cli(argv: list[str]) -> int:
         body = sys.stdin.read()
         if not has_issue_seal(body):
             return 0
-        seal = parse_issue_seal(body)
-        seal["core_approved"] = bool(seal.get("core_approved", False) or ("--core-approved" in argv[5:]))
+        try:
+            seal = parse_issue_seal(body)
+        except Exception as e:
+            print(f"SEAL_INVALID: {e}", file=sys.stderr)
+            return 1
+        seal["core_approved"] = ("--core-approved" in argv[5:])
         seal["defer_review_to_pr"] = True
         ok, msg = verify_gate(wt_dir, main_repo, base_sha, seal, seal.get("exam_sha256", ""), None)
         print(msg, file=(sys.stdout if ok else sys.stderr))

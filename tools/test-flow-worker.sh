@@ -1398,6 +1398,19 @@ printf '{"verdict":"FAIL","root_cause":"src/val.py still defines VALUE = 1 inste
 DONE "$W203" >"${TMP}/o203" 2>&1 && has_lbl 203 "status:review" && ! on_origin "ci/203-v3-verify" &&
   ok "V3 verify 卡：源码零改动且如实报告 FAIL → 合格交差（status:review，不推分支）" || bad "V3 verify 卡失败：$(tail -6 "${TMP}/o203")"
 
+# 4) 安全拦截：封条中注入 exam_cmd 或未闭合 ```v3-seal 围栏均必须被拒绝，不执行外部命令、不放行
+SEAL_INJ="$(printf '```v3-seal\n{"mode":"feature","exam_rel":"tests/test_v3_feat.py","exam_sha256":"%s","exam_cmd":["touch","%s"]}\n```' "$FEAT_SHA" "$PWN")"
+issue 204 "status:ready" "[T-204] v3 seal inject" "" "Feature" "$SEAL_INJ"
+W204="$(START 204 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/204-"*)"
+mkdir -p "$W204/tests"; printf '%s' "$EXAM_FEAT" >"$W204/tests/test_v3_feat.py"
+commit_file "$W204" src/val.py $'VALUE = 1\ndef brand_new_fn(): return 42'
+if DONE "$W204" >"${TMP}/o204" 2>&1; then bad "封条注入 exam_cmd 仍被放行"; else ok "安全拦截：拒绝 v3-seal 注入的 exam_cmd / 非白名单键"; fi
+[ ! -e "$PWN" ] && ok "  未执行封条注入的命令" || bad "  执行了封条注入命令"
+issue 205 "status:ready" "[T-205] v3 seal unclosed" "" "Feature" $'```v3-seal\n{"mode":"feature"}'
+W205="$(START 205 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/205-"*)"
+commit_file "$W205" src/val.py 'VALUE = 3'
+if DONE "$W205" >"${TMP}/o205" 2>&1; then bad "未闭合 v3-seal 围栏被静默放行"; else ok "安全拦截：未闭合 v3-seal 围栏 fail-closed 判红"; fi
+
 echo
 echo "通过 ${PASS}，失败 ${FAIL}"
 [ "$FAIL" -eq 0 ]

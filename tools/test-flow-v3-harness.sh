@@ -134,8 +134,8 @@ python3 -I - "${mut_dir}/flow/v3_harness.py" <<'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
 src = p.read_text(encoding="utf-8")
-old = '    while pat.startswith("./"):\n        pat = pat[2:]'
-mut = src.replace(old, '    pat = pat.lstrip("./")')
+old = '    pat = re.sub(r"^(?:\\./)+", "", pat.strip())'
+mut = src.replace(old, '    pat = pat.strip().lstrip("./")')
 assert mut != src, "failed to mutate lstrip('./')"
 p.write_text(mut, encoding="utf-8")
 PY
