@@ -1388,10 +1388,10 @@ import val
 class TestVer(unittest.TestCase):
     def test_must_fail(self): self.assertEqual(val.VALUE, 999)
 '
-printf '%s' "$EXAM_VER" >"${M}/tests/test_v3_ver.py"
-git -C "$M" add tests/test_v3_ver.py && git -C "$M" commit -q -s -m "seed verify test" && git -C "$M" push -q origin HEAD:refs/heads/main
+printf '%s' "$EXAM_VER" >"${M}/tests/verify_v3_only.py"
+git -C "$M" add tests/verify_v3_only.py && git -C "$M" commit -q -s -m "seed verify test" && git -C "$M" push -q origin HEAD:refs/heads/main
 VER_SHA="$(printf '%s' "$EXAM_VER" | python3 -I -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
-SEAL_VER="$(printf '```v3-seal\n{"mode":"verify","exam_rel":"tests/test_v3_ver.py","exam_sha256":"%s"}\n```' "$VER_SHA")"
+SEAL_VER="$(printf '```v3-seal\n{"mode":"verify","exam_rel":"tests/verify_v3_only.py","exam_sha256":"%s"}\n```' "$VER_SHA")"
 issue 203 "status:ready" "[T-203] v3 verify" "" "Task" "$SEAL_VER"
 W203="$(START 203 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/203-"*)"
 printf '{"verdict":"FAIL","root_cause":"src/val.py still defines VALUE = 1 instead of 999"}\n' >"$W203/verdict.json"
@@ -1422,10 +1422,12 @@ W206="$(START 206 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/206-"*)"
 mkdir -p "$W206/tests"; printf '%s' "$EXAM_NONDISC" >"$W206/tests/locked_custom.py"
 commit_file "$W206" src/val.py 'VALUE = 5'
 if DONE "$W206" >"${TMP}/o206" 2>&1; then bad "非 test*.py 命名的锁定测试失败仍放行"; else ok "显式运行 exam_cmd：非 discover 默认命名的锁定测试失败照样判红"; fi
-issue 207 "status:ready" "[T-207] v3 empty sha" "" "Feature" $'```v3-seal\n{"mode":"feature","exam_rel":"tests/missing.py","exam_sha256":""}\n```'
+grep -q 'EXAM_RED' "${PPASS_WT_ROOT}/.evidence/206/v3-gate.log" && ok "  确由 EXAM_RED 拦下（而非 suite_cmd）" || bad "  拦截原因不是 EXAM_RED"
+issue 207 "status:ready" "[T-207] v3 empty sha" "" "Feature" $'```v3-seal\r\n{"mode":"feature","exam_rel":"tests/missing.py","exam_sha256":""}\r\n```'
 W207="$(START 207 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/207-"*)"
 commit_file "$W207" src/val.py 'VALUE = 6'
-if DONE "$W207" >"${TMP}/o207" 2>&1; then bad "空 exam_sha256 + 缺失测试文件混过了 feature 门禁"; else ok "安全拦截：空 exam_sha256 封条判红拒绝"; fi
+if DONE "$W207" >"${TMP}/o207" 2>&1; then bad "CRLF 空 exam_sha256 + 缺失测试文件混过了 feature 门禁"; else ok "安全拦截：CRLF 空 exam_sha256 封条被 SEAL_INVALID 判红拒绝"; fi
+grep -q 'SEAL_INVALID' "${PPASS_WT_ROOT}/.evidence/207/v3-gate.log" && ok "  确由 SEAL_INVALID 拦下" || bad "  拦截原因不是 SEAL_INVALID"
 
 echo
 echo "通过 ${PASS}，失败 ${FAIL}"

@@ -141,8 +141,8 @@ case "$PR_AUTHOR" in app/dependabot | dependabot | "dependabot[bot]") IS_DEPENDA
 CLOSE_CARDS=""
 REF_CARDS=""
 if [ "$IS_DEPENDABOT" != 1 ]; then
-  CLOSE_CARDS="$(printf '%s\n' "$PR_BODY" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) +#[0-9]+' | grep -oE '[0-9]+' | sort -un || true)"
-  REF_CARDS="$(printf '%s\n' "$PR_BODY" | grep -oiE 'refs +#[0-9]+' | grep -oE '[0-9]+' | sort -un || true)"
+  CLOSE_CARDS="$(printf '%s\n' "$PR_BODY" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' | grep -oE '[0-9]+' | sort -un || true)"
+  REF_CARDS="$(printf '%s\n' "$PR_BODY" | grep -oiE 'refs?[[:space:]]+#[0-9]+' | grep -oE '[0-9]+' | sort -un || true)"
 fi
 CARDS="$(printf '%s\n%s\n' "$CLOSE_CARDS" "$REF_CARDS" | sed '/^$/d' | sort -un)"
 CARD_TEXT=""

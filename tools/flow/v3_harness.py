@@ -9,7 +9,7 @@ from typing import Callable
 WorkerFn = Callable[[str, str, str, int], tuple[int, str, float]]
 ReviewFn = Callable[[dict, str], tuple[bool, str]]
 GIT_LOCK = threading.Lock()
-SEAL_START_RE = re.compile(r"^[ \t]*```v3-seal(?:[ \t]|$)", re.M)
+SEAL_START_RE = re.compile(r"^\s*```v3-seal(?:\s|$)", re.M)
 SEAL_BLOCK_RE = re.compile(r"^[ \t]*```v3-seal[ \t]*\n(.*?)^[ \t]*```[ \t]*$", re.M | re.S)
 _GIT_LOC_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_PREFIX", "GIT_NAMESPACE")
 
@@ -18,10 +18,10 @@ def sha256_file(path: str) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest() if os.path.isfile(path) else ""
 
 def has_issue_seal(issue_body: str) -> bool:
-    return SEAL_START_RE.search(issue_body or "") is not None
+    return SEAL_START_RE.search((issue_body or "").replace("\r\n", "\n").replace("\r", "\n")) is not None
 
 def parse_issue_seal(issue_body: str) -> dict:
-    m = SEAL_BLOCK_RE.search(issue_body or "")
+    m = SEAL_BLOCK_RE.search((issue_body or "").replace("\r\n", "\n").replace("\r", "\n"))
     if not m:
         raise ValueError("missing or unclosed ```v3-seal block in issue body")
     raw = json.loads(m.group(1).strip())
@@ -373,6 +373,8 @@ def run_v3_queue(
 
 
 def main_cli(argv: list[str]) -> int:
+    if len(argv) >= 2 and argv[1] == "has-seal":
+        return 0 if has_issue_seal(sys.stdin.read()) else 1
     if len(argv) >= 2 and argv[1] == "parse-seal":
         print(json.dumps(parse_issue_seal(sys.stdin.read()), ensure_ascii=False))
         return 0
@@ -391,9 +393,8 @@ def main_cli(argv: list[str]) -> int:
         ok, msg = verify_gate(wt_dir, main_repo, base_sha, seal, seal["exam_sha256"], None)
         print(msg, file=(sys.stdout if ok else sys.stderr))
         return 0 if ok else 1
-    print("usage: v3_harness.py [parse-seal | check-card <wt> <main_repo> <base_sha> [--core-approved]] < issue.md", file=sys.stderr)
+    print("usage: v3_harness.py [has-seal | parse-seal | check-card <wt> <main_repo> <base_sha> [--core-approved]] < issue.md", file=sys.stderr)
     return 2
-
 
 if __name__ == "__main__":
     sys.exit(main_cli(sys.argv))
