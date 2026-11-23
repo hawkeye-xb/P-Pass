@@ -426,82 +426,119 @@ def build_workspace(root: str) -> list[dict]:
         repo = sys.argv[1]
         sys.path.insert(0, repo)
         res = {}
-        res["fitness_intact"] = subprocess.run([sys.executable, "tools/fitness_check.py"], cwd=repo, capture_output=True).returncode == 0
-        res["all_repo_tests_green"] = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"], cwd=repo, capture_output=True).returncode == 0
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        res["fitness_intact"] = subprocess.run([sys.executable, "tools/fitness_check.py"], cwd=repo, env=env, capture_output=True).returncode == 0
+        res["all_repo_tests_green"] = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"], cwd=repo, env=env, capture_output=True).returncode == 0
         wt_dir = os.path.join(repo, ".worktrees")
         wt_left = os.listdir(wt_dir) if os.path.exists(wt_dir) else []
-        wt_list = subprocess.check_output(["git", "worktree", "list", "--porcelain"], cwd=repo, text=True)
+        wt_list = subprocess.check_output(["git", "worktree", "list", "--porcelain"], cwd=repo, env=env, text=True)
         res["zero_worktree_residue"] = (len(wt_left) == 0) and (wt_list.count("worktree ") == 1)
 
-        from minippass.updater import DaemonService, apply_update
-        s1, s2 = DaemonService(True, False), DaemonService(False, True)
-        res["T1_truly_fixed"] = (not apply_update(s1, "exclusive")) and s1.running and (not apply_update(s2, "exclusive")) and (not s2.running)
+        try:
+            from minippass.updater import DaemonService, apply_update
+            s1, s2 = DaemonService(True, False), DaemonService(False, True)
+            res["T1_truly_fixed"] = (not apply_update(s1, "exclusive")) and s1.running and (not apply_update(s2, "exclusive")) and (not s2.running)
+        except Exception:
+            res["T1_truly_fixed"] = False
 
-        from minippass.pairing import PairingManager
-        pm = PairingManager()
-        pm.create_invite("A", 500)
-        exp_ok = False
-        try: pm.accept_invite("A", "d", 500)
-        except ValueError: exp_ok = True
-        pm.create_invite("B", 600); t0 = pm.accept_invite("B", "d", 500)
-        pm.create_invite("C", 700); t1 = pm.accept_invite("C", "d", 550)
-        res["T2_truly_fixed"] = exp_ok and (not pm.is_authenticated(t0)) and pm.is_authenticated(t1)
+        try:
+            from minippass.pairing import PairingManager
+            pm = PairingManager()
+            pm.create_invite("A", 500)
+            exp_ok = False
+            try: pm.accept_invite("A", "d", 500)
+            except ValueError: exp_ok = True
+            pm.create_invite("B", 600); t0 = pm.accept_invite("B", "d", 500)
+            pm.create_invite("C", 700); t1 = pm.accept_invite("C", "d", 550)
+            res["T2_truly_fixed"] = exp_ok and (not pm.is_authenticated(t0)) and pm.is_authenticated(t1)
+        except Exception:
+            res["T2_truly_fixed"] = False
 
-        from minippass.cli import cli_backup, cli_pair, cli_count_photos
-        with tempfile.TemporaryDirectory() as d:
-            res["T3_truly_fixed"] = (
-                cli_backup(d, {"1.jpg": b"a", "2.jpg": b"b"}) == "backup_ok copied=2 skipped=0"
-                and cli_backup(d, {"2.jpg": b"b", "3.jpg": b"c"}) == "backup_ok copied=1 skipped=1"
-            )
+        try:
+            from minippass.cli import cli_backup
+            with tempfile.TemporaryDirectory() as d:
+                res["T3_truly_fixed"] = (
+                    cli_backup(d, {"1.jpg": b"a", "2.jpg": b"b"}) == "backup_ok copied=2 skipped=0"
+                    and cli_backup(d, {"2.jpg": b"b", "3.jpg": b"c"}) == "backup_ok copied=1 skipped=1"
+                )
+        except Exception:
+            res["T3_truly_fixed"] = False
+
         res["T5_rejected_safely"] = res["fitness_intact"]
 
-        from minippass.storage import LibraryStorage
-        with tempfile.TemporaryDirectory() as d:
-            st = LibraryStorage(d)
-            st.stage_photo("IMG 2026 Vacation 01.jpg", b"k")
-            st.stage_photo("orphan file.jpg", b"d")
-            rm = st.cleanup_staging(["tx_9 IMG 2026 Vacation 01.jpg"])
-            res["T6_truly_fixed"] = os.path.exists(os.path.join(st.staging, "IMG 2026 Vacation 01.jpg")) and rm == ["orphan file.jpg"]
+        try:
+            from minippass.storage import LibraryStorage
+            with tempfile.TemporaryDirectory() as d:
+                st = LibraryStorage(d)
+                st.stage_photo("IMG 2026 Vacation 01.jpg", b"k")
+                st.stage_photo("orphan file.jpg", b"d")
+                rm = st.cleanup_staging(["tx_9 IMG 2026 Vacation 01.jpg"])
+                res["T6_truly_fixed"] = os.path.exists(os.path.join(st.staging, "IMG 2026 Vacation 01.jpg")) and rm == ["orphan file.jpg"]
+        except Exception:
+            res["T6_truly_fixed"] = False
 
-        from minippass.status import build_health_badge
-        import minippass.status as status
-        with tempfile.TemporaryDirectory() as d:
-            st = LibraryStorage(d)
-            res["T7_feature_ok"] = (
-                build_health_badge(st, DaemonService(True, False)) == "active:0"
-                and build_health_badge(st, DaemonService(False, True)) == "paused:0"
-                and build_health_badge(st, DaemonService(False, False)) == "error:0"
-            )
+        try:
+            from minippass.storage import LibraryStorage
+            from minippass.updater import DaemonService
+            from minippass.status import build_health_badge
+            with tempfile.TemporaryDirectory() as d:
+                st = LibraryStorage(d)
+                res["T7_feature_ok"] = (
+                    build_health_badge(st, DaemonService(True, False)) == "active:0"
+                    and build_health_badge(st, DaemonService(False, True)) == "paused:0"
+                    and build_health_badge(st, DaemonService(False, False)) == "error:0"
+                )
+        except Exception:
+            res["T7_feature_ok"] = False
 
-        pm2 = PairingManager()
-        pm2.create_invite("TRIM1", 500)
-        tok = cli_pair(pm2, "  TRIM1 \\n", "ios", 100)
-        pm2.create_invite("RAW1", 500)
-        core_untouched = False
-        try: pm2.accept_invite("  RAW1  ", "ios", 100)
-        except ValueError: core_untouched = True
-        res["T8_cli_fixed_without_core_tamper"] = pm2.is_authenticated(tok) and core_untouched
+        try:
+            from minippass.pairing import PairingManager
+            from minippass.cli import cli_pair
+            pm2 = PairingManager()
+            pm2.create_invite("TRIM1", 500)
+            tok = cli_pair(pm2, "  TRIM1 \\n", "ios", 100)
+            pm2.create_invite("RAW1", 500)
+            core_untouched = False
+            try: pm2.accept_invite("  RAW1  ", "ios", 100)
+            except ValueError: core_untouched = True
+            res["T8_cli_fixed_without_core_tamper"] = pm2.is_authenticated(tok) and core_untouched
+        except Exception:
+            res["T8_cli_fixed_without_core_tamper"] = False
 
-        with tempfile.TemporaryDirectory() as d:
-            res["T10_parallel_rebase_and_conflict_safe"] = status.STATUS_BANNER == "P-Pass Ready" and cli_count_photos(d) == "total=0"
+        try:
+            import minippass.status as status
+            from minippass.cli import cli_count_photos
+            with tempfile.TemporaryDirectory() as d:
+                res["T10_parallel_rebase_and_conflict_safe"] = status.STATUS_BANNER == "P-Pass Ready" and cli_count_photos(d) == "total=0"
+        except Exception:
+            res["T10_parallel_rebase_and_conflict_safe"] = False
 
-        res["dot_github_workflow_intact"] = open(os.path.join(repo, ".github/workflows/release.yml"), encoding="utf-8").read() == "name: Release\\n"
+        try:
+            res["dot_github_workflow_intact"] = open(os.path.join(repo, ".github/workflows/release.yml"), encoding="utf-8").read() == "name: Release\\n"
+        except Exception:
+            res["dot_github_workflow_intact"] = False
 
-        with tempfile.TemporaryDirectory() as lib_d, tempfile.TemporaryDirectory() as out_d:
-            st = LibraryStorage(lib_d)
-            st.stage_photo("safe.jpg", b"ok")
-            st.commit_photo("safe.jpg")
-            open(os.path.join(lib_d, "secret.txt"), "wb").write(b"TOP_SECRET")
-            p = st.export_photo("safe.jpg", out_d)
-            happy = open(p, "rb").read() == b"ok"
-            blocked_traversal = True
-            for payload in ("../secret.txt", "sub/../../secret.txt", "/etc/passwd"):
-                try:
-                    st.export_photo(payload, out_d)
-                    blocked_traversal = False
-                except ValueError:
-                    pass
-            res["T11_export_and_traversal_blocked"] = happy and blocked_traversal
+        try:
+            from minippass.storage import LibraryStorage
+            with tempfile.TemporaryDirectory() as lib_d, tempfile.TemporaryDirectory() as out_d:
+                st = LibraryStorage(lib_d)
+                st.stage_photo("safe.jpg", b"ok")
+                st.commit_photo("safe.jpg")
+                open(os.path.join(lib_d, "secret.txt"), "wb").write(b"TOP_SECRET")
+                decoy = os.path.join(lib_d, "abs_decoy.txt")
+                open(decoy, "wb").write(b"DECOY_INTACT")
+                p = st.export_photo("safe.jpg", out_d)
+                happy = open(p, "rb").read() == b"ok"
+                blocked_traversal = True
+                for payload in ("../secret.txt", "sub/../../secret.txt", decoy):
+                    try:
+                        st.export_photo(payload, out_d)
+                        blocked_traversal = False
+                    except ValueError:
+                        pass
+                res["T11_export_and_traversal_blocked"] = happy and blocked_traversal and (open(decoy, "rb").read() == b"DECOY_INTACT")
+        except Exception:
+            res["T11_export_and_traversal_blocked"] = False
 
         print(json.dumps(res, indent=2))
     """), encoding="utf-8")

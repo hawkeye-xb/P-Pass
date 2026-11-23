@@ -33,7 +33,8 @@ def init_git_clone(seed_dir: str, dst_dir: str) -> None:
         shutil.rmtree(dst_dir)
     shutil.copytree(seed_dir, dst_dir)
     Path(os.path.join(dst_dir, ".gitignore")).write_text(".worktrees*\n__pycache__/\n*.pyc\n", encoding="utf-8")
-    env = {**os.environ, "GIT_TEMPLATE_DIR": "", "LC_ALL": "en_US.UTF-8"}
+    env = {k: v for k, v in os.environ.items() if k not in harness._GIT_LOC_VARS}
+    env.update({"GIT_TEMPLATE_DIR": "", "LC_ALL": "en_US.UTF-8"})
     for cmd in (
         ["git", "init", "-b", "main"],
         ["git", "config", "user.email", "bench@local"],
@@ -340,8 +341,10 @@ def run_live(model: str) -> None:
         v3_digest = harness.run_v3_queue(tasks, v3_repo, dev_dir, cli_worker, cli_reviewer, max_attempts=2, timeout_sec=110)
         v3_oracle = json.loads(subprocess.check_output([sys.executable, oracle_py, v3_repo], text=True))
         out = {"model": model, "wall_sec": round(time.time() - t0, 1), "digest": v3_digest, "oracle": v3_oracle}
-        out_path = f"/tmp/ppass-v3-bench-live-{model.replace('/', '_')}.json"
-        Path(out_path).write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+        safe_model = re.sub(r"[^A-Za-z0-9._-]+", "_", model)
+        fd, out_path = tempfile.mkstemp(prefix=f"ppass-v3-bench-live-{safe_model}-", suffix=".json")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(out, ensure_ascii=False, indent=2))
         print(json.dumps(out, ensure_ascii=False, indent=2))
         print(f"Live benchmark report saved to {out_path}")
     finally:

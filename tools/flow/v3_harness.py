@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""
-P-Pass V3 协作工作流门禁与队列核心（`tools/flow/v3_harness.py`，单核 <= 400 行）：
-1. 四类任务门禁分流：`fix`（零拷贝干净基线反证）、`speculate_then_fix`（先固化变红单测再修）、
-   `feature`（锁测试哈希，跳过旧基线编译）、`verify`（源码零改动，如实报 FAIL/PASS 即合格）。
-2. 全局核心与门禁黑名单：从不可变基线提交读取 `.github/core-paths.txt`，未授权触碰即拦截并还原。
-3. 链外任务封条（`SHA256`）校验 + 只读 `gh` 垫片防改题 + 无人模式设备预检 + 两轮熔断 + 串行变基重验。
-"""
+"""P-Pass V3 协作工作流门禁与队列核心（`tools/flow/v3_harness.py`，单核 <= 400 行）：四类门禁分流 + 基线核心黑名单 + SHA256 封条 + 无人队列 + 串行变基重验。"""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
@@ -17,6 +11,7 @@ WorkerFn = Callable[[str, str, str, int], tuple[int, str, float]]
 ReviewFn = Callable[[dict, str], tuple[bool, str]]
 GIT_LOCK = threading.Lock()
 SEAL_BLOCK_RE = re.compile(r"```v3-seal\s*\n(.*?)```", re.S)
+_GIT_LOC_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_PREFIX", "GIT_NAMESPACE")
 
 
 def sha256_file(path: str) -> str:
@@ -24,7 +19,6 @@ def sha256_file(path: str) -> str:
 
 
 def parse_issue_seal(issue_body: str) -> dict:
-    """从 GitHub Issue 正文解析 ```v3-seal JSON 机器封条块。"""
     m = SEAL_BLOCK_RE.search(issue_body or "")
     if not m:
         raise ValueError("missing ```v3-seal block in issue body")
@@ -35,10 +29,16 @@ def parse_issue_seal(issue_body: str) -> dict:
 
 
 def run_cmd(cmd: list[str], cwd: str, timeout: int = 120, extra_path: str | None = None) -> subprocess.CompletedProcess:
-    env = {**os.environ, "GIT_TEMPLATE_DIR": "", "LC_ALL": "en_US.UTF-8"}
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_LOC_VARS}
+    env.update({"GIT_TEMPLATE_DIR": "", "LC_ALL": "en_US.UTF-8"})
     if extra_path:
         env["PATH"] = f"{extra_path}:{env.get('PATH', '')}"
-    return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
+    try:
+        return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        out = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        err = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+        return subprocess.CompletedProcess(cmd, 124, out, f"{err}\nCOMMAND_TIMEOUT after {timeout}s")
 
 
 def git_head(repo: str) -> str:
@@ -139,6 +139,8 @@ def verify_gate(
             vdata = json.loads(Path(vp).read_text(encoding="utf-8"))
         except Exception as e:
             return False, f"VERIFY_BAD_JSON: {e}"
+        if not isinstance(vdata, dict):
+            return False, "VERIFY_BAD_JSON: verdict.json must be an object"
         cp = run_cmd(exam_cmd, cwd=wt_dir, timeout=60)
         combined = (cp.stdout or "") + "\n" + (cp.stderr or "")
         actual = "PASS" if cp.returncode == 0 else ("INVALID" if _is_compile_or_syntax_error(combined) else "FAIL")
@@ -264,6 +266,17 @@ def develop_in_worktree(
     return False, last_reason, used
 
 
+def _squash_merge(main_repo: str, tid: str, title: str) -> tuple[bool, str]:
+    m = run_cmd(["git", "merge", "--squash", f"goal/{tid}"], cwd=main_repo)
+    if m.returncode == 0:
+        c = run_cmd(["git", "commit", "--no-verify", "-m", f"feat/fix({tid}): {title}"], cwd=main_repo)
+        if c.returncode == 0:
+            return True, ""
+        m = c
+    run_cmd(["git", "reset", "--merge"], cwd=main_repo)
+    return False, f"merge failed: {(m.stderr or m.stdout).strip()[:160]}"
+
+
 def run_v3_queue(
     tasks: list[dict], main_repo: str, dev_dir: str, worker_fn: WorkerFn, review_fn: ReviewFn | None = None,
     max_attempts: int = 2, timeout_sec: int = 110, unattended: bool = True,
@@ -317,6 +330,7 @@ def run_v3_queue(
 
             for tc, wt, ok, msg, used, elapsed in results:
                 tid, mode = tc["id"], tc["mode"]
+                keep_branch = False
                 try:
                     if not ok:
                         final_st, final_msg = "SUSPENDED_CIRCUIT_BREAK", msg
@@ -343,19 +357,20 @@ def run_v3_queue(
                                         run_cmd(["git", "add", "-A"], cwd=wt)
                                         run_cmd(["git", "commit", "--no-verify", "-m", f"rebased-fix({tid})"], cwd=wt)
                                 if re_ok:
-                                    run_cmd(["git", "merge", "--squash", f"goal/{tid}"], cwd=main_repo)
-                                    run_cmd(["git", "commit", "--no-verify", "-m", f"feat/fix({tid}): {tc['title']}"], cwd=main_repo)
-                                    final_st, final_msg = "MERGED_AFTER_REBASE", re_msg
+                                    m_ok, m_err = _squash_merge(main_repo, tid, tc["title"])
+                                    final_st, final_msg = ("MERGED_AFTER_REBASE", re_msg) if m_ok else ("SUSPENDED_MERGE_FAILED", m_err)
+                                    keep_branch = not m_ok
                                 else:
                                     final_st, final_msg = "SUSPENDED_SEMANTIC_CONFLICT", re_msg
                         else:
-                            run_cmd(["git", "merge", "--squash", f"goal/{tid}"], cwd=main_repo)
-                            run_cmd(["git", "commit", "--no-verify", "-m", f"feat/fix({tid}): {tc['title']}"], cwd=main_repo)
-                            final_st, final_msg = "MERGED", msg
+                            m_ok, m_err = _squash_merge(main_repo, tid, tc["title"])
+                            final_st, final_msg = ("MERGED", msg) if m_ok else ("SUSPENDED_MERGE_FAILED", m_err)
+                            keep_branch = not m_ok
                 finally:
                     with GIT_LOCK:
                         run_cmd(["git", "worktree", "remove", "--force", wt], cwd=main_repo)
-                        run_cmd(["git", "branch", "-D", f"goal/{tid}"], cwd=main_repo)
+                        if not keep_branch:
+                            run_cmd(["git", "branch", "-D", f"goal/{tid}"], cwd=main_repo)
                 digest.append({"id": tid, "status": final_st, "attempts": used, "sec": elapsed, "reason": final_msg})
     finally:
         for sp in spec_temps:
