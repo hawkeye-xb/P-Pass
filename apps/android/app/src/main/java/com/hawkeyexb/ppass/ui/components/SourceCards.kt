@@ -68,9 +68,11 @@ private fun SourceCellFrame(
     onClick: () -> Unit,
     cover: @Composable BoxScope.() -> Unit,
     content: @Composable RowScope.() -> Unit,
+    enabled: Boolean = true,
 ) {
     Card(
         onClick = onClick,
+        enabled = enabled,
         // 角色、选中状态与点击动作挂在同一个可点击节点上：屏幕阅读器对带标题的节点
         // 执行双击时，语义动作就在这个节点自身，能真正触发 onClick。
         modifier = Modifier
@@ -185,6 +187,7 @@ fun AddSourceCard(
     actionContentDescription: String,
     onClick: () -> Unit,
     tag: String? = null,
+    enabled: Boolean = true,
 ) {
     SourceCellFrame(
         selected = false,
@@ -192,6 +195,7 @@ fun AddSourceCard(
         stateDescription = null,
         tag = tag,
         onClick = onClick,
+        enabled = enabled,
         cover = {
             Icon(
                 imageVector = Icons.Default.Add,

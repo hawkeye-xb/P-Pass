@@ -415,7 +415,8 @@ fun BucketScreen(
                         AddSourceCard(
                             label = stringResource(R.string.folder_add),
                             actionContentDescription = stringResource(R.string.folder_add),
-                            onClick = { if (!saving) onAddFolder() },
+                            enabled = !saving,
+                            onClick = onAddFolder,
                         )
                     }
                 }

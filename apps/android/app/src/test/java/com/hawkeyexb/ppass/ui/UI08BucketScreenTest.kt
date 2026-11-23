@@ -177,12 +177,15 @@ class UI08BucketScreenTest {
     }
 
     /**
-     * #1797：「添加文件夹」用标准 AddSourceCard；保存期间不得再打开添加动作（沿用 saving 守卫）。
+     * #1797 / #1868：「添加文件夹」用标准 AddSourceCard；保存期间通过组件层 `enabled` 显式禁用
+     * （无障碍树暴露 disabled），不再靠调用点闭包里的 `if (!saving)` 静默吞点击。
      */
     @Test
     fun add_action_uses_the_standard_card_and_keeps_its_save_guard() {
         val source = bucketScreenSource()
         assertTrue("添加动作必须用标准 AddSourceCard", source.contains("AddSourceCard("))
-        assertTrue("保存期间不得打开添加动作", source.contains("if (!saving) onAddFolder()"))
+        val addFolderBlock = source.substringAfter("item(key = \"add-folder\")").substringBefore("}")
+        assertTrue("保存期间必须以 enabled = !saving 禁用添加动作", addFolderBlock.contains("enabled = !saving"))
+        assertFalse("不再靠闭包内 if (!saving) 静默吞点击", addFolderBlock.contains("if (!saving) onAddFolder()"))
     }
 }
