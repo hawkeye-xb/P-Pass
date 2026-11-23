@@ -142,7 +142,11 @@ SEAL_B="$(printf 'closes #1\n  ```v3-seal\n{"mode":"fix","exam_rel":"tests/locke
 gate 0 "V3 封条（含两空格缩进）：锁定测试 SHA256 一致 → 绿" "docs/a.md" "$SEAL_B"
 printf 'x = 2\n' >"${TMP}/repo/tests/locked_t.py"
 gate 1 "反证：V3 封条锁定测试被篡改 → acceptance gate 判红" "docs/a.md" "$SEAL_B"
+# 原始 CRLF 封条：不经过 tr -d '\r' 直接喂给 acceptance-gate，锁定测试被篡改时仍必须识别出封条并判红（防 CRLF fail-open 静默跳过）
+SEAL_CRLF="$(printf 'closes #1\r\n```v3-seal\r\n{"mode":"fix","exam_rel":"tests/locked_t.py","exam_sha256":"%s"}\r\n```\r\n' "$LOCKED_H")"
+gate 1 "反证：原始 CRLF 封条且锁定测试被篡改 → acceptance gate 识别封条并判红" "docs/a.md" "$SEAL_CRLF"
 printf 'x = 1\n' >"${TMP}/repo/tests/locked_t.py"
+gate 0 "原始 CRLF 封条且锁定测试 SHA256 一致 → 绿" "docs/a.md" "$SEAL_CRLF"
 gate 1 "V3 封条缺少 exam_sha256 → 拒绝放行" "docs/a.md" $'closes #1\n```v3-seal\n{"mode":"fix","exam_rel":"tests/locked_t.py"}\n```'
 gate 1 "V3 封条绝对路径 / 路径穿越 → 拒绝放行" "docs/a.md" "$(printf 'closes #1\n```v3-seal\n{"mode":"fix","exam_rel":"/etc/hosts","exam_sha256":"%s"}\n```' "$LOCKED_H")"
 
@@ -156,8 +160,11 @@ printf '%s\n' "$SEAL_B" >"${TMP}/card201.md"
 printf 'x = 2\n' >"${TMP}/repo/tests/locked_t.py"
 (export PATH="${TMP}/ghbin:${PATH}" GH_TOKEN=stub FAKE_AG_ISSUE_BODY="${TMP}/card201.md"; printf 'docs/a.md\n' >"${TMP}/files"; printf 'refs #201\n' >"${TMP}/body"; bash "$G" check --repo "${TMP}/repo" --files "${TMP}/files" --body "${TMP}/body" >/dev/null 2>&1) &&
   bad "refs #201 关联卡锁定测试被篡改仍放行" || ok "refs #201 关联卡封条哈希不匹配 → 判红拦截"
+printf '%s' "$SEAL_CRLF" >"${TMP}/card201_crlf.md"
+(export PATH="${TMP}/ghbin:${PATH}" GH_TOKEN=stub FAKE_AG_ISSUE_BODY="${TMP}/card201_crlf.md"; printf 'docs/a.md\n' >"${TMP}/files"; printf 'closes #201\n' >"${TMP}/body"; bash "$G" check --repo "${TMP}/repo" --files "${TMP}/files" --body "${TMP}/body" >/dev/null 2>&1) &&
+  bad "关联卡原始 CRLF 封条且测试被篡改仍放行" || ok "关联卡原始 CRLF 封条被篡改 → acceptance gate 判红"
 printf 'x = 1\n' >"${TMP}/repo/tests/locked_t.py"
-(export PATH="${TMP}/ghbin:${PATH}" GH_TOKEN=stub FAKE_AG_ISSUE_BODY="${TMP}/card201.md" FAKE_AG_GH_FAIL=1; touch "$FAKE_AG_GH_FAIL" 2>/dev/null; printf 'docs/a.md\n' >"${TMP}/files"; printf 'closes #201\n' >"${TMP}/body"; FAKE_AG_GH_FAIL="${TMP}/card201.md" bash "$G" check --repo "${TMP}/repo" --files "${TMP}/files" --body "${TMP}/body" >/dev/null 2>&1) &&
+(export PATH="${TMP}/ghbin:${PATH}" GH_TOKEN=stub FAKE_AG_ISSUE_BODY="${TMP}/card201.md" FAKE_AG_GH_FAIL="${TMP}/card201.md"; printf 'docs/a.md\n' >"${TMP}/files"; printf 'closes #201\n' >"${TMP}/body"; bash "$G" check --repo "${TMP}/repo" --files "${TMP}/files" --body "${TMP}/body" >/dev/null 2>&1) &&
   bad "gh 读取关联卡失败时静默放行" || ok "gh 读取关联卡失败 → fail-closed 判红"
 
 echo

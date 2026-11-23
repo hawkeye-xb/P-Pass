@@ -36,13 +36,14 @@ expect_red "守卫函数被删（只剩拉起调用）" "user_stopped"
 put crates/base/src/host.rs 'pub fn user_stopped() -> bool { false }
 fn boot() { if user_stopped() { return; } Command::new("launchctl").args(["bootstrap", "gui/501"]); }'
 expect_red "守卫函数退化为恒返回 false 空壳（T5 式绕过拦截）" "退化为恒返回布尔字面量"
-put apps/android/app/src/main/java/a/Guard.java 'class Guard { boolean user_stopped() { return false; } }'
-expect_red "Java 守卫方法退化为恒返回 false 空壳 → 判红" "退化为恒返回布尔字面量"
-unput apps/android/app/src/main/java/a/Guard.java
-put apps/android/app/src/main/java/a/KtGuard.kt 'fun user_stopped(state: java.io.File): Boolean = false || state.exists()'
 put crates/base/src/host.rs 'pub fn user_stopped(state: &std::path::Path) -> bool { state.exists() }
 fn boot(s: &std::path::Path) { if user_stopped(s) { return; } Command::new("launchctl").args(["bootstrap", "gui/501"]); }'
-expect_green "Kotlin 完整复合布尔表达式（= false || state.exists()）不误判 + 还原真实守卫"
+expect_green "先恢复真实 Rust 守卫为绿"
+put apps/android/app/src/main/java/a/Guard.java 'class Guard { boolean user_stopped() { return false; } }'
+expect_red "Java 守卫方法单独退化为恒返回 false 空壳 → 判红" "Guard.java"
+unput apps/android/app/src/main/java/a/Guard.java
+put apps/android/app/src/main/java/a/KtGuard.kt 'fun user_stopped(state: java.io.File): Boolean = false || state.exists()'
+expect_green "Kotlin 完整复合布尔表达式（= false || state.exists()）不误判"
 unput apps/android/app/src/main/java/a/KtGuard.kt
 
 # 反证：先证未篡改副本跑绿（证明无 ModuleNotFoundError 假红），再在共享库 fitness_lib.py 中违规 import 业务包必须判红

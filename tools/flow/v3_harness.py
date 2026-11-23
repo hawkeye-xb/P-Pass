@@ -118,7 +118,7 @@ def _default_cmds(wt_dir: str, exam_rel: str, task: dict) -> tuple[list[str], li
 
 
 def _is_compile_or_syntax_error(out_text: str) -> bool:
-    return any(m in out_text for m in ("SyntaxError", "IndentationError", "ImportError", "ModuleNotFoundError", "error[E", "could not compile"))
+    return any(m in out_text for m in ("SyntaxError", "IndentationError", "ImportError", "ModuleNotFoundError", "error[E", "could not compile", "syntax error", "unexpected EOF while looking for matching"))
 
 
 def verify_gate(wt_dir: str, main_repo: str, base_sha: str, task: dict, locked_sha: str, review_fn: ReviewFn | None = None) -> tuple[bool, str]:

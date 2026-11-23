@@ -36,4 +36,13 @@ printf 'dir|ghost|不存在了\n' >>"$R/tools/disk-growth-registry.txt"
 expect_red "登记了但代码里已找不到" "已找不到"
 cp "$TMP/base.txt" "$R/tools/disk-growth-registry.txt"
 expect_green "还原：登记表"
+
+mkdir -p "$TMP/mut_disk"
+cp "$REPO/tools/check-disk-growth.py" "$REPO/tools/fitness_lib.py" "$TMP/mut_disk/"
+python3 "$TMP/mut_disk/check-disk-growth.py" --root "$R" >/dev/null 2>&1 && ok "基线：check-disk-growth 原样副本通过 AST 自检" || bad "check-disk-growth 原样副本失败"
+: >"$TMP/mut_disk/fake_biz_mod.py"
+printf '\nimport fake_biz_mod\n' >>"$TMP/mut_disk/check-disk-growth.py"
+out_d="$(python3 "$TMP/mut_disk/check-disk-growth.py" --root "$R" 2>&1)" && bad "check-disk-growth 导入业务模块仍通过" || {
+  printf '%s' "$out_d" | grep -qF "违反外部物理原语铁律" && ok "反证：check-disk-growth 导入业务模块时 AST 自检判红" || bad "check-disk-growth 红因不对：$out_d"
+}
 finish

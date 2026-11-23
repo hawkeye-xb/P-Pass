@@ -259,10 +259,12 @@ def run_selftest() -> dict:
         os.makedirs(dev_dir, exist_ok=True)
         Path(os.path.join(dev_dir, "device-a.state")).write_text("SCREEN_LOCKED", encoding="utf-8")
 
-        # 1. 验证 parse_issue_seal（要求 64 位小写 hex SHA256，支持前导缩进，拒绝短哈希/空哈希）
+        # 1. 验证 parse_issue_seal / has_issue_seal（要求 64 位小写 hex SHA256，支持前导缩进与原始 CRLF，拒绝短哈希/空哈希）
         valid_sha = "a" * 64
-        seal = harness.parse_issue_seal(f'text\n  ```v3-seal\n{{"mode":"fix","exam_rel":"tests/a.py","exam_sha256":"{valid_sha}","core_approved":false}}\n  ```\n')
+        seal = harness.parse_issue_seal(f'text\r\n  ```v3-seal\r\n{{"mode":"fix","exam_rel":"tests/a.py","exam_sha256":"{valid_sha}","core_approved":false}}\r\n  ```\r\n')
         assert seal["mode"] == "fix" and seal["exam_sha256"] == valid_sha
+        assert harness.has_issue_seal("title\r\n```v3-seal\r\n{}") is True
+        assert harness._is_compile_or_syntax_error("src/guard.sh: line 2: syntax error: unexpected end of file") is True
         for bad_sha in ("abc", ""):
             try:
                 harness.parse_issue_seal(f'```v3-seal\n{{"mode":"fix","exam_rel":"tests/a.py","exam_sha256":"{bad_sha}"}}\n```')
