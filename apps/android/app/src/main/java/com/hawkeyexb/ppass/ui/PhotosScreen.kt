@@ -72,6 +72,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.hawkeyexb.ppass.R
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.hawkeyexb.ppass.proto.AssetMeta
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.ProtoJson
@@ -438,8 +439,11 @@ internal fun PhotosScreen(
         // 提示条、筛选条、照片网格左右同一条线，都用 page-gutter（#1405，产品负责人 11-05 验收）。
         // #1886：与范围页同因——普通 Row 里后面的胶囊只能吃前面剩下的宽度，大字体下会被挤窄硬裁；
         // 换成可换行的 FlowRow，放不下时整体落到下一行、各自保持自身宽度。
+        // #1882：与范围页同因——筛选条要画在下方照片网格之上。网格向上滚动时，顶边被裁剩
+        // 1px 的照片格虚拟触控框会外扩 24dp 遮住上面的胶囊，TalkBack 读到的可点区被切小。
+        // zIndex 抬高绘制/命中层级，胶囊的 48dp 触控目标不再被裁。
         FlowRow(
-            Modifier.fillMaxWidth().padding(PPSize.PageGutter, 0.dp, PPSize.PageGutter, 12.dp),
+            Modifier.fillMaxWidth().padding(PPSize.PageGutter, 0.dp, PPSize.PageGutter, 12.dp).zIndex(1f),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {

@@ -125,6 +125,76 @@ class ScopeTimeChipLayoutTest {
         )
     }
 
+    /**
+     * #1882：筛选条必须压在下方的滚动网格之上，否则网格向上滚动时，顶边被裁剩 1px 的
+     * 可点卡片会把自己的虚拟触控框外扩 24dp，遮住上面的 Chip——TalkBack 读到的可点区
+     * 从 48dp 被切成 32dp。
+     *
+     * 450dpi（三星 SM-S928N，2.8125 px/dp）实测几何：Chip 布局高 36dp = 101px，Material 3
+     * 最小交互尺寸把它撑到 48dp = 135px，范围 y ∈ [317, 452]；下方网格视口顶边 y = 474，
+     * 卡片被裁剩 1px（y ∈ [474, 475]）时，其虚拟触控框上边 = 474 − 24dp(67.5px) = 406.5px，
+     * 把 Chip 底边从 452 切到 406.5，只剩 89.5px ≈ 31.8dp（真机 dump 的 407/32dp 就是这个数）。
+     */
+    @Test
+    fun scrolled_card_touch_bounds_would_clip_chip_to_32dp_without_stacking() {
+        val pxPerDp = 450.0 / 160.0 // 2.8125
+        val chipTopPx = 317.0
+        val chipBottomPx = 452.0 // 36dp 布局高 + 上下各 6dp 最小交互尺寸 = 48dp
+        val gridViewportTopPx = 474.0
+        val cardVisiblePx = 1.0
+        val cardTouchExpansionPx = 24.0 * pxPerDp
+        val cardTopPx = gridViewportTopPx
+        val cardTouchTopPx = cardTopPx - cardTouchExpansionPx
+        assertEquals("顶边残片触控框上边 = 474 − 24dp", 406.5, cardTouchTopPx, 0.01)
+        assertEquals("残片确实只露 1px", 1.0, cardVisiblePx, 0.0)
+
+        // 没有 zIndex 时，绘制层级更高的卡片触控框把 Chip 底边裁到 406.5px。
+        val clippedHeightPx = cardTouchTopPx - chipTopPx
+        val clippedHeightDp = clippedHeightPx / pxPerDp
+        assertTrue(
+            "被遮挡后 Chip 触控区只剩 ~32dp（真机实测 407/90px），实测 ${"%.1f".format(clippedHeightDp)}dp / ${"%.1f".format(clippedHeightPx)}px",
+            abs(clippedHeightDp - 32.0) <= 0.5,
+        )
+        assertTrue("32dp 低于 48dp 无障碍下限", clippedHeightDp < 48.0)
+
+        // zIndex 把 Chip 抬到卡片之上，48dp 触控区不再被切。
+        assertEquals("完整触控区仍是 48dp", 135.0, chipBottomPx - chipTopPx, 0.01)
+    }
+
+    /**
+     * 反证：删掉任一处 `FlowRow(` 头部的 `Modifier.zIndex(1f)`，或去掉列表 `Box` 的
+     * `clipToBounds()`，本条即红。按 `FlowRow(` 到第一个 `{` 的头部截取，只认参数列表里的修饰符，
+     * 不会被 lambda 正文里别的写法蒙混过去。
+     */
+    @Test
+    fun filter_rows_are_stacked_above_the_scrolling_grid() {
+        val bucket = source("BucketScreen.kt")
+        assertTrue(
+            "范围页时间筛选 FlowRow 要抬到网格之上：${flowRowHeader(bucket)}",
+            flowRowHeader(bucket).contains(".zIndex(1f)"),
+        )
+        assertTrue(
+            "承载网格的 Box 要裁住卡片触控框：列表 Box 缺 clipToBounds()",
+            bucket.contains("Box(Modifier.weight(1f).clipToBounds())"),
+        )
+
+        val photos = source("PhotosScreen.kt")
+        assertTrue(
+            "照片页筛选 FlowRow 同样要抬到网格之上：${flowRowHeader(photos)}",
+            flowRowHeader(photos).contains(".zIndex(1f)"),
+        )
+        assertTrue("胶囊仍要保留最小高度", photos.contains("heightIn(min = 36.dp)"))
+    }
+
+    /** 取 `FlowRow(` 到第一个 `{` 之间的参数头部（不含 lambda 正文）。 */
+    private fun flowRowHeader(source: String): String {
+        val call = source.indexOf("FlowRow(")
+        require(call >= 0) { "源码里找不到 FlowRow(" }
+        val open = source.indexOf('{', call)
+        require(open >= 0) { "FlowRow 没有 lambda" }
+        return source.substring(call, open)
+    }
+
     /** 取 `FlowRow(` 后第一个 `{` 到配对 `}` 之间的内容（lambda 正文）。 */
     private fun flowRowLambdaBody(source: String): String {
         val call = source.indexOf("FlowRow(")

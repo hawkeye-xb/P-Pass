@@ -49,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -61,6 +62,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.backup.MediaScanner
@@ -335,7 +337,11 @@ fun BucketScreen(
             // #1886：两个时间胶囊改放可换行的 FlowRow——普通 Row 里第二个胶囊只能吃第一个剩下的宽度，
             // 英文 1.5× 时被挤成 145px（51.5dp），标签被硬裁成「Incl」。FlowRow 放不下时把第二个胶囊
             // 整体落到下一行、各自保持自身宽度，不再互相挤；换行契约见 scopeTimeChipsWrap（纯函数，单测钉住）。
+            // #1882：筛选条必须画在下方列表之上——列表向上滚动时，顶边被裁剩 1px 的相册卡
+            // 虚拟触控框会外扩 24dp 遮住上面的 Chip，TalkBack 读到的可点区只剩 32dp。
+            // zIndex 抬高绘制/命中层级，配上下方 Box 的 clipToBounds 把卡片触控框夹在视口内。
             FlowRow(
+                modifier = Modifier.zIndex(1f),
                 horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
             ) {
@@ -344,7 +350,7 @@ fun BucketScreen(
             }
             Spacer(Modifier.height(14.dp))
 
-            Box(Modifier.weight(1f)) {
+            Box(Modifier.weight(1f).clipToBounds()) {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
                     horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),

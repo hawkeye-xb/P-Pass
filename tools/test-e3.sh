@@ -69,6 +69,22 @@ replay() { # replay <附加到失败说明里的后缀>
   done
 }
 replay ""
+# #1882：范围页时间筛选 Chip 的 48dp 豁免已删除，32dp 必须当场判红。
+# 基于 pass 证据把选中 Chip 的 bounds 从 48dp([68,317][515,452]) 改成 32dp([68,317][515,407])，
+# judge 仍判过 = 白名单没删干净（或又加回了豁免）；恢复 #1882 豁免本段即红。
+(
+  d="$(mktemp -d)" || exit 1
+  trap 'rm -rf "$d"' EXIT
+  cp -R "$E3/fixtures/android-a11y-bigfont/pass" "$d/shrunk-chip" || exit 1
+  scope="$d/shrunk-chip/zh-CN/scope-open.xml"
+  grep -q '\[68,317\]\[515,452\]' "$scope" || { echo "pass fixture 里找不到 48dp 选中 Chip 的 bounds"; exit 1; }
+  sed -i.bak 's/\[68,317\]\[515,452\]/[68,317][515,407]/' "$scope" && rm -f "$scope.bak"
+  if "$E3/run" judge android/a11y-bigfont "$d/shrunk-chip" >/dev/null 2>&1; then
+    echo "32dp 时间筛选 Chip 仍判过——#1882 的 Chip 白名单没删干净"
+    exit 1
+  fi
+  exit 0
+) || bad "#1882：32dp 时间筛选 Chip 必须判红"
 # 判据不许依赖 macOS 专有的 stat -f%z：CI 在 Linux 上离线回放同一份判据，那里 stat 不认这个写法，
 # 取不到文件大小就会让 pass 证据假红（本卡 bigvideo 的 bytes=0 就是这么红的）。用一个同样拒绝
 # -f%z 的 stat 挡在 PATH 前面再回放一遍，结论必须和本机一致。反证：判据里写回 stat -f%z 这段就红。
