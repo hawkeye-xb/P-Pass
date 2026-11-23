@@ -14,6 +14,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.hasStateDescription
@@ -30,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.hawkeyexb.ppass.ui.PPTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -217,5 +219,27 @@ class SourceCardsTest {
         val count = compose.onNodeWithText("2 张", useUnmergedTree = true).getBoundsInRoot()
         assertTrue("大字号下数量标签被压到不足一行高：${(count.bottom - count.top).value}dp", (count.bottom - count.top) >= 20.dp)
         compose.onNodeWithContentDescription("文件夹").assertIsDisplayed()
+    }
+
+    /**
+     * #1868：AddSourceCard 接收 `enabled = false` 时，Compose 无障碍语义必须标记为不可用
+     * （TalkBack 报 disabled），并且点击不再触发 onClick——由组件自身阻断，而不是靠调用点吞点击。
+     */
+    @Test
+    fun disabled_add_card_exposes_disabled_semantics_and_blocks_clicks() {
+        var clicked = false
+        compose.setContent {
+            PPTheme {
+                AddSourceCard(
+                    label = "添加文件夹",
+                    actionContentDescription = "动作",
+                    enabled = false,
+                    onClick = { clicked = true },
+                )
+            }
+        }
+        compose.onNodeWithText("添加文件夹").assertIsNotEnabled()
+        compose.onNodeWithText("添加文件夹").performClick()
+        assertFalse("禁用态的添加卡不得触发 onClick", clicked)
     }
 }
