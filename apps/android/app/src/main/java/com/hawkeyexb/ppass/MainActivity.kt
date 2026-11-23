@@ -241,6 +241,36 @@ internal fun isOnboardingScreen(screen: Screen): Boolean =
     screen is Screen.Decision || (screen is Screen.Buckets && screen.firstTime)
 
 /**
+ * #1864：单次传输入口的入队协调（首页相册、首页文件、决定页三处共用）。用户确实选了东西（[uriCount] > 0）
+ * 而 [enqueue] 抛异常或一个都没登记上时，不碰原状态（不清理、不刷新汇总、不唤醒传输循环），改由
+ * [notifyFailure] 给出既有的 [R.string.command_failed] 提示，不让「选了却什么都没发生」；取消选择
+ * （空列表）按取消处理，不报错。返回是否登记成功，调用方据此决定要不要继续走成功路径。
+ */
+internal fun runPickedEnqueue(
+    uriCount: Int,
+    enqueue: () -> Int,
+    onSuccess: () -> Unit,
+    onFailure: (Throwable?) -> Unit,
+    notifyFailure: (Int) -> Unit,
+): Boolean {
+    if (uriCount <= 0) return false
+    val added = try {
+        enqueue()
+    } catch (t: Throwable) {
+        onFailure(t)
+        notifyFailure(R.string.command_failed)
+        return false
+    }
+    if (added <= 0) {
+        onFailure(null)
+        notifyFailure(R.string.command_failed)
+        return false
+    }
+    onSuccess()
+    return true
+}
+
+/**
  * #1263：「只备份某天起的照片」那一档一律写日期（10-29 文案定稿）：没存过 → 今天（保存时落的就是今天 0 点，见
  * [sinceToSave]）；存过 → 存的那一天。几天以后看也还是那一天，不会说成「从今天起」。
  */
@@ -289,29 +319,39 @@ fun PPassApp() {
     val context = LocalContext.current
     // UPD-01: 下载安装是 suspend（IO 线程下载）——按钮 onClick 从协程调。
     val scope = rememberCoroutineScope()
+    // UI-12 追加（2026-09-15，用户拍板）：后台备份"去处理"的短暂反馈用
+    // Snackbar——这是本代码库第一个"转瞬即逝、非持久"的反馈机制（此前
+    // 所有反馈都是改一个持久状态、界面自己重组合）。只覆盖两条真实存在
+    // 的信号：①点击发起重挂监听的确认（"正在重新连接…"，无失败态——
+    // WorkManager 入队不会抛错，真失败已由 Trouble 状态/系统通知覆盖）；
+    // ②系统授权弹窗的结果回调（同意/拒绝，各一句文案）。
+    // #1864：单次传输入队失败也是真实存在的失败信号（写盘/数据库出错），
+    // 复用同一个提示出口；宿主放在最外层，首页与决定页都能看到。
+    val snackbarHostState = remember { SnackbarHostState() }
     // #1272 挑几张传：系统照片选择器（不需要照片权限）。选完登记成一批手选订单，叫醒传输循环；
     // 进度 / 结果每秒读一次手选表（只在有未结束的或刚结束时变）。
     var pickedBatch by remember { mutableStateOf<com.hawkeyexb.ppass.backup.picked.PickedBatchSummary?>(null) }
     val pickPhotosLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(com.hawkeyexb.ppass.backup.picked.PickedUploads.MAX_PICK),
     ) { uris ->
-        if (uris.isNotEmpty()) {
-            scope.launch(Dispatchers.IO) {
-                // #1789（#1784）：已结束记录随下一次选择清理。评审 AP：清理放在**登记成功之后**——
-                // 先清再登记时，若登记失败，未结束批次里已结算的行已被删掉且无法恢复；登记成功后再清，
-                // 新批已在队列里顶替旧状态，失败时原状态原样保留。
-                // 与文件入口同一种写法，登记失败不把异常抛出协程外。
-                val count = runCatching {
+        scope.launch(Dispatchers.IO) {
+            // #1789（#1784）：已结束记录随下一次选择清理。评审 AP：清理放在**登记成功之后**——
+            // 先清再登记时，若登记失败，未结束批次里已结算的行已被删掉且无法恢复；登记成功后再清，
+            // 新批已在队列里顶替旧状态，失败时原状态原样保留。
+            // #1864：登记失败不再静默——走 [runPickedEnqueue] 弹既有 command_failed 提示；
+            // 取消选择（空列表）不报错。
+            runPickedEnqueue(
+                uriCount = uris.size,
+                enqueue = { com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris) },
+                onSuccess = {
                     val store = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context)
-                    val registered = com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris)
-                    if (registered > 0) store.clearSettled()
-                    registered
-                }.onFailure { PLog.w("PPassFlow", "picked: enqueue failed", it) }.getOrDefault(0)
-                if (count > 0) {
+                    store.clearSettled()
                     pickedBatch = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).summary()
                     com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
-                }
-            }
+                },
+                onFailure = { err -> PLog.w("PPassFlow", "picked: enqueue failed", err) },
+                notifyFailure = { resId -> scope.launch { snackbarHostState.showSnackbar(context.getString(resId)) } },
+            )
         }
     }
     // #1789「从文件选择」：SAF 系统文件选择器（SingleTransferFilePicker.intent：图片/视频、可多选）。
@@ -324,20 +364,21 @@ fun PPassApp() {
         val uris = if (result.resultCode == android.app.Activity.RESULT_OK) {
             com.hawkeyexb.ppass.ui.SingleTransferFilePicker.urisFromResult(result.data)
         } else emptyList()
-        if (uris.isNotEmpty()) {
-            scope.launch(Dispatchers.IO) {
-                // 评审 AP：清理同样放在登记成功之后（相册入口同一理由）。
-                val count = runCatching {
+        scope.launch(Dispatchers.IO) {
+            // 评审 AP：清理同样放在登记成功之后（相册入口同一理由）。
+            // #1864：与相册入口共用 [runPickedEnqueue] 的失败反馈，登记失败弹提示、不静默。
+            runPickedEnqueue(
+                uriCount = uris.size,
+                enqueue = { com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris) },
+                onSuccess = {
                     val store = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context)
-                    val registered = com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris)
-                    if (registered > 0) store.clearSettled()
-                    registered
-                }.onFailure { PLog.w("PPassFlow", "picked: file enqueue failed", it) }.getOrDefault(0)
-                if (count > 0) {
+                    store.clearSettled()
                     pickedBatch = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).summary()
                     com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
-                }
-            }
+                },
+                onFailure = { err -> PLog.w("PPassFlow", "picked: file enqueue failed", err) },
+                notifyFailure = { resId -> scope.launch { snackbarHostState.showSnackbar(context.getString(resId)) } },
+            )
         }
     }
     androidx.compose.runtime.LaunchedEffect(Unit) {
@@ -346,14 +387,6 @@ fun PPassApp() {
             kotlinx.coroutines.delay(1000)
         }
     }
-    // UI-12 追加（2026-09-15，用户拍板）：后台备份"去处理"的短暂反馈用
-    // Snackbar——这是本代码库第一个"转瞬即逝、非持久"的反馈机制（此前
-    // 所有反馈都是改一个持久状态、界面自己重组合）。只覆盖两条真实存在
-    // 的信号：①点击发起重挂监听的确认（"正在重新连接…"，无失败态——
-    // WorkManager 入队不会抛错，真失败已由 Trouble 状态/系统通知覆盖）；
-    // ②系统授权弹窗的结果回调（同意/拒绝，各一句文案）。不做"报错"
-    // Snackbar：点击这个动作本身没有可诚实上报的失败信号，编一个是假的。
-    val snackbarHostState = remember { SnackbarHostState() }
     // #1020：设置写盘的唯一 UI 边界——写失败不崩溃，记日志 + 一过性提示，显示值由调用方从盘上重读。
     val settingsWriter = remember {
         SettingsWriter { res -> scope.launch { snackbarHostState.showSnackbar(context.getString(res)) } }
@@ -810,12 +843,17 @@ fun PPassApp() {
             return@handlePick
         }
         scope.launch {
-            val count = withContext(Dispatchers.IO) {
-                runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris) }
-                    .onFailure { PLog.w("PPassFlow", "onboarding: picked enqueue failed", it) }
-                    .getOrDefault(0)
+            // #1864：登记失败走 [runPickedEnqueue]——弹既有 command_failed 提示后，按钮解锁、留在决定页重试。
+            val registered = withContext(Dispatchers.IO) {
+                runPickedEnqueue(
+                    uriCount = uris.size,
+                    enqueue = { com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris) },
+                    onSuccess = {},
+                    onFailure = { err -> PLog.w("PPassFlow", "onboarding: picked enqueue failed", err) },
+                    notifyFailure = { resId -> scope.launch { snackbarHostState.showSnackbar(context.getString(resId)) } },
+                )
             }
-            if (count <= 0) {
+            if (!registered) {
                 PLog.i("PPassFlow", "onboarding: pick registered nothing, staying on decision")
                 decisionLock.unlock()
                 return@launch
