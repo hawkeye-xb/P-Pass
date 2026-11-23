@@ -650,14 +650,15 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertEqual(app.photosGuide, .none, "还没传成功：不出卡")
         media.disk = []
         app.refresh()
-        XCTAssertEqual(app.photosGuide, .enableScope, "一个相册都没选")
+        // #1962：保存过空集也是明确选择，不再反复引导（对位 Android `guideForCurrentScope`）。
+        XCTAssertEqual(app.photosGuide, .none, "保存过空集：不再反复引导")
         media.disk = nil
         app.refresh()
-        XCTAssertEqual(app.photosGuide, .enableScope, "从未保存也是没选相册")
+        XCTAssertEqual(app.photosGuide, .enableScope, "从未保存才是没选相册")
         media.disk = ["a"]
         engine.rule = false
         app.refresh()
-        XCTAssertEqual(app.photosGuide, .enableScope, "规则关")
+        XCTAssertEqual(app.photosGuide, .none, "保存过范围后主动关规则：正常状态，不再引导")
         engine.rule = true
         engine.stubFacts.lastSuccessAt = 1
         app.refresh()
@@ -734,7 +735,9 @@ final class SettingsFeedbackTests: XCTestCase {
 
     /// × 写不下来：卡片留着、提示用户。
     func test_dismiss_write_failure_keeps_the_card_and_tells_the_user() async {
-        let (app, engine, _) = make()
+        let (app, engine, media) = make()
+        // #1962：第一步引导只在「从未保存过范围」时出现；这里要一张真的卡片来验证 × 写失败后卡片留着。
+        media.disk = nil
         engine.failWrites = true
         engine.rule = false
         app.refresh()
@@ -766,7 +769,7 @@ final class SettingsFeedbackTests: XCTestCase {
         engine.folderInfos = [FolderSourceInfo(id: "f1", displayName: "相机", available: true)]
         app.refresh()
         XCTAssertTrue(app.sourceAvailability.folderOnly)
-        XCTAssertEqual(app.scopeGuideActionKey, "photos_first_run_enable", "folder-only 按钮写「开启自动备份」，不存在「去设置」")
+        XCTAssertEqual(app.scopeGuideActionKey, "photos_guide_enable", "folder-only 按钮写「开启」，不存在「去设置」")
         engine.calls.removeAll()
         app.guideAction(.enableScope)
         await settle()
@@ -788,7 +791,7 @@ final class SettingsFeedbackTests: XCTestCase {
             try? engine.setAutoRule(false)
             media.granted = .partial
             app.refresh()
-            XCTAssertEqual(app.scopeGuideActionKey, "background_refresh_notice_action", "部分权限、规则关：按钮说「去设置」")
+            XCTAssertEqual(app.scopeGuideActionKey, "auto_backup_blocked_action", "部分权限、规则关：按钮说「去设置」")
             engine.calls.removeAll()
             app.guideAction(.enableScope)
             await settle()
@@ -886,7 +889,9 @@ final class SettingsFeedbackTests: XCTestCase {
     }
 
     /// 场景 B：拒绝后挑了照片（单张备份）进了照片页；自己去设置改成全部回来 → 自动备份保持关（不替用户开）；
-    /// 引导卡第一张、按钮是「开启」不是「去设置」；点它 → 不去设置、直接开并恢复备份；不出「自动备份已停止」。
+    /// 按钮词条是「开启」不是「去设置」；点开启 → 不去设置、直接开并恢复备份；不出「自动备份已停止」。
+    /// #1962：已保存过范围（演示数据 ["a"]）时不再主动弹第一步引导——对齐 Android `guideForCurrentScope`，
+    /// 保存过任何范围（含空集）就是明确选择，不再反复引导；这里直接验证按钮词条与开启动作本身。
     /// 反证：回前台按权限替用户把开关打开，或全部权限下按钮仍是「去设置」，本条红。
     func test_scenario_b_full_access_after_picking_does_not_turn_backup_on_for_the_user() async {
         let (app, engine, media) = make()
@@ -899,7 +904,7 @@ final class SettingsFeedbackTests: XCTestCase {
         app.sceneBecameActive()
         await settle()
         XCTAssertFalse(app.autoRule, "不替用户开自动备份")
-        XCTAssertEqual(app.photosGuide, .enableScope)
+        XCTAssertEqual(app.photosGuide, .none, "#1962：保存过范围后不再主动弹第一步引导")
         XCTAssertEqual(app.scopeGuideActionKey, "photos_guide_enable", "全部权限：按钮是「开启」")
         XCTAssertFalse(app.autoRuleBlocked, "开关关着：不是「自动备份已停止」")
 

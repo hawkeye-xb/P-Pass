@@ -26,14 +26,15 @@ struct HeroCard: View {
                     case .accessBlocked:
                         Text(L.s("auto_backup_blocked_hero")).font(PPFont.cardTitle).foregroundStyle(PPColor.act)
                         // #1353：权限被收回后的唯一出口：去本 App 的系统设置页改回；开关保持开（对位 Android 英雄卡）。
+                        // #1962：紧凑描边次级按钮，对齐 Android 英雄卡 OutlinedButton（高 40、圆角 14、act 描边 40%）。
                         if app.blockedHeroOffersSettings {
-                            PPButton(title: L.s("auto_backup_blocked_action"), kind: .quiet) { app.openSettingsFromBlockedHero() }
+                            HeroCompactActionButton(title: L.s("auto_backup_blocked_action")) { app.openSettingsFromBlockedHero() }
                                 .accessibilityIdentifier("blockedHeroSettings")
                         }
                     case .mixedAlbumIncomplete:
                         // #1811：文件夹备份还在继续，只说相册侧的状态；出口只有一个「调整范围」。
                         Text(L.s("hero_mixed_album_incomplete")).font(PPFont.cardTitle).foregroundStyle(PPColor.act)
-                        PPButton(title: L.s("hero_adjust_scope_action"), kind: .quiet) { app.adjustScopeFromIncompleteAlbum() }
+                        HeroCompactActionButton(title: L.s("hero_adjust_scope_action")) { app.adjustScopeFromIncompleteAlbum() }
                             .accessibilityIdentifier("mixedAlbumAdjustScope")
                     case .countsUnreadable:
                         Text(L.s("hero_counts_unreadable")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
@@ -46,7 +47,13 @@ struct HeroCard: View {
                         Text(L.s("hero_unreconciled_title")).font(PPFont.cardTitle).foregroundStyle(PPColor.waiting)
                         Text(L.s("hero_unreconciled_body")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
                     case .triplet:
-                        if let triplet { tripletView(triplet) }
+                        // #1272 §5 / #1962：范围设了「从某天起」且里面还没有照片——空状态一句话
+                        // （拍完回到 P-Pass，前台补捞会把它传上去），对齐 Android `auto_backup_from_today_empty`。
+                        if Self.showsFromTodayEmpty(render: render, triplet: triplet, since: app.since) {
+                            Text(L.s("auto_backup_from_today_empty")).font(PPFont.cardBody).foregroundStyle(PPColor.ink)
+                        } else if let triplet {
+                            tripletView(triplet)
+                        }
                     }
                     }
                 }
@@ -107,6 +114,16 @@ struct HeroCard: View {
     private func lastLine(_ t: BackupTriplet) -> String {
         let when = LastSuccessText.line(t.lastSuccessAt)
         return t.k > 0 ? when + " · " + L.f("pending_count", Int(t.k)) : when
+    }
+
+    /// #1962：英雄卡的三元组空态——范围设了「从今天起」（`since = .since`）且 0/0 时，
+    /// 不说数字，只说一句「今天新拍的照片会自动传到电脑」。对齐 Android `HomeScreen.kt` 的
+    /// `t.n == 0L && t.m == 0L && scopeHasStart` 判据；`.all` / 无 since / 非三元组 / 有数字都不算。
+    internal static func showsFromTodayEmpty(render: HeroRender, triplet: BackupTriplet?,
+                                             since: BackupSince?) -> Bool {
+        guard render == .triplet, let t = triplet, t.n == 0, t.m == 0 else { return false }
+        if case .since? = since { return true }
+        return false
     }
 
     /// 进度区（Android 同构）：左 = 文字列，右 = 唯一的次级按钮（进行中「暂停」/ 已暂停「继续」，其余不出现）。
@@ -208,5 +225,45 @@ struct HeroCard: View {
             return true
         }
         return false
+    }
+}
+
+/// #1962：英雄卡内紧凑描边次级按钮的样式常量——抽成纯数据，模拟器单测直接断言，
+/// 不必渲染视图。对齐 Android `HomeScreen.kt` 英雄卡的 `OutlinedButton`：
+/// 高 40、圆角 14、1pt `PPColor.Act` 40% 描边、`PPColor.Act` 字色、15pt 粗体，
+/// 水平内边距随文字自适应（不再用全宽撑满的 `PPButton(kind: .quiet)`）。
+struct HeroActionButtonStyleConfig: Equatable {
+    var height: CGFloat = 40
+    var cornerRadius: CGFloat = 14
+    var borderWidth: CGFloat = 1
+    var borderOpacity: Double = 0.4
+    var fontSize: CGFloat = 15
+    var horizontalPadding: CGFloat = 16
+
+    static let standard = HeroActionButtonStyleConfig()
+
+    var borderColor: Color { PPColor.act.opacity(borderOpacity) }
+    var contentColor: Color { PPColor.act }
+}
+
+/// #1962：英雄卡里那一个紧凑描边次级按钮（「去设置」/「调整范围」）。
+struct HeroCompactActionButton: View {
+    let title: String
+    var style: HeroActionButtonStyleConfig = .standard
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(PPFont.sans(style.fontSize, .bold))
+                .foregroundStyle(style.contentColor)
+                .padding(.horizontal, style.horizontalPadding)
+                .frame(height: style.height)
+                .background(
+                    RoundedRectangle(cornerRadius: style.cornerRadius)
+                        .strokeBorder(style.borderColor, lineWidth: style.borderWidth)
+                )
+        }
+        .buttonStyle(.plain)
     }
 }
