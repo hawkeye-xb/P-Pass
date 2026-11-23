@@ -278,4 +278,47 @@ final class FolderRegistryTests: XCTestCase {
         XCTAssertNotNil(locked.record(id: id), "内存回退：记录还在")
         XCTAssertFalse(locked.record(id: id) == nil && locked.isKnownOrRemoved(id), "不留没有记录的墓碑")
     }
+
+    // MARK: #1770 共享 App 容器显示名（物理末段固定 Documents，系统本地化名在安全作用域内读）
+
+    // 共享 App 容器（如 Blackmagic Camera）：末段是 Documents，本地化名解析出真实应用名。
+    // 反证：直接用 lastPathComponent → 返回 "Documents" → 覆盖不到「黑魔法显示成 Documents」的现场。
+    func testDisplayNameUsesLocalizedNameForDocumentsContainer() {
+        let url = URL(fileURLWithPath: "/tmp/On My iPhone/Blackmagic Cam", isDirectory: true)
+            .appendingPathComponent("Documents", isDirectory: true)
+        let resolved = FolderDisplayName.resolve(url: url, fallback: "Documents") { _ in "Blackmagic Cam" }
+        XCTAssertEqual(resolved, "Blackmagic Cam", "共享容器的系统本地化应用名")
+    }
+
+    // 读不到本地化名（nil / 空 / 仍是 Documents）→ 回退，不丢来源。
+    func testDisplayNameFallsBackWhenLocalizedNameUnavailable() {
+        let url = URL(fileURLWithPath: "/tmp/On My iPhone/Someone/Documents", isDirectory: true)
+        XCTAssertEqual(FolderDisplayName.resolve(url: url, fallback: "Documents") { _ in nil }, "Documents")
+        XCTAssertEqual(FolderDisplayName.resolve(url: url, fallback: "Documents") { _ in "Documents" }, "Documents")
+        XCTAssertEqual(FolderDisplayName.resolve(url: url, fallback: "") { _ in nil }, "Documents", "空回退用末段")
+    }
+
+    // 调用方已给出真实名称（不等于末段、也不是 Documents 占位）→ 原样保留，不被本地化查询覆盖。
+    func testDisplayNameKeepsExplicitNonPlaceholderName() {
+        let url = URL(fileURLWithPath: "/tmp/DemoDir", isDirectory: true)
+        XCTAssertEqual(FolderDisplayName.resolve(url: url, fallback: "Demo") { _ in "Something Else" }, "Demo")
+    }
+
+    // 重新授权：历史被存成 Documents 的来源用解析出的真实名恢复；已有真实名的来源不被覆盖。
+    // 反证：无条件覆盖 → 第二条红；从不刷新 → 第一条红。
+    func testReauthorizeRefreshesDocumentsPlaceholderOnly() throws {
+        let container = try makeFolder(name: "Documents")
+        let placeholderId = try registry.addFolder(at: container, displayName: "Documents")
+        try registry.reauthorize(id: placeholderId, at: container, displayName: "Blackmagic Cam")
+        XCTAssertEqual(registry.record(id: placeholderId)?.displayName, "Blackmagic Cam", "占位名被真实名替换")
+
+        let real = try makeFolder(name: "MyShoot")
+        let realId = try registry.addFolder(at: real, displayName: "MyShoot")
+        try registry.reauthorize(id: realId, at: real, displayName: "Other App")
+        XCTAssertEqual(registry.record(id: realId)?.displayName, "MyShoot", "已有真实名保持不变")
+
+        // 无参调用（旧调用方式）不改名。
+        try registry.reauthorize(id: realId, at: real)
+        XCTAssertEqual(registry.record(id: realId)?.displayName, "MyShoot", "缺省参数保持兼容")
+    }
 }
