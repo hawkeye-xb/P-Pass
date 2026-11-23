@@ -188,4 +188,129 @@ final class AlbumCatalogTests: XCTestCase {
         XCTAssertEqual(AlbumCatalog(library: lib).listAlbums()[0].count, 1)
         XCTAssertEqual(AlbumScope(library: lib).assetIdentifiers(inAlbums: ["mixed"]), ["p"])
     }
+
+    // MARK: #1949 大批量相册：一次批量统计、0 次逐 id 回退
+
+    /// 80 个可选相册规模下，`listAlbums()` 只调 1 次批量 `collectionSummaries(matching:)`，
+    /// 不回退逐 id `summary(ofCollection:)`；不可选集合被提前过滤、连统计都不查。
+    /// 空相册、单元素相册、多元素相册、隐藏项过滤与最新 `creationDate` 封面的口径保持不变。
+    func testEightyAlbumsUseSingleBatchCollectionSummariesWithoutPerIdSummaryLookups() {
+        /// 记录批量调用次数、逐 id 回退次数与被统计的集合，统计委派给内存库。
+        final class BatchSpy: PhotoLibraryReading {
+            let base: FakePhotoLibrary
+            var batchCalls = 0
+            var perIdCalls = 0
+            var excludedIds: [String] = []
+            var summarizedIds: [String] = []
+            init(_ base: FakePhotoLibrary) { self.base = base }
+
+            func collections() -> [LibraryCollection] { base.collections() }
+
+            func summary(ofCollection id: String) -> CollectionSummary? {
+                perIdCalls += 1
+                return base.summary(ofCollection: id)
+            }
+
+            func assetIdentifiers(inCollection id: String) -> [String]? { base.assetIdentifiers(inCollection: id) }
+
+            func assetIdentifiers(inCollection id: String, among assetIds: [String]) -> [String]? {
+                base.assetIdentifiers(inCollection: id, among: assetIds)
+            }
+
+            func userAlbumIdentifiers(containing assetIds: [String]) -> [String: [String]] {
+                base.userAlbumIdentifiers(containing: assetIds)
+            }
+
+            func collectionSummaries(
+                matching isIncluded: (LibraryCollection) -> Bool
+            ) -> [(collection: LibraryCollection, summary: CollectionSummary)] {
+                batchCalls += 1
+                let all = base.collections()
+                excludedIds = all.filter { !isIncluded($0) }.map(\.id)
+                return all.compactMap { collection in
+                    guard isIncluded(collection),
+                          let summary = base.summary(ofCollection: collection.id) else { return nil }
+                    summarizedIds.append(collection.id)
+                    return (collection, summary)
+                }
+            }
+        }
+
+        let lib = FakePhotoLibrary()
+        lib.add(.init(id: "lib-new", created: date(900)))
+        lib.add(.init(id: "lib-old", created: date(100)))
+        lib.add(.init(id: "hidden-new", created: date(9_999), hidden: true))
+        lib.add(.init(id: "fav-asset", created: date(500)))
+        lib.add(.init(id: "u08-solo", created: date(42)))
+        lib.add(.init(id: "u09-a", created: date(100)))
+        lib.add(.init(id: "u09-b", created: date(300)))
+        for i in 1...70 {
+            let id = String(format: "u%02d", i)
+            switch i {
+            case 7:
+                lib.addCollection(id, title: "Album 7", assets: [])
+            case 8:
+                lib.addCollection(id, title: "Album 8", assets: ["u08-solo"])
+            case 9:
+                lib.addCollection(id, title: "Album 9", assets: ["u09-a", "hidden-new", "u09-b"])
+            default:
+                lib.add(.init(id: "\(id)-asset", created: date(Double(i))))
+                lib.addCollection(id, title: "Album \(i)", assets: ["\(id)-asset"])
+            }
+        }
+        lib.addCollection("recents", title: "Recents", type: .smartAlbum, subtype: .smartAlbumUserLibrary,
+                          assets: ["lib-new", "lib-old"])
+        lib.addCollection("fav", title: "Favorites", type: .smartAlbum, subtype: .smartAlbumFavorites, assets: ["fav-asset"])
+        for (id, subtype) in [
+            ("videos", PHAssetCollectionSubtype.smartAlbumVideos),
+            ("selfies", .smartAlbumSelfPortraits),
+            ("live", .smartAlbumLivePhotos),
+            ("depth", .smartAlbumDepthEffect),
+            ("panoramas", .smartAlbumPanoramas),
+            ("timelapses", .smartAlbumTimelapses),
+            ("slomo", .smartAlbumSlomoVideos),
+            ("cinematic", .smartAlbumCinematic),
+        ] {
+            lib.addCollection(id, title: id, type: .smartAlbum, subtype: subtype)
+        }
+        // 不可选：隐藏、最近添加、共享相簿、照片流、白名单外智能相册。
+        lib.addCollection("all-hidden", title: "Hidden", type: .smartAlbum, subtype: .smartAlbumAllHidden, assets: ["lib-new"])
+        lib.addCollection("recent-added", title: "Recently Added", type: .smartAlbum, subtype: .smartAlbumRecentlyAdded, assets: ["lib-new"])
+        lib.addCollection("cloud-shared", title: "家人共享", type: .album, subtype: .albumCloudShared, assets: ["lib-new"])
+        lib.addCollection("stream", title: "My Photo Stream", type: .album, subtype: .albumMyPhotoStream, assets: ["lib-old"])
+        lib.addCollection("generic", title: "Generic", type: .smartAlbum, subtype: .smartAlbumGeneric, assets: ["lib-new"])
+
+        let spy = BatchSpy(lib)
+        let albums = AlbumCatalog(library: spy).listAlbums()
+        let byId = Dictionary(uniqueKeysWithValues: albums.map { ($0.id, $0) })
+
+        XCTAssertEqual(spy.batchCalls, 1, "80 个相册只允许 1 次批量统计")
+        XCTAssertEqual(spy.perIdCalls, 0, "listAlbums 不得回退到逐 id summary(ofCollection:)")
+        XCTAssertEqual(spy.summarizedIds.count, 80, "1 个最近项目 + 70 个用户相册 + 9 个可选智能相册")
+        XCTAssertEqual(
+            Set(spy.excludedIds),
+            ["all-hidden", "recent-added", "cloud-shared", "stream", "generic"],
+            "不可选集合必须被 isIncluded 提前过滤"
+        )
+        XCTAssertTrue(spy.excludedIds.filter(spy.summarizedIds.contains).isEmpty, "不可选集合不得进入统计")
+        XCTAssertEqual(Set(lib.queried), Set(spy.summarizedIds), "内存库只被问过可选集合")
+
+        let expectedIds = ["recents"] + (1...70).map { String(format: "u%02d", $0) } + ["fav"]
+        XCTAssertEqual(albums.map(\.id), expectedIds,
+                       "最近项目在前 → 用户相册原序（含空）→ 非空可选智能相册按白名单序")
+
+        XCTAssertEqual(byId["recents"]?.count, 2)
+        XCTAssertEqual(byId["recents"]?.coverAssetId, "lib-new")
+
+        XCTAssertEqual(byId["u07"]?.count, 0)
+        XCTAssertNil(byId["u07"]?.coverAssetId, "空相册没有封面")
+
+        XCTAssertEqual(byId["u08"]?.count, 1)
+        XCTAssertEqual(byId["u08"]?.coverAssetId, "u08-solo", "单元素相册免排序，唯一一张就是封面")
+
+        XCTAssertEqual(byId["u09"]?.count, 2)
+        XCTAssertEqual(byId["u09"]?.imageCount, 2)
+        XCTAssertEqual(byId["u09"]?.videoCount, 0)
+        XCTAssertEqual(byId["u09"]?.coverAssetId, "u09-b", "隐藏项再新也不计数、不当封面；封面按 creationDate 最新")
+    }
 }

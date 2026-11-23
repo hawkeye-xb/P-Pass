@@ -25,17 +25,39 @@ public struct PhotoKitLibrary: PhotoLibraryReading {
         return out
     }
 
+    /// 与 ``collections()`` 同一取舍（不过滤、同顺序），多一步：直接复用枚举出的 `PHAssetCollection`
+    /// 实例算统计，不再按 localIdentifier 逐个反查（#1949）。
+    ///
+    /// 取舍留给调用方（`isIncluded`）：不可选的集合连统计都不查。枚举快照里的集合若在统计前被删，
+    /// `fetchAssets` 返回 0 张，按空相册（0 计数、无封面）给出，不跳过。
+    public func collectionSummaries(
+        matching isIncluded: (LibraryCollection) -> Bool
+    ) -> [(collection: LibraryCollection, summary: CollectionSummary)] {
+        var out: [(collection: LibraryCollection, summary: CollectionSummary)] = []
+        for type in [PHAssetCollectionType.smartAlbum, .album] {
+            var enumerated: [(collection: LibraryCollection, source: PHAssetCollection)] = []
+            PHAssetCollection.fetchAssetCollections(with: type, subtype: .any, options: nil)
+                .enumerateObjects { collection, _, _ in
+                    enumerated.append((
+                        LibraryCollection(
+                            id: collection.localIdentifier,
+                            title: collection.localizedTitle,
+                            type: collection.assetCollectionType,
+                            subtype: collection.assetCollectionSubtype
+                        ),
+                        collection
+                    ))
+                }
+            for item in enumerated where isIncluded(item.collection) {
+                out.append((item.collection, Self.summary(of: item.source)))
+            }
+        }
+        return out
+    }
+
     public func summary(ofCollection id: String) -> CollectionSummary? {
         guard let collection = Self.collection(id) else { return nil }
-        let newest = PHAsset.fetchAssets(in: collection, options: Self.mediaOptions(newestFirst: true, limit: 1))
-        guard let newestId = newest.firstObject?.localIdentifier else {
-            return CollectionSummary(imageCount: 0, videoCount: 0, newestAssetId: nil)
-        }
-        return CollectionSummary(
-            imageCount: PHAsset.fetchAssets(in: collection, options: Self.mediaOptions(only: .image)).count,
-            videoCount: PHAsset.fetchAssets(in: collection, options: Self.mediaOptions(only: .video)).count,
-            newestAssetId: newestId
-        )
+        return Self.summary(of: collection)
     }
 
     public func assetIdentifiers(inCollection id: String) -> [String]? {
@@ -80,18 +102,36 @@ public struct PhotoKitLibrary: PhotoLibraryReading {
         PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject
     }
 
+    /// 一个集合的统计：1 次无排序 fetch 拿总数与图片/视频计数（`countOfAssets(with:)`），
+    /// 只有多于 1 项时才再跑 1 次排序 fetch 取最新封面；空相册与单元素相册一次排序查询都不发（#1949）。
+    private static func summary(of collection: PHAssetCollection) -> CollectionSummary {
+        let assets = PHAsset.fetchAssets(in: collection, options: Self.mediaOptions())
+        let total = assets.count
+        guard total > 0 else {
+            return CollectionSummary(imageCount: 0, videoCount: 0, newestAssetId: nil)
+        }
+        let newestId: String?
+        if total == 1 {
+            newestId = assets.firstObject?.localIdentifier
+        } else {
+            newestId = PHAsset.fetchAssets(in: collection, options: Self.mediaOptions(newestFirst: true, limit: 1))
+                .firstObject?.localIdentifier
+        }
+        return CollectionSummary(
+            imageCount: assets.countOfAssets(with: .image),
+            videoCount: assets.countOfAssets(with: .video),
+            newestAssetId: newestId
+        )
+    }
+
     /// 照片 + 视频、不含隐藏项。`includeHiddenAssets` 默认就是 false，这里显式写出来，口径不靠默认值。
-    static func mediaOptions(only type: PHAssetMediaType? = nil, newestFirst: Bool = false, limit: Int = 0) -> PHFetchOptions {
+    static func mediaOptions(newestFirst: Bool = false, limit: Int = 0) -> PHFetchOptions {
         let options = PHFetchOptions()
         options.includeHiddenAssets = false
-        if let type {
-            options.predicate = NSPredicate(format: "mediaType == %d", type.rawValue)
-        } else {
-            options.predicate = NSPredicate(
-                format: "mediaType == %d || mediaType == %d",
-                PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue
-            )
-        }
+        options.predicate = NSPredicate(
+            format: "mediaType == %d || mediaType == %d",
+            PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue
+        )
         if newestFirst {
             options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         }

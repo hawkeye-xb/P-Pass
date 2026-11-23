@@ -82,9 +82,10 @@ public struct AlbumCatalog {
         var userAlbums: [MediaAlbum] = []
         var smartBySubtype: [Int: [MediaAlbum]] = [:]
 
-        for collection in self.library.collections() {
-            guard let kind = Self.selectableKind(of: collection),
-                  let album = makeAlbum(collection, kind: kind) else { continue }
+        // 一次批量统计，只查可选集合；PhotoKit 实现直接复用枚举出的集合实例，不再按 id 逐个反查（#1949）。
+        for (collection, summary) in self.library.collectionSummaries(matching: { Self.selectableKind(of: $0) != nil }) {
+            guard let kind = Self.selectableKind(of: collection) else { continue }
+            let album = makeAlbum(collection, kind: kind, summary: summary)
             switch kind {
             case .library: library.append(album)
             case .userAlbum: userAlbums.append(album)
@@ -97,9 +98,10 @@ public struct AlbumCatalog {
         return library + userAlbums + smart
     }
 
-    /// 可选的集合（不算统计、不排序）。与 ``listAlbums()`` 用同一条取舍规则，只少了两件要逐个相册查库的事：
-    /// 「智能相册只列非空的」与「构造中途被删的跳过」。按张判断「照片属于哪些可选相册」时这两条自然成立
-    /// （照片在里面，相册就非空、就还在），所以 ``AlbumMembership`` 用它，免掉每个相册 3 次 fetch。
+    /// 可选的集合（不算统计、不排序）。与 ``listAlbums()`` 用同一条取舍规则，只是不查统计，也就没有
+    /// 「智能相册只列非空的」与「集合已消失就跳过」这两条（后一条只在批量统计的默认实现里成立；
+    /// ``PhotoKitLibrary`` 的批量实现把枚举后被删的集合按空相册给出）。按张判断「照片属于哪些可选相册」时
+    /// 这两条自然成立（照片在里面，相册就非空、就还在），所以 ``AlbumMembership`` 用它，免掉每个相册 3 次 fetch。
     public func selectableCollections() -> [LibraryCollection] {
         library.collections().filter { Self.selectableKind(of: $0) != nil }
     }
@@ -118,10 +120,8 @@ public struct AlbumCatalog {
         }
     }
 
-    private func makeAlbum(_ collection: LibraryCollection, kind: MediaAlbum.Kind) -> MediaAlbum? {
-        // 列表构造期间相册被删：summary 为 nil，跳过这一项而不是报 0。
-        guard let summary = library.summary(ofCollection: collection.id) else { return nil }
-        return MediaAlbum(
+    private func makeAlbum(_ collection: LibraryCollection, kind: MediaAlbum.Kind, summary: CollectionSummary) -> MediaAlbum {
+        MediaAlbum(
             id: collection.id,
             title: albumTitleOrNil(collection.title),
             kind: kind,

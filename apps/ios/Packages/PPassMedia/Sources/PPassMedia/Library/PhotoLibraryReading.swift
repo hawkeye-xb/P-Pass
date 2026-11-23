@@ -45,6 +45,17 @@ public protocol PhotoLibraryReading {
     /// 全部用户相册与智能相册，**不过滤**，顺序 = PhotoKit 返回的顺序（用户相册即「照片」App 里的顺序）。
     func collections() -> [LibraryCollection]
 
+    /// 批量统计：按 ``collections()`` 的顺序，对 `isIncluded` 为真的集合给出统计。
+    ///
+    /// 集合中途被删的语义取决于实现：
+    /// - 默认实现按 id 逐个调 ``summary(ofCollection:)`` 回查，集合已不存在时该项跳过（不报 0）。
+    /// - ``PhotoKitLibrary`` 覆写为一次枚举目录、直接复用同次枚举快照里的集合实例统计，
+    ///   不再逐 id 二次反查；枚举之后才被删的集合，快照实例上 `fetchAssets` 返回 0 张，
+    ///   会按空相册（0 计数、无封面）列出。
+    func collectionSummaries(
+        matching isIncluded: (LibraryCollection) -> Bool
+    ) -> [(collection: LibraryCollection, summary: CollectionSummary)]
+
     /// 某个集合的统计；集合已不存在时返回 nil。
     func summary(ofCollection id: String) -> CollectionSummary?
 
@@ -59,4 +70,16 @@ public protocol PhotoLibraryReading {
     /// 含文件夹里的）id。不含智能相册——PhotoKit 的反查对智能相册一律返回空（AlbumMembershipIT 实测）。
     /// 口径外的照片（隐藏、音频、已不在图库）不出现在结果里。
     func userAlbumIdentifiers(containing assetIds: [String]) -> [String: [String]]
+}
+
+public extension PhotoLibraryReading {
+    /// 默认实现：枚举一次目录，对可选集合逐个查统计。保持既有 fake / spy 零改动可用。
+    func collectionSummaries(
+        matching isIncluded: (LibraryCollection) -> Bool
+    ) -> [(collection: LibraryCollection, summary: CollectionSummary)] {
+        collections().compactMap { collection in
+            guard isIncluded(collection), let summary = summary(ofCollection: collection.id) else { return nil }
+            return (collection, summary)
+        }
+    }
 }
