@@ -56,15 +56,17 @@ def git_head(repo: str) -> str:
 def check_device_ready(dev_dir: str, device_name: str | None, unattended: bool = True) -> tuple[bool, str]:
     if not device_name:
         return True, "no_device_needed"
-    state_file = os.path.join(dev_dir, f"{device_name}.state")
-    state = Path(state_file).read_text(encoding="utf-8").strip() if os.path.exists(state_file) else "OFFLINE"
+    owner_f, state_f = os.path.join(dev_dir, f"owner-{device_name}"), os.path.join(dev_dir, f"{device_name}.state")
+    who = Path(owner_f).read_text(encoding="utf-8").split("\t")[0].strip() if os.path.isfile(owner_f) else ""
+    if who and who != os.environ.get("PPASS_DEVICE_OWNER", ""):
+        return False, f"device {device_name} claimed by {who}"
+    state = Path(state_f).read_text(encoding="utf-8").strip() if os.path.exists(state_f) else ("UNLOCKED" if device_name in ("mac", "android", "ios", "win") else "OFFLINE")
     if state != "UNLOCKED":
         return False, f"device {device_name} unavailable (state={state}); {'unattended mode skips human unlock' if unattended else 'device requires human unlock'}"
-    lock_file = os.path.join(dev_dir, f"{device_name}.lock")
-    if os.path.exists("/usr/bin/lockf") and subprocess.run(["/usr/bin/lockf", "-k", "-t", "0", lock_file, "/usr/bin/true"], capture_output=True).returncode != 0:
-        return False, f"device {device_name} lock busy"
+    for lf in (os.path.join(dev_dir, f"lock-{device_name}"), os.path.join(dev_dir, f"{device_name}.lock")):
+        if os.path.exists("/usr/bin/lockf") and os.path.exists(lf) and subprocess.run(["/usr/bin/lockf", "-k", "-t", "0", lf, "/usr/bin/true"], capture_output=True).returncode != 0:
+            return False, f"device {device_name} lock busy ({os.path.basename(lf)})"
     return True, "ok"
-
 
 def changed_files_since(wt_dir: str, base_sha: str) -> list[str]:
     r1 = run_cmd(["git", "-c", "core.quotepath=false", "diff", "--no-renames", "--name-only", base_sha], cwd=wt_dir)
@@ -72,7 +74,6 @@ def changed_files_since(wt_dir: str, base_sha: str) -> list[str]:
     if r1.returncode != 0 or r2.returncode != 0:
         raise RuntimeError(f"git diff/ls-files failed (rc={r1.returncode}/{r2.returncode})")
     return sorted({f.strip() for f in (r1.stdout.splitlines() + r2.stdout.splitlines()) if f.strip()})
-
 
 def _glob_match(rel_path: str, pat: str) -> bool:
     pat = re.sub(r"^(?:\./)+", "", pat.strip())

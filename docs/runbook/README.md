@@ -8,8 +8,8 @@ full-regression-sop (the pre-release full regression run, agent-executable on an
 update-signing-keys (test / stable update-signing keys: setup, rotation, compromise; the key-compromise procedure lives in its "suspected leak" section) /
 ios-app-privacy (iOS privacy manifest and App Store privacy label: answers and code evidence) /
 ci-lanes (CI lanes, required checks and why job names must never change) /
-local-hooks (the local commit gate: core paths and card scope are checked at `git commit`) /
-e3 (`just verify`: on-device smoke and scenario checks when the card asks for a real device; how to write scenarios).
+local-hooks (the local commit gate: local security hooks + baseline core-paths denylist and worktree isolation; unattended `--unattended` / `--rebase` queue behavior) /
+e3 (`just verify`: on-device smoke and scenario checks when the card asks for a real device; unattended `SUSPENDED_ENV` device probe; how to write scenarios).
 
 ---
 
@@ -28,6 +28,6 @@ ios-app-privacy（iOS 隐私清单与 App Store 隐私标签的填法和代码�
 `docs/runbook/ios-app-privacy.md`）/
 ci-lanes（CI lane 怎么判跳过、必需检查为什么不许改 job 名、核心路径，
 `docs/runbook/ci-lanes.md`）/
-local-hooks（本地提交拦截：`git commit` 时按核心名单与卡的「范围」拦，
+local-hooks（本地提交拦截与 V3 有人/无人分轨：`git commit` 走本机安全钩子链 + 基线核心禁区黑名单与独立 worktree 保护；`just start / done --unattended` 无人队列跳过、两轮熔断与自动变基重验，
 `docs/runbook/local-hooks.md`）/
-e3（`just verify`：卡上写明需要真机验证时才跑的本地真机冒烟与场景验证、怎么写场景，`docs/runbook/e3.md`）。
+e3（`just verify`：卡上写明需要真机验证时才跑的本地真机冒烟与场景验证、设备锁及无人模式锁屏秒跳，`docs/runbook/e3.md`）。

@@ -51,9 +51,6 @@ export PPASS_NO_LOCK=1
 export PPASS_DOCTOR_MIN_FREE_GB=0
 export PPASS_DOCTOR_SKIP_DEVICES=1
 unset PPASS_HOOK_BYPASS PPASS_HOOK_BYPASS_REASON PPASS_HOOK_ROOT PPASS_WT_ROOT
-# 预检（#1651）跑门禁时会带 PPASS_GATE_PRECHECK=off 防套娃；用例里的 START 必须照常预检，
-# 否则 `bash tools/test-flow-worker.sh` 自己被预检时必红（它既是轻门禁，也会被 just ci-docs 带起）。
-export PPASS_GATE_PRECHECK=on
 
 # 假命令：MSYS/Cygwin（Git Bash）不能执行指向 .exe 的符号链接，改生成 wrapper 脚本；
 # 其他平台保持 symlink。调用方：fake_cmd <目录> <命令名>。
@@ -1377,13 +1374,21 @@ rm -f "${FAKE_GH}/ci_fail"
 [ "$rc_cb1" -eq 1 ] && [ "$rc_cb2" -eq 4 ] && grep -q 'SUSPENDED_CIRCUIT_BREAK' "${TMP}/o211_2" &&
   ok "无人模式：第 1 次失败 rc=1，连续第 2 次失败即触发两轮熔断（rc=4，SUSPENDED_CIRCUIT_BREAK）" || bad "两轮熔断异常：rc1=${rc_cb1} rc2=${rc_cb2}"
 
-# 自动变基重验与行冲突安全撤回：落后 main 无冲突自动 rebase + 重跑门禁推送；行冲突自动 rebase --abort（零残留，rc=3）
+# 自动变基重验与行冲突安全撤回：即使分支此前已推送过，落后 main 无冲突时自动 rebase + --force-with-lease 推送成功
 W212="$(card 212 "[T-212] auto rebase ok" "")"
 commit_file "$W212" src/rb_ok.txt "mine"
+git -C "$W212" push -q origin "HEAD:refs/heads/fix/212-auto-rebase-ok"
 (cd "$M" && echo other >src/rb_other.txt && git add -A && git commit -q -m "main advances" && git push -q origin HEAD:refs/heads/main)
 (cd "$W212" && bash tools/flow/worker-done.sh --rebase >"${TMP}/o212" 2>&1) && on_origin "fix/212-auto-rebase-ok" &&
   git -C "$W212" merge-base --is-ancestor origin/main HEAD &&
-  ok "自动变基重验：落后 main 无冲突时自动 rebase 到最新 main 重验并推送" || bad "自动变基失败：$(tail -6 "${TMP}/o212")"
+  ok "自动变基重验：已推送过的落后分支无冲突时自动 rebase 并 --force-with-lease 推送" || bad "自动变基失败：$(tail -6 "${TMP}/o212")"
+
+# e3 真实设备归属（owner-<dev>）联动：设备被他人 claim 时无人模式同样 0s SUSPENDED_ENV 跳过
+printf 'other_owner\t01-01 00:00\n' >"${TMP}/devstate/owner-mac"
+issue 214 "status:ready" "[T-214] e3 claimed mac" "" "Bug" "**设备**：mac"
+(export PPASS_V3_DEV_DIR="${TMP}/devstate"; START 214 --unattended >"${TMP}/o214" 2>&1); rc214=$?
+[ "$rc214" -eq 3 ] && grep -q 'claimed by other_owner' "${TMP}/o214" &&
+  ok "无人模式联动 e3 owner-mac：设备被他人占用时 0s SUSPENDED_ENV 跳过" || bad "e3 owner 拦截失败：rc=${rc214}"
 
 W213="$(card 213 "[T-213] auto rebase conflict" "")"
 commit_file "$W213" src/rb_conf.txt "worker-line"
