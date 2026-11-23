@@ -126,9 +126,38 @@ class CompositeMediaSourceTest {
 
         // 反证基准：folder 正常时 primary 的 ID 回答得出来（非 null）。
         assertEquals(setOf(3L), composite.existingIds(listOf(3L)))
+        val folderIds = composite.readInScope(0L) { it.toList() }.filter { isFolderId(it.mediaId) }.map { it.mediaId }
+        assertEquals("目录 ID 正常时能回答", folderIds.toSet(), composite.existingIds(folderIds))
 
         folder.revoked = true
-        assertNull("撤权 → 整体「不知道」，不许部分回答", composite.existingIds(listOf(3L)))
+        // #1771：只有被问到的来源才影响结果——纯相册 ID 不问目录，目录撤权与它无关。
+        assertEquals("纯相册 ID 不问目录", setOf(3L), composite.existingIds(listOf(3L)))
+        assertNull("目录被问到且撤权 → 整体「不知道」，不许部分回答", composite.existingIds(folderIds + 3L))
+    }
+
+    // #1771：existingIds 按来源子集分区询问——纯目录 ID 只问目录，相册不可信不影响；混合请求整体「不知道」。
+    // 反证：无条件把整批 ID 交给 primary（空子集也问）→ primary 不可信返回 null，第一条断言红。
+    @Test
+    fun `existing ids are partitioned by source so folder-only survives an untrusted album`() {
+        val primary = FakeMedia().also { it.put(FakePhoto(3L, 100L, 10L, "c3", 1L)) }
+        primary.absenceTrusted = false
+        val root = tmp.newFolder("media-root-partition")
+        File(root, "a.jpg").writeText("a")
+        File(root, "b.jpg").writeText("b")
+        val registry = FolderRegistry(File(tmp.root, "registry-partition.json"))
+        registry.addFolder("file://tree-partition", "media-root-partition")
+        val folder = FolderMediaSnapshotSource(registry) { FileFolderTree(root) }
+        val composite = composite(primary, folder)
+
+        val folderIds = composite.readInScope(0L) { it.toList() }.filter { isFolderId(it.mediaId) }.map { it.mediaId }
+        assertEquals(2, folderIds.size)
+
+        // 目录-only：相册「不知道」不拖累目录——目录自己完整枚举回答了可信集合。
+        assertEquals(folderIds.toSet(), composite.existingIds(folderIds))
+        // 纯相册 ID：仍回答「不知道」，不当空集。
+        assertNull(composite.existingIds(listOf(3L)))
+        // 混合请求：任一被询来源不可信 → 整体 null，绝不写部分并集。
+        assertNull(composite.existingIds(folderIds + 3L))
     }
 
     // lookup 按命名空间分发：folder ID（bit 62）走 folder 段，MediaStore ID 走 primary。

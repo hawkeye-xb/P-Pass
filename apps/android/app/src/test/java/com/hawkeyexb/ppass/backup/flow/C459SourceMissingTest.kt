@@ -4,9 +4,15 @@
 // 一律不能被误判成 source_missing。真实 FlowEngine + InMemoryOrderStore + FakeMedia。每条附反证。
 package com.hawkeyexb.ppass.backup.flow
 
+import com.hawkeyexb.ppass.backup.folder.CompositeMediaSnapshotSource
+import com.hawkeyexb.ppass.backup.folder.FOLDER_ID_FLAG
+import com.hawkeyexb.ppass.backup.folder.isFolderId
 import com.hawkeyexb.ppass.backup.mediaAbsenceTrusted
+import com.hawkeyexb.ppass.backup.order.FakeMedia
+import com.hawkeyexb.ppass.backup.order.FakePhoto
 import com.hawkeyexb.ppass.backup.order.GenerationAdvance
 import com.hawkeyexb.ppass.backup.order.LEGACY_VOLUME
+import com.hawkeyexb.ppass.backup.order.MediaSnapshotSource
 import com.hawkeyexb.ppass.backup.order.OrderState
 import com.hawkeyexb.ppass.backup.order.SkipTarget
 import kotlinx.coroutines.test.TestScope
@@ -68,7 +74,9 @@ class C459SourceMissingTest {
     }
 
     // 部分授权 / 没授权：看不见 ≠ 被删。不打也不清。
-    // 反证：去掉 reconcileSourcePresence 开头的 mediaAbsenceTrusted() 闸门 → #2 被打上标记，红。
+    // #1771：门控已从 FlowEngine 全局下沉到 existingIds（MediaStore 侧自己回答「不知道」）——这条用例走的
+    // 是「来源回答不知道 → 整步什么都不写」的同一路径。
+    // 反证：去掉 reconcileSourcePresence 对 plan == null 的早退（把 null 当空集）→ #2 被打上标记，红。
     @Test
     fun `without full media access absence proves nothing - no mark and no clear`() = runTest {
         val rig = backedUp()
@@ -77,7 +85,7 @@ class C459SourceMissingTest {
         rig.trigger(TriggerReason.APP_FOREGROUND)
         assertFalse(rig.missing(2))
         assertEquals(2L, rig.store.countConfirmedPresent(setOf(7L)))
-        assertTrue(rig.logs.any { it.contains("media access is not full") })
+        assertTrue(rig.logs.any { it.contains("could not confirm which") })
 
         // 已有的标记也不清：部分授权下整步不动（看得见的那几张之外什么都不知道）。
         val photo = rig.media.photos.single { it.mediaId == 1L }
@@ -137,7 +145,7 @@ class C459SourceMissingTest {
         rig.media.existingIdsUnreadable = true
         rig.trigger(TriggerReason.APP_FOREGROUND)
         assertFalse(rig.missing(2))
-        assertTrue(rig.logs.any { it.contains("could not confirm which photos are gone") })
+        assertTrue(rig.logs.any { it.contains("could not confirm which items are gone") })
         rig.close()
     }
 
@@ -183,6 +191,126 @@ class C459SourceMissingTest {
 
     private fun Rig.unrecoverableAudits() = store.pendingAudit(100).filter { it.payload["disposition"] == "UNRECOVERABLE" }
 
+    // ---------------------------------------------------------------- #1771：缺席可信度按来源判定
+
+    /** #1771：目录来源替身——独立于相册的 [FakeMedia]（缺席可信度可单独切换），ID 用 bit 62 命名空间。 */
+    private class FakeFolderSource(private val media: FakeMedia) : MediaSnapshotSource by media
+
+    /** 目录段的一张照片（mediaId / bucketId 都落在 bit 62 命名空间）。 */
+    private fun folderPhoto() = FakePhoto(FOLDER_MEDIA_ID, 100L, 4L, "folder", 0L, bucketId = FOLDER_BUCKET)
+
+    // 目录-only：相册权限与目录缺席无关；旧 ID 消失覆盖删除与改名，恢复同一路径后清标。
+    // 对齐 iOS c229c7fa 的 testFolderAbsenceIsReconciledWithoutFullPhotoAccess。
+    // 反证：恢复 FlowEngine 的全局相册门控，或让 Composite 在纯目录 ID 时仍问 primary（null）→ 第一条断言红。
+    @Test
+    fun `folder absence is reconciled without full album access`() = runTest {
+        val album = FakeMedia()
+        val folderMedia = FakeMedia(scope = setOf(FOLDER_BUCKET))
+        val composite = CompositeMediaSnapshotSource(album, FakeFolderSource(folderMedia))
+        val rig = Rig(
+            this,
+            mediaOverride = composite,
+            primaryMedia = album,
+            inScopeOverride = { bucket, _ -> isFolderId(bucket) },
+        )
+        val item = folderPhoto()
+        folderMedia.put(item)
+        val order = rig.order(item, OrderState.CONFIRMED)
+        rig.store.advanceGeneration(GenerationAdvance(LEGACY_VOLUME, 1))
+        album.absenceTrusted = false
+        val updatedAt = order.updatedAtMs
+
+        folderMedia.remove(FOLDER_MEDIA_ID)
+        rig.trigger(TriggerReason.APP_FOREGROUND)
+        val marked = rig.store.get(order.id)!!
+        assertTrue("目录完整枚举已证实旧 ID 消失，不能被相册权限门控", marked.sourceMissing)
+        assertEquals(OrderState.CONFIRMED, marked.state)
+        assertEquals("源缺失不改 updated_at", updatedAt, marked.updatedAtMs)
+        assertEquals("源缺失不重传、不删除桌面已确认副本", emptyList<Long>(), rig.delivery.requests.map { it.orderId })
+
+        folderMedia.put(item)
+        rig.trigger(TriggerReason.APP_FOREGROUND)
+        assertFalse(rig.store.get(order.id)!!.sourceMissing)
+        rig.close()
+    }
+
+    // 混合来源：相册不可信时不得只写目录的部分结果；两边都可信后才可同时打标。
+    // 对齐 iOS c229c7fa 的 testMixedSourcePresenceDoesNotWritePartialFolderResult。
+    // 反证：Composite 把 null 来源排除后返回部分并集 → 前两条断言红。
+    @Test
+    fun `mixed sources never write a partial folder result while the album is untrusted`() = runTest {
+        val album = FakeMedia()
+        val folderMedia = FakeMedia(scope = setOf(FOLDER_BUCKET))
+        val composite = CompositeMediaSnapshotSource(album, FakeFolderSource(folderMedia))
+        val rig = Rig(
+            this,
+            mediaOverride = composite,
+            primaryMedia = album,
+            inScopeOverride = { bucket, _ -> bucket == 7L || isFolderId(bucket) },
+        )
+        val item = folderPhoto()
+        folderMedia.put(item)
+        val photo = rig.photo(2, generation = 2)
+        val folderOrder = rig.order(item, OrderState.CONFIRMED)
+        val photoOrder = rig.order(photo, OrderState.CONFIRMED)
+        rig.store.advanceGeneration(GenerationAdvance(LEGACY_VOLUME, 2))
+
+        folderMedia.remove(FOLDER_MEDIA_ID)
+        album.remove(2)
+        album.absenceTrusted = false
+        rig.trigger(TriggerReason.APP_FOREGROUND)
+        assertFalse("部分结果不许写：目录侧", rig.store.get(folderOrder.id)!!.sourceMissing)
+        assertFalse("部分结果不许写：相册侧", rig.store.get(photoOrder.id)!!.sourceMissing)
+
+        album.absenceTrusted = true
+        rig.trigger(TriggerReason.APP_FOREGROUND)
+        assertTrue(rig.store.get(folderOrder.id)!!.sourceMissing)
+        assertTrue(rig.store.get(photoOrder.id)!!.sourceMissing)
+        rig.close()
+    }
+
+    // 目录缺席不可信 + 桌面也缺：既不标源缺失，也不能记 UNRECOVERABLE 或补传。
+    // 对齐 iOS c229c7fa 的 testUnreadableFolderCannotMarkSourceMissingOrUnrecoverable。
+    // 反证：把 null 当空集（sourceMissing 断言红），或去掉 Round 的 sourcePresenceTrusted 门控
+    //（runRemotePresence 会建新订单 + REUPLOAD 审计，currentForMedia 与审计计数断言红）。
+    @Test
+    fun `an untrusted folder cannot mark source missing or re-upload a desktop-missing photo`() = runTest {
+        val album = FakeMedia()
+        val folderMedia = FakeMedia(scope = setOf(FOLDER_BUCKET))
+        val composite = CompositeMediaSnapshotSource(album, FakeFolderSource(folderMedia))
+        val rig = Rig(
+            this,
+            mediaOverride = composite,
+            primaryMedia = album,
+            inScopeOverride = { bucket, _ -> bucket == 7L || isFolderId(bucket) },
+        )
+        val item = folderPhoto()
+        folderMedia.put(item)
+        val order = rig.order(item, OrderState.CONFIRMED)
+        rig.store.advanceGeneration(GenerationAdvance(LEGACY_VOLUME, 1))
+        val updatedAt = order.updatedAtMs
+
+        folderMedia.remove(FOLDER_MEDIA_ID)
+        folderMedia.absenceTrusted = false
+        rig.missingOnDesktop = setOf(item.hash)
+        // 一张无关待传：保证这一轮真的进了 loop（否则 Round 的 presence 门控根本没被走到）。
+        val unrelated = rig.photo(9, generation = 9)
+
+        rig.trigger(TriggerReason.PERIODIC)
+        rig.trigger(TriggerReason.PERIODIC)
+
+        val current = rig.store.get(order.id)!!
+        assertFalse(current.sourceMissing)
+        assertEquals(OrderState.CONFIRMED, current.state)
+        assertEquals(updatedAt, current.updatedAtMs)
+        assertEquals("同媒体仍指向原订单，不得新增补传订单", order.id, rig.store.currentForMedia(FOLDER_MEDIA_ID)!!.id)
+        assertEquals("只传了那张无关照片，没有被误判的补传", listOf(unrelated.mediaId), rig.delivery.deliveredMediaIds)
+        val audits = rig.store.pendingAudit(100)
+        assertEquals(0, audits.count { it.payload["disposition"] == "REUPLOAD" })
+        assertEquals(0, audits.count { it.payload["disposition"] == "UNRECOVERABLE" })
+        rig.close()
+    }
+
     // 桌面缺 + 原图也删了：意图来源 MOB-87 卡面「对账边界」第 6 条（已退役卡片，git 历史 8917fa05 可查；与 #415 裁决 2 一致）——
     // 标 UNRECOVERABLE、只落审计事实、**不提示**：不补传、不建新行、不进「无法恢复」横幅。
     // 反证：去掉 runRemotePresence 按 order.sourceMissing 分流的那一支 → 新建一行、取件记「源已删」、横幅 1 张，红。
@@ -227,4 +355,8 @@ class C459SourceMissingTest {
         assertEquals(0L, rig.store.countSourceMissingSkipped(afterMs = 0L))
         rig.close()
     }
+
+    /** registry 的分配序：addFolder 先拿 bucketId（FLAG|1），第一个文件项 mediaId = FLAG|2。 */
+    private val FOLDER_MEDIA_ID = FOLDER_ID_FLAG or 2L
+    private val FOLDER_BUCKET = FOLDER_ID_FLAG or 1L
 }

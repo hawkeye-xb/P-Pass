@@ -267,6 +267,9 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // 本地 JVM 单测里 android.jar 的 org.json 只是 stub，要真实现；只进测试类路径，不进 APK。
     testImplementation("org.json:json:20250517")
+    // #1771：JVM 单测里 android.jar 的 Context/ContentResolver 只是 stub（方法一调就抛 "Stub!"），
+    // 真实实例化 ContentResolverMediaSnapshotSource 需要替身这两个平台类。只进测试类路径，不进 APK。
+    testImplementation("io.mockk:mockk:1.13.13")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:rules:1.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

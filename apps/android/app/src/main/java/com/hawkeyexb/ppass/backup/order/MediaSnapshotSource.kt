@@ -6,6 +6,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import com.hawkeyexb.ppass.backup.flow.mediaAbsenceTrustedNow
 import com.hawkeyexb.ppass.backup.flow.sourceVersionOf
 import com.hawkeyexb.ppass.backup.scopeTimeSecOf
 
@@ -70,8 +71,10 @@ interface MediaSnapshotSource {
 
     /**
      * #459：[mediaIds] 里哪些此刻还在 MediaStore 里（图片 / 视频，**不看范围**——挪到别的相册也算在）。
-     * 返回 null = 这次读不出来（查询返回 null 游标）：调用方必须当「不知道」，**不许**当「全都没了」。
-     * 注意「不在」只在完整相册权限下才等于「被删了」（部分授权下看不见的也不在结果里），由调用方把关。
+     * 返回 null = 这次读不出来（查询返回 null 游标，或来源自己判断缺席不可信）：调用方必须当「不知道」，
+     * **不许**当「全都没了」。各来源自己证明缺席是否可信（#1771）：MediaStore 侧只有完整相册权限才可信，
+     * 目录来源（[com.hawkeyexb.ppass.backup.folder.FolderMediaSnapshotSource]）靠根授权与完整枚举，
+     * 两者互不门控。
      */
     fun existingIds(mediaIds: Collection<Long>): Set<Long>?
 }
@@ -88,9 +91,17 @@ class ContentResolverMediaSnapshotSource(
     private val context: Context,
     private val scope: () -> com.hawkeyexb.ppass.backup.BackupScope?,
     private val resolver: ContentResolver = context.contentResolver,
+    /**
+     * #1771：此刻「MediaStore 里查不到」能不能当「原图被删了」。非完整相册权限（部分照片 / 没授权）时
+     * 看不见的照片同样查不到——[existingIds] 必须回答「不知道」（null），不许返回一个偏小的集合。
+     * 默认按当前权限判（[mediaAbsenceTrustedNow]）；测试与装配点可显式注入。
+     */
+    private val absenceTrusted: () -> Boolean = { mediaAbsenceTrustedNow(context) },
 ) : MediaSnapshotSource {
 
-    private val external = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+    // 延迟到首次使用：JVM 单测里 android.jar 的 MediaStore 只是 stub，构造期调用会抛 "Stub!"，
+    // 而 #1771 的 existingIds 契约单测需要在没有真实 Android 运行时的情况下真实构造本类。
+    private val external: Uri by lazy { MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL) }
 
     /**
      * API ≥ 30 用 `GENERATION_MODIFIED`；API < 30 没有这一列，退回 `DATE_MODIFIED`。
@@ -212,6 +223,8 @@ class ContentResolverMediaSnapshotSource(
     }
 
     override fun existingIds(mediaIds: Collection<Long>): Set<Long>? {
+        // #1771：非完整相册权限下「查不到」不能证明被删（部分授权的照片也不在结果里）——回答「不知道」。
+        if (!absenceTrusted()) return null
         val out = HashSet<Long>()
         // id 是 Long，直接拼进 SQL（与 BUCKET_ID IN 同一做法），分批避免超长语句。
         for (chunk in mediaIds.distinct().chunked(EXISTING_IDS_CHUNK)) {

@@ -224,7 +224,12 @@ class SqliteOrderStoreDeviceTest {
             null,
         )?.use { c -> while (c.moveToNext()) allBuckets += c.getLong(0) }
 
-        val source = ContentResolverMediaSnapshotSource(context, { com.hawkeyexb.ppass.backup.BackupScope(allBuckets, null) })
+        // #1771：existingIds 的「缺席可信」已下沉到来源；设备未必有完整相册权限，这里显式声明按可信口径测查询本身。
+        val source = ContentResolverMediaSnapshotSource(
+            context,
+            { com.hawkeyexb.ppass.backup.BackupScope(allBuckets, null) },
+            absenceTrusted = { true },
+        )
         val all = source.readInScope(0L) { it.toList() }
         val ids = all.map { it.mediaId }
         assertEquals("strictly ascending _id", ids.sorted().distinct(), ids)
@@ -234,7 +239,11 @@ class SqliteOrderStoreDeviceTest {
 
         // 列名或语法写错会抛异常：让真实的 selection / sortOrder 在 MediaProvider 上执行一次。bucket -1 不存在。
         // #1263：带上开始时间，`DATE_ADDED >= ?` 那一段也在 MediaProvider 上真实执行。
-        val probe = ContentResolverMediaSnapshotSource(context, { com.hawkeyexb.ppass.backup.BackupScope(setOf(-1L), 1L) })
+        val probe = ContentResolverMediaSnapshotSource(
+            context,
+            { com.hawkeyexb.ppass.backup.BackupScope(setOf(-1L), 1L) },
+            absenceTrusted = { true },
+        )
         assertEquals(emptyList<MediaSnapshot>(), probe.readInScope(0L) { it.toList() })
         val volumes = probe.volumeNames()
         assertTrue("at least one volume: $volumes", volumes.isNotEmpty())
@@ -255,6 +264,10 @@ class SqliteOrderStoreDeviceTest {
             assertEquals(setOf(first.mediaId), probe.existingIds(listOf(first.mediaId, Long.MAX_VALUE)))
         }
         assertEquals(emptySet<Long>(), source.existingIds(listOf(Long.MAX_VALUE)))
+        // #1771：来源判定缺席不可信时回答「不知道」（null），不许把查不到的 ID 当「已删除」。
+        val untrusted = ContentResolverMediaSnapshotSource(context, { null }, absenceTrusted = { false })
+        assertNull(untrusted.existingIds(listOf(Long.MAX_VALUE)))
+        assertNull(untrusted.existingIds(emptyList()))
 
         val versions = source.volumeVersions()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) assertTrue("getVersion per volume: $versions", versions.isNotEmpty())

@@ -355,12 +355,14 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         ruleCache
     }
     // #1762：Composite 的构造要等 ruleOn / scopeStore 就位（MediaStore 段的 scope 闭包引用它们）。
+    // #1771：MediaStore 段的缺席可信度下沉到这里——非完整相册权限时 existingIds 回答「不知道」，
+    // 不再让全局相册权限门控整个对账（目录来源靠自己的根授权与完整枚举证明缺席）。
     val compositeMedia = com.hawkeyexb.ppass.backup.folder.CompositeMediaSnapshotSource(
         primary = ContentResolverMediaSnapshotSource(app, {
             if (ruleOn()) scopeStore.scope()?.let { scope ->
                 scope.copy(buckets = scope.buckets.filterNot { com.hawkeyexb.ppass.backup.folder.isFolderId(it) }.toSet())
             } else null
-        }),
+        }, absenceTrusted = { mediaAbsenceTrustedNow(app) }),
         folder = folderSource,
     )
     val scopeTimeOf = { mediaId: Long, storedSec: Long ->
@@ -433,7 +435,6 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
                 effective.contains(bucket, effectiveAdded)
             }
         },
-        mediaAbsenceTrusted = { mediaAbsenceTrustedNow(app) },
         pairingId = { pairing()?.pairingId?.takeIf { it.isNotBlank() }?.let(::PairingId) },
         scope = scope,
         io = Dispatchers.IO,

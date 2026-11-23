@@ -66,11 +66,6 @@ internal class FlowEngine(
     private val conditions: () -> Conditions,
     /** #1263：范围 = 相册 + 开始时间（[com.hawkeyexb.ppass.backup.BackupScope.contains]）。 */
     private val inScope: (bucketId: Long, dateAddedSec: Long, mediaId: Long) -> Boolean,
-    /**
-     * #459：「MediaStore 里查不到」此刻能不能当「原图被删了」。只有完整相册权限（图片 + 视频）才是 true——
-     * 部分授权 / 没授权时看不见的照片同样查不到。**没有默认值**：新的构造点必须想清楚再接（失败关闭）。
-     */
-    private val mediaAbsenceTrusted: () -> Boolean,
     /** 当前配对 id；null = 未配对。 */
     private val pairingId: () -> PairingId?,
     /** 单写者 scope。 */
@@ -666,7 +661,9 @@ internal class FlowEngine(
         // ---- 入口：不持有 FGS，只读元数据 ----
         val cycleStarted = System.nanoTime()
         prepareCursors(reconcile)
-        if (reconcile) reconcileSourcePresence()
+        // #1771：本轮来源缺席是否可信——由各来源自己证明（MediaStore 看完整相册权限、目录看根授权与完整枚举），
+        // 不再由全局相册权限门控。可信才让桌面缺失触发 REUPLOAD / UNRECOVERABLE。
+        val sourcePresenceTrusted = if (reconcile) reconcileSourcePresence() else false
         // #1762：目录段全集对账（见 [folderDiscovery]）——新素材建 PENDING 行，交给 retry 取件路径。
         if (reconcile) folderEnroll(pid)
         val todo = withContext(io) { countTodo(reconcile) }
@@ -686,7 +683,7 @@ internal class FlowEngine(
             log.log("cycle $reasons: wifi-only but the traffic cannot be pinned to an unmetered network; waiting for ${WaitReason.WIFI}")
             return settle(WaitReason.WIFI)
         }
-        val transferWork = hasWork(reconcile, askPresence = TriggerReason.PERIODIC in reasons)
+        val transferWork = hasWork(reconcile, askPresence = sourcePresenceTrusted && TriggerReason.PERIODIC in reasons)
         // #851：只有「用原图替换旧副本」可做时也要探测一次——桌面支不支持只有 hello 说得清。
         val upgradeWork = !transferWork && upgradeEnabled() && hasUpgradeCandidate()
         if (!transferWork && !upgradeWork) {
@@ -758,7 +755,7 @@ internal class FlowEngine(
         try {
             armResumeSentinel(roundId)
             // 一轮一条推送订阅（契约 §5），随 FGS 一起释放。
-            exit = delivery.session { loop(Round(reconcile, userPresent)) }
+            exit = delivery.session { loop(Round(reconcile, userPresent, sourcePresenceTrusted)) }
             if (exit == null && !control.paused()) recovered("round finished")
         } finally {
             withContext(NonCancellable) {
@@ -825,11 +822,12 @@ internal class FlowEngine(
     }
 
     /** 一轮之内的取件状态。 */
-    private class Round(val reconcile: Boolean, val userPresent: Boolean) {
+    private class Round(val reconcile: Boolean, val userPresent: Boolean, sourcePresenceTrusted: Boolean) {
         var legacyAfter = 0L
         var retryAfter = 0L
         var upgradeAfter = 0L
-        var presenceDone = !reconcile
+        // #1771：缺席不可信 ≠ 原图还在：这一轮不能让桌面缺失触发 REUPLOAD / UNRECOVERABLE。
+        var presenceDone = !reconcile || !sourcePresenceTrusted
         val handled = HashSet<Long>()
     }
 
@@ -1519,8 +1517,9 @@ internal class FlowEngine(
     private class SourcePresencePlan(val mark: List<Long>, val clear: List<Long>)
 
     /**
-     * #459：对账轮入口（只读元数据、不持有 FGS）按 MediaStore 差集写 `source_missing`，让 order 表的「已确认且原图还在」
+     * #459：对账轮入口（只读元数据、不持有 FGS）按各来源差集写 `source_missing`，让 order 表的「已确认且原图还在」
      * （[OrderStore.countConfirmedPresent]，英雄区 m 在待办 / n 未知时的兜底）跟得上相册里的删除与恢复。
+     * 返回值 = 本轮各相关来源的缺席是否可信（[Round.presenceDone] 与 `hasWork(askPresence)` 据此门控桌面缺失处置）。
      *
      * 边界（任何一条不满足就不写）：
      * - 只看**当前行是 CONFIRMED** 的：用户跳过（跳过名单 / SKIPPED_BY_USER）、源已删（SKIPPED_SOURCE_MISSING，
@@ -1528,31 +1527,37 @@ internal class FlowEngine(
      * - 行记的相册不在范围里（相册被取消选中）→ 不打也不清：范围是查询条件，不是删除。
      * - 不在范围内列表里 ≠ 被删：挪到别的相册的也不在。要再用 [MediaSnapshotSource.existingIds]（不看范围）确认；
      *   它读不出来（null）→ 这一轮什么都不写。
-     * - 不是完整相册权限（[mediaAbsenceTrusted]）→ 整步跳过、不打也不清：部分授权下「看不见」≠「被删」。
+     * - #1771：各来源自己证明缺席是否可信（MediaStore 看完整相册权限、目录看根授权与完整枚举），不再由全局
+     *   相册权限统一门控——任一相关来源不可信（existingIds 返回 null）→ 整步不写，且本轮视为缺席不可信。
      */
-    private suspend fun reconcileSourcePresence() {
-        if (!mediaAbsenceTrusted()) {
-            log.log("source_missing: media access is not full; absence proves nothing, skipped")
-            return
+    private suspend fun reconcileSourcePresence(): Boolean {
+        if (control.waitReason() == WaitReason.SOURCE_UNAVAILABLE) {
+            // #1731：来源不可用等待中——缺席证明不了什么，不写源缺失（恢复后由对账重新判定）。
+            log.log("source_missing: a source is unavailable; absence proves nothing, skipped")
+            return false
         }
         val started = System.nanoTime()
         val plan = try {
             withContext(io) { sourcePresencePlan() }
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (unavailable: SourceUnavailableException) {
+            // #1762：目录来源撤权 = 整个来源暂不可用——交给 runCycle 外层进 SOURCE_UNAVAILABLE，不当普通读失败吞掉。
+            throw unavailable
         } catch (failure: Exception) {
-            log.log("source_missing: MediaStore read failed (${failure.javaClass.simpleName}: ${failure.message}); nothing written")
-            return
+            log.log("source_missing: source read failed (${failure.javaClass.simpleName}: ${failure.message}); nothing written")
+            return false
         }
         if (plan == null) {
-            log.log("source_missing: MediaStore could not confirm which photos are gone; nothing written")
-            return
+            log.log("source_missing: a source could not confirm which items are gone; nothing written")
+            return false
         }
         // 写在写者上（读在 io 上）。读完到写之间行可能变了：setSourceMissing 只改仍是 CONFIRMED 的行，改不到就算了。
         val marked = plan.mark.count { store.setSourceMissing(it, true) }
         val cleared = plan.clear.count { store.setSourceMissing(it, false) }
         log.log("source_missing: marked $marked cleared $cleared (${msSince(started)}ms)")
         if (marked + cleared > 0) bump()
+        return true
     }
 
     /** 两路归并：范围内照片（按 `_id`）× 当前行（按 media_id）；列表里没有的再按 id 回查一次。null = 读不出来。 */

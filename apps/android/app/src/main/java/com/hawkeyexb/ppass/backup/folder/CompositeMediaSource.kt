@@ -19,8 +19,9 @@ import com.hawkeyexb.ppass.backup.order.MediaSnapshotSource
  * - [readChangedSince] / [maxGeneration] / [volumeNames] / [volumeVersions] / [preciseGeneration]：目录不参与
  *   G 游标与卷口径（ADR §4），全部来自 MediaStore 段。
  * - [lookup]：folder ID（bit 62）走目录，其余走 MediaStore。
- * - [existingIds]：目录授权失效 → **整体返回 null**（「不知道」），不得只丢掉 folder 部分、更不得把
- *   folder 撤权当成「folder 的照片全没了」（ADR §5 / 验收）。
+ * - [existingIds]：按来源子集分别询问（#1771）。目录 ID 只问目录、相册 ID 只问相册，空子集不问——
+ *   目录-only 在无相册权限时仍能基于完整枚举标出 `source_missing`；任一被询来源不可信 → **整体返回
+ *   null**（「不知道」），不得只丢掉一部分、更不得把某个来源的撤权当成「它的照片全没了」（ADR §5 / 验收）。
  */
 class CompositeMediaSnapshotSource(
     private val primary: MediaSnapshotSource,
@@ -55,11 +56,15 @@ class CompositeMediaSnapshotSource(
         if (isFolderId(mediaId)) folder.lookup(mediaId) else primary.lookup(mediaId)
 
     override fun existingIds(mediaIds: Collection<Long>): Set<Long>? = try {
+        // #1771：按来源子集分别询问，空子集不问——目录-only 在无相册权限时不再被 MediaStore 的
+        //「缺席不可信」拖成整体 null；相册-only 也不问无关目录。
         // FolderMediaSnapshotSource 恒返回非 null（授权失效抛 SourceUnavailableException，被下面 catch 成
         // 整体「不知道」）；null 若真出现（未来实现违反契约）也按 ADR §4 整体「不知道」，不当空集。
-        val folderPart = folder.existingIds(mediaIds) ?: return null
-        val primaryPart = primary.existingIds(mediaIds.filter { !isFolderId(it) })
-        if (primaryPart == null) null else primaryPart + folderPart
+        val (folderIds, primaryIds) = mediaIds.partition { isFolderId(it) }
+        val folderPart = if (folderIds.isEmpty()) emptySet() else (folder.existingIds(folderIds) ?: return null)
+        val primaryPart = if (primaryIds.isEmpty()) emptySet() else (primary.existingIds(primaryIds) ?: return null)
+        // 任一被询来源不可信 → 整体 null，绝不写部分并集。
+        primaryPart + folderPart
     } catch (failure: SourceUnavailableException) {
         // ADR §5：任何相关来源不可信 → 整体「不知道」。folder 侧授权失效只能这样表达。
         null
