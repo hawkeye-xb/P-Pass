@@ -172,13 +172,17 @@ for n in $CARDS; do
   else
     DELIVERY_NOTE="部分交付（refs）：只评本 PR 承诺交付的内容，不要仅因整卡还有剩余验收项就判阻断；把未完成写成完成仍属误放行。"
   fi
+  scope_hint="（未列单卡文件白名单；允许修改关联普通业务与测试文件，核心路径受 .github/core-paths.txt 保护）"
+  if [ "${#GLOBS[@]}" -gt 0 ]; then
+    scope_hint="$(printf '  %s\n' "${GLOBS[@]}")"
+  fi
   CARD_TEXT="${CARD_TEXT}
 ### 卡 #${n}：${I_TITLE}
 
 交付口径：${DELIVERY_NOTE}
 
-范围（只许动这些）：
-$(printf '  %s\n' "${GLOBS[@]+"${GLOBS[@]}"}")
+涉及路径参考（允许顺带修改关联普通业务与配套单测，不按单卡文件白名单判越界；未带 core 标签严禁触碰核心禁区）：
+${scope_hint}
 
 复现路径：
 ${repro:-（卡上没找到复现路径）}

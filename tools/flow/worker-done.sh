@@ -112,42 +112,29 @@ fail_local() { # fail_local <停在哪> <日志文件>
   exit 1
 }
 
-ALL_GLOBS=()
 IS_CORE=0
 TITLES=()
 for c in $CARDS; do
   flow_load_issue "$c"
-  flow_parse_scope "$I_BODY"
-  [ "${#GLOBS[@]}" -gt 0 ] || fail_blocked "读范围" "" "#${c} 没有可读的「范围」代码块"
-  ALL_GLOBS+=("${GLOBS[@]}")
   has_label core && IS_CORE=1
   TITLES+=("$I_TITLE")
   CARD_TEXT="${CARD_TEXT:-}${I_BODY}
 "
 done
-GLOBS=("${ALL_GLOBS[@]}")
 flow_requested_gates "${CARD_TEXT:-}" || fail_blocked "卡面 E1 门禁对账" "" "$REQUESTED_ERROR"
 
-# ── 1. 改动清单只含范围内文件；核心判定 ───────────────────────────────
+# ── 1. 基线核心禁区判定（移除单卡普通文件范围白名单，焊死 origin/main:.github/core-paths.txt，#1953）──
 FILES="$(git -c core.quotepath=false diff --name-only --no-renames origin/main...HEAD)"
 # 完整 diff：核心判定要看「是不是只改了版本号行」（#1451）。
 BRANCH_DIFF="${EVID_DIR}/branch.diff"
 git -c core.quotepath=false diff --no-color --no-renames --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ origin/main...HEAD >"$BRANCH_DIFF" || : >"$BRANCH_DIFF"
-OUTSIDE=()
-while IFS= read -r f; do
-  [ -n "$f" ] || continue
-  flow_in_scope "$f" || OUTSIDE+=("$f")
-done <<EOF2
-$FILES
-EOF2
-if [ "${#OUTSIDE[@]}" -gt 0 ]; then
-  fail_blocked "核对范围" "" "$(printf '越界文件：%s\n' "${OUTSIDE[@]}")
-范围：${GLOBS[*]}
-撤掉越界改动重新交卡；确需改这些文件，just stuck ${N} \"需改范围外文件：…\"。"
+BASE_CORE_RULES="${EVID_DIR}/base-core-paths.txt"
+if ! MSYS_NO_PATHCONV=1 git show origin/main:.github/core-paths.txt >"$BASE_CORE_RULES" 2>/dev/null || [ ! -s "$BASE_CORE_RULES" ]; then
+  cp "${TOP}/.github/core-paths.txt" "$BASE_CORE_RULES" 2>/dev/null || : >"$BASE_CORE_RULES"
 fi
-CORE="$(printf '%s\n' "$FILES" | bash "$FLOW_PATHS" core - "${TOP}/.github/core-paths.txt" --diff "$BRANCH_DIFF" 2>/dev/null)"
+CORE="$(printf '%s\n' "$FILES" | bash "$FLOW_PATHS" core - "$BASE_CORE_RULES" --diff "$BRANCH_DIFF" 2>/dev/null)"
 if [ "$CORE" != "false" ] && [ "$IS_CORE" = 0 ]; then
-  fail_blocked "核心判定" "" "改动命中核心路径（.github/core-paths.txt）而 ${CARDS_SHOW} 都没有 core 标签：只写复现、根因和两个修法，撤回代码改动，just stuck ${N} \"命中核心：…\"。"
+  fail_blocked "核心判定" "" "改动命中基线核心路径（origin/main:.github/core-paths.txt）而 ${CARDS_SHOW} 都没有 core 标签：只写复现、根因和两个修法，撤回代码改动，just stuck ${N} \"命中核心：…\"。"
 fi
 
 # ── 1b. 推送前机械提示（不生成自查文档）────────────────────────────────
@@ -290,7 +277,7 @@ tmp="$(mktemp)"
   echo "- 分支：\`${BRANCH}\`（已推送）"
   echo "- 提交："
   git log --format='  - `%h` %s' origin/main..HEAD
-  echo "- 改动清单（只含范围内文件）："
+  echo "- 改动清单（已通过基线核心禁区校验）："
   echo '```'
   git diff --stat origin/main...HEAD
   echo '```'

@@ -215,7 +215,7 @@ fresh() {
   cd "$R" || exit 1
   git remote add origin "$ORIGIN"
   mkdir -p tools/flow tools/release .github docs/decisions src crates/storage release
-  cp "${SRC}/tools/flow/"* tools/flow/
+  cp -R "${SRC}/tools/flow/." tools/flow/
   cp -R "${SRC}/tools/hooks" tools/hooks
   # 测试只看 doctor 有没有接通 install.sh --check；真 hook 的判据在 tools/test-local-hooks.sh。
   # 空转发器让卡分支的夹具提交不被真 hook 的范围检查提前拦掉。

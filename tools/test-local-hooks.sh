@@ -207,27 +207,23 @@ issue 104 "status:doing" "$(scope_body)"
 issue 105 "status:doing,core" "$(scope_body 'docs/a/**' 'crates/storage/')"
 issue 106 "status:doing" "$(scope_body 'apps/desktop/src-tauri/tauri.conf.json')"
 
-echo "==> 1. 范围"
-try pass "普通卡，只改范围内文件" fix/101-ok 'echo 1 >>docs/a/x.md; git add docs/a/x.md'
-try deny "普通卡，夹带范围外文件" fix/101-out 'echo 1 >>docs/a/x.md; echo 1 >>docs/b/y.md; git add -A' "越界：docs/b/y.md"
-try pass "  反证：去掉越界文件 → 放行" fix/101-out 'echo 1 >>docs/a/x.md; git add -A'
-try deny "范围外新增文件" fix/101-new 'echo n >docs/new.md; git add -A' "越界：docs/new.md"
-try deny "删除范围外文件也算越界" fix/101-rm 'git rm -q docs/b/y.md' "越界：docs/b/y.md"
-try deny "issue 没有范围段" fix/103-x 'echo 1 >>docs/a/x.md; git add -A' "没有可读的「范围」"
-try deny "范围是列表不是代码块（旧卡写法）" fix/102-x 'echo 1 >>docs/a/x.md; git add -A' "没有可读的「范围」"
-try deny "范围是模板默认的空代码块" fix/104-x 'echo 1 >>docs/a/x.md; git add -A' "没有可读的「范围」"
-try pass "  反证：同样改动，issue 有范围代码块 → 放行" fix/101-x 'echo 1 >>docs/a/x.md; git add -A'
+echo "==> 1. 普通文件范围放开（#1953：不再拦截普通业务与单测文件，无范围段也放行）"
+try pass "普通卡，改范围内文件" fix/101-ok 'echo 1 >>docs/a/x.md; git add docs/a/x.md'
+try pass "普通卡，顺手修改/新增其他非核心普通文件（不再按单卡白名单拒）" fix/101-out 'echo 1 >>docs/a/x.md; echo 1 >>docs/b/y.md; echo n >docs/new.md; git add -A'
+try pass "普通卡，删除非核心普通文件也放行" fix/101-rm 'git rm -q docs/b/y.md'
+try pass "issue 没有范围段、列表或空代码块（非核心改动均放行）" fix/103-x 'echo 1 >>docs/a/x.md; git add -A'
+try pass "issue 范围为空代码块也放行非核心改动" fix/104-x 'echo 1 >>docs/a/x.md; git add -A'
 
 echo "==> 2. 分支名"
 try deny "非卡分支（feat/local-hooks）" feat/local-hooks 'echo 1 >>docs/a/x.md; git add -A' "不是卡分支"
 try deny "直接在 main 上提交" main 'echo 1 >>docs/a/x.md; git add -A' "不是卡分支"
 try pass "  反证：同样改动在 fix/101-* 上 → 放行" fix/101-y 'echo 1 >>docs/a/x.md; git add -A'
 
-echo "==> 3. 核心"
+echo "==> 3. 核心禁区黑名单（优先取基线 origin/main:.github/core-paths.txt）"
 try deny "命中核心，issue 无 core 标签" fix/101-core 'echo 1 >>crates/storage/src/a.rs; git add -A' "这是核心改动"
 try pass "  反证：同样改动，issue 带 core 标签 → 放行" fix/105-core 'echo 1 >>crates/storage/src/a.rs; git add -A'
-try deny "git mv 把核心文件搬进范围内目录" fix/101-mv 'git mv crates/storage/src/a.rs docs/a/a.rs' "这是核心改动"
-try deny "工作区改掉核心规则再提交核心文件（规则取自 HEAD）" fix/101-tamper \
+try deny "git mv 把核心文件搬进普通目录" fix/101-mv 'git mv crates/storage/src/a.rs docs/a/a.rs' "这是核心改动"
+try deny "工作区改掉核心规则再提交核心文件（规则取自基线/HEAD）" fix/101-tamper \
   'sed -i.bak "/crates\/storage/d" .github/core-paths.txt; rm -f .github/core-paths.txt.bak; echo 1 >>crates/storage/src/a.rs; git add crates/storage' "这是核心改动"
 try deny "工作区改掉 hook 本身再提交（hook 取自 HEAD）" fix/101-hook \
   'printf "#!/bin/sh\nexit 0\n" >tools/hooks/pre-commit; echo 1 >>crates/storage/src/a.rs; git add crates/storage' "这是核心改动"
@@ -238,19 +234,14 @@ try pass "卡无 core 标签，tauri.conf.json 只改 version 行 → 放行（#
   "${BUMP}; rm -f \"\$TC\".bak; git add \"\$TC\""
 try deny "  反证：同一提交再改 updater endpoint → 核心" fix/106-endpoint \
   "${BUMP}; ${ENDPOINT}; rm -f \"\$TC\".bak; git add \"\$TC\"" "这是核心改动"
-try deny "暂存核心规则文件本身" fix/105-rules 'echo "# x" >>.github/core-paths.txt; git add -A' "越界：.github/core-paths.txt"
+try deny "无 core 标签暂存核心规则文件本身 → 拒绝" fix/101-rules 'echo "# x" >>.github/core-paths.txt; git add -A' "这是核心改动"
+try pass "  反证：带 core 标签修改核心规则文件 → 放行" fix/105-rules 'echo "# x" >>.github/core-paths.txt; git add -A'
 
-echo "==> 3b. 多卡分支（just start <号> <号>…，卡号记在 branch.<分支>.ppasscards）：范围取并集"
+echo "==> 3b. 多卡分支（just start <号> <号>…，卡号记在 branch.<分支>.ppasscards）：任一卡带 core 即放行核心"
 issue 106 "status:doing" "$(scope_body 'docs/b/**')"
 cards() { git config "branch.$(git symbolic-ref --short HEAD).ppasscards" "$1"; }
-try pass "两张卡：分别改两张卡范围内的文件" fix/101-multi \
-  'cards "101 106"; echo 1 >>docs/a/x.md; echo 1 >>docs/b/y.md; git add -A'
-try deny "  反证：同样改动，分支没记第二张卡 → 第二张卡的文件越界" fix/101-single \
-  'echo 1 >>docs/a/x.md; echo 1 >>docs/b/y.md; git add -A' "越界：docs/b/y.md"
-try deny "两张卡：并集之外的文件仍越界" fix/101-multi-out \
-  'cards "101 106"; echo n >docs/new.md; echo 1 >>docs/b/y.md; git add -A' "越界：docs/new.md"
-try deny "两张卡：其中一张没有范围" fix/101-multi-noscope \
-  'cards "101 103"; echo 1 >>docs/a/x.md; git add -A' "#103 没有可读的「范围」"
+try pass "两张卡：自由修改多个普通目录文件" fix/101-multi \
+  'cards "101 103"; echo 1 >>docs/a/x.md; echo 1 >>docs/b/y.md; echo n >docs/new.md; git add -A'
 try pass "两张卡：核心改动，第二张卡带 core 标签 → 放行" fix/101-multi-core \
   'cards "101 105"; echo 1 >>crates/storage/src/a.rs; git add -A'
 try deny "  反证：两张卡都没 core 标签 → 拒绝" fix/101-multi-nocore \
@@ -307,10 +298,10 @@ advance 20
 try pass "  反证：落后 20 个 → 放行" fix/101-stale 'echo 1 >>docs/a/x.md; git add -A'
 reset_main
 advance 1 docs/a/x.md
-try deny "main 上已有新提交改过范围内文件" fix/101-scope 'echo z >docs/a/z.md; git add -A' "main 上改过：docs/a/x.md"
+try deny "main 上已有新提交改过本次暂存的同一个文件" fix/101-scope 'echo 2 >>docs/a/x.md; git add -A' "main 上改过：docs/a/x.md"
 reset_main
 advance 1 docs/b/y.md
-try pass "  反证：main 上新提交只改范围外文件 → 放行" fix/101-scope 'echo z >docs/a/z.md; git add -A'
+try pass "  反证：main 上新提交改的是别的文件（未与暂存文件重叠）→ 放行" fix/101-scope 'echo z >docs/a/z.md; git add -A'
 reset_main
 advance 21 docs/a/x.md
 mv "${TMP}/up.git" "${TMP}/up.off"
@@ -335,11 +326,11 @@ merge_main() { # 从卡的提交重新合并 origin/main，解冲突
   git add -A
 }
 merge_main fix/101-merge1
-commit_is pass "合并 origin/main：带进来的核心与范围外文件不算本卡改动"
+commit_is pass "合并 origin/main：带进来的核心与普通文件不算本卡改动"
 merge_main fix/101-merge2
 echo mine >>docs/b/y.md
 git add -A
-commit_is deny "  反证：合并时顺手改了范围外文件 → 拒绝" "越界：docs/b/y.md"
+commit_is pass "  合并时顺手修改其他普通文件 → 放行（#1953）"
 merge_main fix/101-merge3
 echo mine >>crates/storage/src/a.rs
 git add -A

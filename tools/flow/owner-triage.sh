@@ -434,7 +434,7 @@ scope, accept, repro = f("范围"), f("验收场景"), f("复现路径")
 extra = []
 b = set_field(body, "范围", scope, block=True)
 if b is None:
-    extra.append("**范围（只许动这些）**：\n```\n" + scope + "\n```\n")
+    extra.append("**范围（涉及路径提示）**：\n```\n" + scope + "\n```\n")
 else:
     body = b
 b = set_field(body, "复现路径", repro)
