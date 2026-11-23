@@ -38,7 +38,6 @@ def parse_issue_seal(issue_body: str) -> dict:
         raise ValueError(f"invalid or missing 64-hex exam_sha256 in v3-seal: {sha!r}")
     return {"mode": raw["mode"], "exam_rel": rel, "exam_sha256": sha}
 
-
 def run_cmd(cmd: list[str], cwd: str, timeout: int = 120, extra_path: str | None = None) -> subprocess.CompletedProcess:
     env = {k: v for k, v in os.environ.items() if k not in _GIT_LOC_VARS}
     env.update({"GIT_TEMPLATE_DIR": "", "LC_ALL": "en_US.UTF-8"})
@@ -51,7 +50,6 @@ def run_cmd(cmd: list[str], cwd: str, timeout: int = 120, extra_path: str | None
         err = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
         return subprocess.CompletedProcess(cmd, 124, out, f"{err}\nCOMMAND_TIMEOUT after {timeout}s")
 
-
 def git_head(repo: str) -> str:
     return run_cmd(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
 
@@ -63,7 +61,7 @@ def check_device_ready(dev_dir: str, device_name: str | None, unattended: bool =
     if state != "UNLOCKED":
         return False, f"device {device_name} unavailable (state={state}); {'unattended mode skips human unlock' if unattended else 'device requires human unlock'}"
     lock_file = os.path.join(dev_dir, f"{device_name}.lock")
-    if os.path.exists("/usr/bin/lockf") and subprocess.run(["/usr/bin/lockf", "-k", "-t", "0", lock_file, "true"], capture_output=True).returncode != 0:
+    if os.path.exists("/usr/bin/lockf") and subprocess.run(["/usr/bin/lockf", "-k", "-t", "0", lock_file, "/usr/bin/true"], capture_output=True).returncode != 0:
         return False, f"device {device_name} lock busy"
     return True, "ok"
 
@@ -83,7 +81,6 @@ def _glob_match(rel_path: str, pat: str) -> bool:
     rx = "^" + re.escape(pat).replace(r"\*\*/", "(?:.*/)?").replace(r"\*\*", ".*").replace(r"\*", "[^/]*").replace(r"\?", "[^/]") + "$"
     return re.match(rx, rel_path) is not None
 
-
 def core_rules_from_git(repo: str, sha: str) -> tuple[list[str], list[str], list[str]]:
     plus, zones, minus = [], [], []
     for candidate in (".github/core-paths.txt", ".core-paths.txt"):
@@ -101,11 +98,9 @@ def core_rules_from_git(repo: str, sha: str) -> tuple[list[str], list[str], list
             return plus, zones, minus
     return ["**"], [], []
 
-
 def is_core_path(rel_path: str, rules: tuple[list[str], list[str], list[str]]) -> bool:
     plus, zones, minus = rules
     return any(_glob_match(rel_path, p) for p in plus) or (any(_glob_match(rel_path, z) for z in zones) and not any(_glob_match(rel_path, m) for m in minus))
-
 
 def _default_cmds(wt_dir: str, exam_rel: str, task: dict) -> tuple[list[str], list[str], list[str]]:
     exam_cmd = task.get("exam_cmd") or (["bash", exam_rel] if exam_rel.endswith(".sh") else [sys.executable, "-m", "unittest", exam_rel])
@@ -116,10 +111,8 @@ def _default_cmds(wt_dir: str, exam_rel: str, task: dict) -> tuple[list[str], li
     )
     return exam_cmd, suite_cmd, fit_cmd
 
-
 def _is_compile_or_syntax_error(out_text: str) -> bool:
-    return any(m in out_text for m in ("SyntaxError", "IndentationError", "ImportError", "ModuleNotFoundError", "error[E", "could not compile", "syntax error", "unexpected EOF while looking for matching"))
-
+    return any(m in out_text for m in ("SyntaxError", "IndentationError", "ImportError", "ModuleNotFoundError", "error[E", "could not compile")) or re.search(r"line \d+: syntax error|unexpected EOF while looking for matching", out_text) is not None
 
 def verify_gate(wt_dir: str, main_repo: str, base_sha: str, task: dict, locked_sha: str, review_fn: ReviewFn | None = None) -> tuple[bool, str]:
     mode, exam_rel = task["mode"], task["exam_rel"]
@@ -374,10 +367,16 @@ def run_v3_queue(
 
 def main_cli(argv: list[str]) -> int:
     if len(argv) >= 2 and argv[1] == "has-seal":
-        return 0 if has_issue_seal(sys.stdin.read()) else 1
+        print("yes" if has_issue_seal(sys.stdin.read()) else "no")
+        return 0
     if len(argv) >= 2 and argv[1] == "parse-seal":
         print(json.dumps(parse_issue_seal(sys.stdin.read()), ensure_ascii=False))
         return 0
+    if len(argv) >= 3 and argv[1] == "check-device":
+        dev_dir, dev_name = argv[2], (argv[3] if len(argv) >= 4 else None)
+        ok, msg = check_device_ready(dev_dir, dev_name, unattended=("--attended" not in argv[4:]))
+        print(msg, file=(sys.stdout if ok else sys.stderr))
+        return 0 if ok else 3
     if len(argv) >= 5 and argv[1] == "check-card":
         wt_dir, main_repo, base_sha = argv[2], argv[3], argv[4]
         body = sys.stdin.read()
@@ -393,7 +392,7 @@ def main_cli(argv: list[str]) -> int:
         ok, msg = verify_gate(wt_dir, main_repo, base_sha, seal, seal["exam_sha256"], None)
         print(msg, file=(sys.stdout if ok else sys.stderr))
         return 0 if ok else 1
-    print("usage: v3_harness.py [has-seal | parse-seal | check-card <wt> <main_repo> <base_sha> [--core-approved]] < issue.md", file=sys.stderr)
+    print("usage: v3_harness.py [has-seal | parse-seal | check-device <dir> <dev> | check-card <wt> <main> <base>] < issue.md", file=sys.stderr)
     return 2
 
 if __name__ == "__main__":

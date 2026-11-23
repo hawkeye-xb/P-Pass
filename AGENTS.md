@@ -156,10 +156,13 @@ just done                     交卡：过门禁与验收，全绿才推送、�
 just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去做下一张
 ```
 
-- `just start` 只领 open、`status:ready`、有「范围」代码块、有「验收场景」的卡；Bug 卡还必须有「复现路径」（稳定复现的步骤/命令），缺一样不领，转 `status:blocked` 找人对齐。核心卡（`core` 标签）正文引用了
+- **有人 / 无人双轨与本机远端分层（V3，[方案](docs/decisions/2026-11-21-v3-outcome-driven-collab-flow.md)）**：
+  - **有人在场**：集中拍板取向、批核心方案、真机结对看界面（迭代期跳过慢测试）。
+  - **无人模式（`--unattended`）**：100% 免打扰；开工先探设备在线与未锁屏，遇锁屏/离线立即 `0s` 标 `SUSPENDED_ENV` 跳下一张，连续 2 轮未过门禁即触发 `SUSPENDED_CIRCUIT_BREAK` 熔断跳过；合入前自动 `git rebase origin/main` 并重跑门禁防语义冲突（行冲突安全 `rebase --abort`）。
+  - **本机与远端各司其职**：本机专属安全白名单（`~/.git-allowed-identities`、个人/公司隔离钩子、`gitleaks`、`tools/hooks/dispatch.sh` 转发链、`.claude/settings.local.json`）永远留在本机不削弱；远端守 `.github/allowed-identities.txt`、`.github/core-paths.txt` 核心禁区、链外 `v3-seal` 哈希锁与 `review/agent` 独立评审。改流程规则先跑 `just flow-bench selftest`。
+- `just start` 只领 open、`status:ready`、有「验收场景」的卡（单卡普通文件范围白名单已移除，允许自由修改关联普通业务与配套单测，#1953）；Bug 卡还必须有「复现路径」（稳定复现的步骤/命令），缺一样不领。核心卡（`core` 标签）正文引用了
   `origin/main` 上「已采纳」的方案就按方案实现，没有引用就只写复现、根因和两个修法，不改代码。
-- 只改 issue「范围」段列出的路径。确需扩大：先改 issue，再改代码。本地 hook 会挡范围外文件、
-  没有范围的卡、主仓工作区里的卡分支，`git commit` 直接被拒，见 `tools/hooks/` 与
+- **核心禁区与 worktree 保护**：本地 hook（`tools/hooks/pre-commit`）与 `just done` 统一按不可变基线 `origin/main:.github/core-paths.txt` 拦截未带 `core` 标签的核心改动，并拒绝在主仓根目录直接提交卡分支，见 `tools/hooks/` 与
   [本地提交拦截](docs/runbook/local-hooks.md)。
 - 每个提交 `git commit -s`（DCO 门禁），本仓库的提交身份必须在 `.github/allowed-identities.txt` 里；
   从 fork 提交的外部贡献者不受此限（白名单只约束本仓库的机器）。
@@ -170,20 +173,18 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
   - **PR 上**：CI 只跑与改动相关的快检（Windows 不在 PR 上跑），是合入门禁。
   - **合入 main 后**：CI 全量（含 Windows）批量跑：同一时间一次、正在跑的不取消、排队只留最新；main 红了只修或回滚元凶 PR，main 不冻结。
   - **发版前**：Release 再验证一遍（桌面壳只跑 Windows；Linux 桌面检查已随 #1555 永久移除，见 [CI lane](docs/runbook/ci-lanes.md)），只从全绿提交切 tag。
-- `just done` 依次：核对范围 → 机械漏改提示（不阻断）→ 门禁（按改动路径挑：安卓 `just android-test`、iOS `just ios-test`、文案/i18n `just mobile-static-check`、
+- `just done` 依次：基线核心禁区校验 → V3 四类任务封条门禁（`fix` 锁测试 `SHA256` + 基线反证变红 + 分支绿；`speculate_then_fix` 先固化变红单测；`feature` 锁哈希跳旧基线编译；`verify` 源码零改动如实报 `FAIL` 即合格交差，#1954）→ 机械漏改提示（不阻断）→ 门禁（按改动路径挑：安卓 `just android-test`、iOS `just ios-test`、文案/i18n `just mobile-static-check`、
   桌面前端 `pnpm -C apps/desktop test`、Rust crate（含桌面 `apps/desktop/src-tauri`）对应 crate 的 `cargo nextest run -p`、纯文档 `just md-check`（AGENTS.md 与 `.github/**` 是流程文件，仍跑 `just ci-docs`）；
   有一个文件挑不出来才退回全量 `just ci`）→ 推分支 → 在 issue 贴回执（分支、提交、门禁与验收输出末尾、证据等级、证据目录）。
   `just verify <号>` 不再默认跑：只有卡上写明 `**真机验证**：需要` 才跑（用户看得到的改动按「按版本验收」随版本验，#1471）。
-  范围、核心方案等流程红线：不推送、issue 写明原因、打 `status:blocked`。本地门禁或 verify 红同样不推送，但不改卡状态、不刷 issue，修好直接重跑；同一处连红 3 次按 `just stuck` 处理。
+  核心违规等流程红线：不推送、issue 写明原因、打 `status:blocked`。本地门禁或 verify 红同样不推送，但不改卡状态、不刷 issue，修好直接重跑；无人模式连败 2 次自动熔断，有人模式同一处连红 3 次按 `just stuck` 处理。
   - **作者自查**：推送前对照 `tools/flow/review-prompt.md` 看 diff，并用 `git grep` 核全仓同类写法；这是执行动作，不另写 `self-review.md`，也不进回执与 PR 正文。
-    `just done` 只打印机械漏改提示，不阻断；范围、验收和同类写法由 PR 上的独立评审复核。
+    `just done` 只打印机械漏改提示，不阻断；验收和同类写法由 PR 上的独立评审复核。
   - **代码没变就复用验证**：门禁与 verify 通过后记下树哈希；重跑 `just done` 时树和门禁清单都没变就不重跑，回执写明复用了哪次的验证。
-  - **落后 main 不拦**：PR 上的 CI 测的是合并后的结果，main 也不要求分支跟上最新，所以落后只提示、照推；
-    和 main 有冲突才停（不打 blocked）：`git rebase origin/main` 解冲突后重跑。推送时的 pre-push hook 同一口径。
-- 三级的 PR 都是 CI 全绿（含 acceptance gate：碰核心的要已采纳方案）且独立评审通过就合（squash），不等真机验收；
+  - **变基重验与落后 main**：`--rebase` 或 `--unattended` 下自动 `git rebase origin/main` 并在新树上重跑门禁；有人模式默认落后无冲突照推，有冲突停下提示 `git rebase origin/main`。
+- 三级的 PR 都是 CI 全绿（含 acceptance gate：碰核心的要已采纳方案，含 `v3-seal` 的核验锁定测试 `SHA256`）且独立评审通过就合（squash），不等真机验收；
   用户看得到的改动随版本验收，发版前台账清零（见「按版本验收」）。开完 PR 立刻打开外壳的 PR 监控（见下两条）；CI 红了由干活的 agent 修到绿，不叫人。
-- 必须用 `just stuck` 停下的四种情况：命中核心且没有已采纳方案、需要改范围外文件、没有可用的验收场景、
-  同一处连红 3 次。
+- 必须用 `just stuck` 停下的情况：命中核心且没有已采纳方案、没有可用的验收场景、同一处连红 3 次。
 - 用户看得到的行为按卡上的验收场景做真机验证（E3）：卡上写明 `**真机验证**：需要` 的，`just done` 才跑 `just verify`；
   其余按「按版本验收」随版本验。验证环境开工时探测（见「验收」）；`just done` 的回执会写明哪些证据等级已自动取得。
 - 防发散：PR 正文 closes 它解决的所有卡，不夹带无关改动；同时开着的分支不超过 3 个、一两天内合；要好几天的功能用开关先合进 main、默认关；改到范围外文件就是红；新增网络出口、遥测依赖、自启点、落盘目录由 `just ci` 挡
@@ -213,8 +214,8 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
 
 ## 红线（违反 = 事故）
 
-1. **issue 外的活不做。** 发现新问题开新 issue（`status:inbox`），继续当前活，不顺手修。
-2. **范围即边界。** 只动 issue「范围」段的路径。产品红线：只做图片，不做文件备份/同步；
+1. **issue 外的活不做。** 发现与本卡无关的新问题开新 issue（`status:inbox`），继续当前活；本卡改动自身引发的问题必须在本 PR 修完，不甩新卡。
+2. **核心禁区与产品红线即边界。** 普通业务与单测已放开修改，未获 `core` 批准严禁动 `.github/core-paths.txt` 核心路径。产品红线：只做图片，不做文件备份/同步；
    **不做任何遥测 / 使用统计上报**，诊断只写本机日志
    （[决策记录](docs/product/2026-10-13-telemetry-removal.md)）。改这条红线须产品负责人拍板。新增网络出口、遥测类依赖由 `just ci` 会挡（`tools/check-egress.py`，例外登记见 [适应度门禁](docs/runbook/fitness.md)）。
 3. **不捏造。** 报绿必须附命令 + 真实输出；故障/安全类判据必须带反证（去掉故障条件必须变红）；普通界面改动有单测即可，不要求反证。
