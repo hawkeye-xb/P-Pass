@@ -45,10 +45,13 @@ public protocol PhotoLibraryReading {
     /// 全部用户相册与智能相册，**不过滤**，顺序 = PhotoKit 返回的顺序（用户相册即「照片」App 里的顺序）。
     func collections() -> [LibraryCollection]
 
-    /// 批量统计：按 ``collections()`` 的顺序，对 `isIncluded` 为真的集合给出统计；构造中途已不存在的集合跳过。
+    /// 批量统计：按 ``collections()`` 的顺序，对 `isIncluded` 为真的集合给出统计。
     ///
-    /// 默认实现逐个调 ``summary(ofCollection:)``；``PhotoKitLibrary`` 覆写为一次枚举目录、直接复用
-    /// 枚举出的集合实例算统计，避免按 id 逐个反查（#1949：80 个相册时省下数百次跨进程查询）。
+    /// 集合中途被删的语义取决于实现：
+    /// - 默认实现按 id 逐个调 ``summary(ofCollection:)`` 回查，集合已不存在时该项跳过（不报 0）。
+    /// - ``PhotoKitLibrary`` 覆写为一次枚举目录、直接复用同次枚举快照里的集合实例统计，
+    ///   不再逐 id 二次反查；枚举之后才被删的集合，快照实例上 `fetchAssets` 返回 0 张，
+    ///   会按空相册（0 计数、无封面）列出。
     func collectionSummaries(
         matching isIncluded: (LibraryCollection) -> Bool
     ) -> [(collection: LibraryCollection, summary: CollectionSummary)]

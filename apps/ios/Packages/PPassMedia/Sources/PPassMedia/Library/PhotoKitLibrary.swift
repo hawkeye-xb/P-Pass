@@ -28,7 +28,8 @@ public struct PhotoKitLibrary: PhotoLibraryReading {
     /// 与 ``collections()`` 同一取舍（不过滤、同顺序），多一步：直接复用枚举出的 `PHAssetCollection`
     /// 实例算统计，不再按 localIdentifier 逐个反查（#1949）。
     ///
-    /// 取舍留给调用方（`isIncluded`）：不可选的集合连统计都不查。
+    /// 取舍留给调用方（`isIncluded`）：不可选的集合连统计都不查。枚举快照里的集合若在统计前被删，
+    /// `fetchAssets` 返回 0 张，按空相册（0 计数、无封面）给出，不跳过。
     public func collectionSummaries(
         matching isIncluded: (LibraryCollection) -> Bool
     ) -> [(collection: LibraryCollection, summary: CollectionSummary)] {

@@ -98,9 +98,10 @@ public struct AlbumCatalog {
         return library + userAlbums + smart
     }
 
-    /// 可选的集合（不算统计、不排序）。与 ``listAlbums()`` 用同一条取舍规则，只少了两件要逐个相册查库的事：
-    /// 「智能相册只列非空的」与「构造中途被删的跳过」。按张判断「照片属于哪些可选相册」时这两条自然成立
-    /// （照片在里面，相册就非空、就还在），所以 ``AlbumMembership`` 用它，免掉每个相册 3 次 fetch。
+    /// 可选的集合（不算统计、不排序）。与 ``listAlbums()`` 用同一条取舍规则，只是不查统计，也就没有
+    /// 「智能相册只列非空的」与「集合已消失就跳过」这两条（后一条只在批量统计的默认实现里成立；
+    /// ``PhotoKitLibrary`` 的批量实现把枚举后被删的集合按空相册给出）。按张判断「照片属于哪些可选相册」时
+    /// 这两条自然成立（照片在里面，相册就非空、就还在），所以 ``AlbumMembership`` 用它，免掉每个相册 3 次 fetch。
     public func selectableCollections() -> [LibraryCollection] {
         library.collections().filter { Self.selectableKind(of: $0) != nil }
     }
