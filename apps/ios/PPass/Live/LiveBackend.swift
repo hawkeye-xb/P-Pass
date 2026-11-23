@@ -467,7 +467,9 @@ final class LiveBackend: @unchecked Sendable {
     func addFolderSource(at url: URL, displayName: String) throws {
         let opened = url.startAccessingSecurityScopedResource()
         defer { if opened { url.stopAccessingSecurityScopedResource() } }
-        let id = try folders.addFolder(at: url, displayName: displayName)
+        // #1770：共享 App 容器（如 Blackmagic Camera）物理末段是 `Documents`，在安全作用域内解析系统本地化显示名。
+        let resolvedName = FolderDisplayName.resolve(url: url, fallback: displayName)
+        let id = try folders.addFolder(at: url, displayName: resolvedName)
         do {
             guard var record = folders.record(id: id) else { throw FolderSourceError(reason: "folder registration missing") }
             record.status = FolderMediaSource.pendingScopeStatus
@@ -485,7 +487,9 @@ final class LiveBackend: @unchecked Sendable {
     func reauthorizeFolderSource(id: String, at url: URL) throws {
         let opened = url.startAccessingSecurityScopedResource()
         defer { if opened { url.stopAccessingSecurityScopedResource() } }
-        try folders.reauthorize(id: id, at: url)
+        // #1770：同样在安全作用域内解析，历史存成 `Documents` 的来源可恢复真实应用名。
+        let resolvedName = FolderDisplayName.resolve(url: url, fallback: url.lastPathComponent)
+        try folders.reauthorize(id: id, at: url, displayName: resolvedName)
         logger.log("folder \(id): reauthorized via settings")
         refreshFolderSources()
         Task { _ = await engine.trigger(.manual) }

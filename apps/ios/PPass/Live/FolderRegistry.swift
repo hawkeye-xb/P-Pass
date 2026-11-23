@@ -35,11 +35,43 @@ struct FolderRoot {
     let record: FolderRecord
 }
 
+/// 来源显示名（#1770）：iOS「文件」里的第三方 App 共享容器（`UIFileSharingEnabled` /
+/// `LSSupportsOpeningDocumentsInPlace`，如 Blackmagic Camera）物理目录末段固定是 `Documents`，
+/// `url.lastPathComponent` 永远拿到 `"Documents"`。系统本地化应用显示名要在安全作用域内读
+/// `URLResourceValues.localizedName`（`.localizedNameKey`），读不到再逐级回退。
+/// 用户目录显示名不进日志（ADR §2）。
+enum FolderDisplayName {
+    static func resolve(
+        url: URL,
+        fallback: String,
+        localizedNameProvider: (URL) -> String? = { target in
+            (try? target.resourceValues(forKeys: [.localizedNameKey]))?.localizedName
+        }
+    ) -> String {
+        let trimmedFallback = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawLast = url.lastPathComponent
+        if !trimmedFallback.isEmpty,
+           trimmedFallback.caseInsensitiveCompare("Documents") != .orderedSame,
+           trimmedFallback != rawLast {
+            return trimmedFallback
+        }
+        if let localized = localizedNameProvider(url)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !localized.isEmpty,
+           localized.caseInsensitiveCompare("Documents") != .orderedSame {
+            return localized
+        }
+        if !trimmedFallback.isEmpty {
+            return trimmedFallback
+        }
+        return rawLast.isEmpty ? "Documents" : rawLast
+    }
+}
+
 enum FolderBookmarks {
     /// stale 重建时生成新书签的实现（产品路径 = 系统 bookmarkData；测试注入以判红）。
     /// nil = 生成失败（走「保留旧书签、记恢复未验证」）。
     static var freshBookmark: @Sendable (URL) -> Data? = { url in
-        try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+        try? url.bookmarkData(options: [], includingResourceValuesForKeys: [.localizedNameKey], relativeTo: nil)
     }
 
     /// 解析书签 → 根目录。stale 且根仍可用时在当前授权内重建并原子替换；替换失败保留旧书签并记恢复未验证。
@@ -170,9 +202,10 @@ final class FolderRegistry: @unchecked Sendable {
     func addFolder(at url: URL, displayName: String) throws -> String {
         let bookmark: Data
         do {
-            bookmark = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+            bookmark = try url.bookmarkData(options: [], includingResourceValuesForKeys: [.localizedNameKey], relativeTo: nil)
         } catch {
-            logger.log("folder registry: bookmark creation failed for \(displayName): \(error.localizedDescription)")
+            // #1770：displayName 现在是系统本地化应用名（用户可见来源），按 ADR §2 不进日志。
+            logger.log("folder registry: bookmark creation failed: \(error.localizedDescription)")
             throw FolderSourceError(reason: "bookmark creation failed")
         }
         lock.lock()
@@ -205,10 +238,12 @@ final class FolderRegistry: @unchecked Sendable {
     /// 重新授权（#1763 设置页）：在既有记录上原子换书签，保留 sourceId 与 opaque 映射
     /// （ADR §3「添加时生成稳定 UUID」——换书签不换身份）。书签生成失败或落盘失败都抛错、
     /// 旧书签原样保留（ADR §5：不能先毁掉旧书签）。调用方持有 url 的安全作用域（选择器授权回调内）。
-    func reauthorize(id: String, at url: URL) throws {
+    /// #1770：历史记录若被存成容器末段 `Documents`，重新授权时用调用方解析出的真实名称恢复；
+    /// 已有真实名称的来源保持不变（不覆盖用户可见的名字）。`displayName` 缺省则行为与旧版一致。
+    func reauthorize(id: String, at url: URL, displayName: String? = nil) throws {
         let bookmark: Data
         do {
-            bookmark = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+            bookmark = try url.bookmarkData(options: [], includingResourceValuesForKeys: [.localizedNameKey], relativeTo: nil)
         } catch {
             logger.log("folder registry: reauth \(LogRedact.id(id)): bookmark creation failed")
             throw FolderSourceError(reason: "bookmark creation failed")
@@ -220,6 +255,14 @@ final class FolderRegistry: @unchecked Sendable {
         let previous = record
         record.bookmark = bookmark
         record.status = "registered"
+        if let candidate = displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !candidate.isEmpty,
+           candidate.caseInsensitiveCompare("Documents") != .orderedSame {
+            let current = record.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if current.isEmpty || current.caseInsensitiveCompare("Documents") == .orderedSame {
+                record.displayName = candidate
+            }
+        }
         sources[id] = record
         guard persistLocked() else {
             // 落盘失败：内存回退到旧书签（盘上本来就还是旧的），向调用方报错，不假装成功。
