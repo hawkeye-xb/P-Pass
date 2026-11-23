@@ -78,6 +78,9 @@ let localIndexRefreshMs: Int64 = 60_000
 /// `loadedAtMs == nil` 表示尚未读过。纯函数。
 func localIndexReloadDue(nowMs: Int64, loadedAtMs: Int64?, hasEntries: Bool) -> Bool {
     guard let loadedAtMs else { return true }
+    // #1940：注入的时钟若发生回拨（nowMs 落后于上次加载时刻），窗口差值恒为负、永远到不了期，索引会卡死不再刷新；
+    // 直接判到期，立即重读一次。单调时钟本身不会回拨，这里兜住测试注入或异常时钟。
+    if nowMs < loadedAtMs { return true }
     let window = hasEntries ? localIndexRefreshMs : localIndexEmptyRetryMs
     return nowMs - loadedAtMs >= window
 }
@@ -101,7 +104,7 @@ final class LocalFirstOriginals: @unchecked Sendable {
 
     init(reader: LocalOriginalReading,
          loadIndex: @escaping @Sendable () -> LocalSourceIndex,
-         clock: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
+         clock: @escaping @Sendable () -> Int64 = { Int64(DispatchTime.now().uptimeNanoseconds / 1_000_000) }) {
         self.reader = reader
         self.loadIndex = loadIndex
         self.clock = clock
