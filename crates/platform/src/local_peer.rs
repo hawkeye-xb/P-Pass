@@ -83,6 +83,11 @@ pub struct UserDirFacts {
 ///   扩展路径 `\\?\<盘符>:\` ⇒ 放行；
 /// - POSIX 绝对路径：非 Windows 宿主上以单个 `/` 开头（排除 `//`）⇒ 放行；
 ///   Windows 宿主上无盘符的 `/...` 属于驱动器相对路径，由 `path.is_absolute()` 自然拒绝。
+///
+/// #1927：格式合法后还要在两个**会产生文件系统访问**的判据上过一遍——指向远端 /
+/// 设备命名空间的重解析点（[`crate::contains_remote_reparse_point`]）与网络卷 / 映射
+/// 网络盘（[`crate::is_network_volume_or_ancestor`]）一律拒，避免服务形态下以服务
+/// 身份跟随 junction / 映射盘外连。
 fn is_valid_dir_fact_path(path: &std::path::Path) -> bool {
     let raw = path.as_os_str();
     if raw.is_empty() {
@@ -102,24 +107,24 @@ fn is_valid_dir_fact_path(path: &std::path::Path) -> bool {
     }
     let bytes = s.as_bytes();
     // 1. 标准 Windows 本地盘符绝对路径：`C:\...` 或 `C:/...`。
-    if bytes.len() >= 3
+    let normal_drive = bytes.len() >= 3
         && bytes[0].is_ascii_alphabetic()
         && bytes[1] == b':'
-        && (bytes[2] == b'\\' || bytes[2] == b'/')
-    {
-        return true;
-    }
+        && (bytes[2] == b'\\' || bytes[2] == b'/');
     // 2. Windows `canonicalize()` 产出的本地盘符 verbatim 路径：`\\?\C:\...`。
-    if bytes.len() >= 7
+    let verbatim_drive = bytes.len() >= 7
         && bytes.starts_with(br"\\?\")
         && bytes[4].is_ascii_alphabetic()
         && bytes[5] == b':'
-        && bytes[6] == b'\\'
-    {
-        return true;
-    }
+        && bytes[6] == b'\\';
     // 3. POSIX 本地绝对路径（单个 `/` 开头；在 Windows 宿主上 `is_absolute()` 为 false）。
-    bytes[0] == b'/' && path.is_absolute()
+    let posix = bytes[0] == b'/' && path.is_absolute();
+    // #1927：格式合法后，还要在 `canonicalize()` / `real_path` 之前拦掉指向远端 /
+    // 设备命名空间的重解析点，以及网络卷 / 映射网络盘——服务形态下这些都会让服务
+    // 账户以服务身份外连 SMB/NTLM（`user_dirs` 进入 `real_path` 前就要拒）。
+    (normal_drive || verbatim_drive || posix)
+        && !crate::contains_remote_reparse_point(path)
+        && !crate::is_network_volume_or_ancestor(path)
 }
 
 impl UserDirFacts {
