@@ -115,6 +115,62 @@ final class TimelineLiveTests: XCTestCase {
         XCTAssertFalse(lost.showReconnecting)
     }
 
+    // MARK: 唯一连接状态（#1904，对位 Android #1883 `connectionStateOf`）
+
+    func testConnectionStateOfFollowsAndroidPriorityOrder() {
+        var s = TimelineLiveState()
+        // 刚启动、这次订阅还没连上：Unknown。
+        XCTAssertEqual(connectionStateOf(pairingLost: false, state: s).status, .unknown)
+        // 断过、正在退避重连：Reconnecting。
+        s.hadFailure = true
+        XCTAssertEqual(connectionStateOf(pairingLost: false, state: s).status, .reconnecting)
+        // 退避耗尽：Offline。
+        s.exhausted = true
+        XCTAssertEqual(connectionStateOf(pairingLost: false, state: s).status, .offline)
+        // 真的连上了就是连上了，即便上一轮的退避记录还在：Connected 排在 Offline 前面。
+        s.connected = true
+        XCTAssertEqual(connectionStateOf(pairingLost: false, state: s).status, .connected)
+        // 配对已失效是另一个维度，优先于一切连接信号。
+        XCTAssertEqual(connectionStateOf(pairingLost: true, state: s).status, .pairingLost)
+        var fresh = TimelineLiveState()
+        fresh.hadFailure = true
+        XCTAssertEqual(connectionStateOf(pairingLost: true, state: fresh).status, .pairingLost,
+                       "配对失效优先于重连中")
+    }
+
+    func testConnectionStateCarriesDaysUnreachableAndRepairFlags() {
+        var s = TimelineLiveState()
+        s.exhausted = true
+        let offline = connectionStateOf(pairingLost: false, state: s, daysUnreachable: 3)
+        XCTAssertEqual(offline.daysUnreachable, 3, "失联天数由同一个状态携带，不再单独传")
+        XCTAssertFalse(offline.isConnected)
+        XCTAssertFalse(offline.needsRepair)
+        let lost = connectionStateOf(pairingLost: true, state: s, daysUnreachable: 3)
+        XCTAssertTrue(lost.needsRepair)
+        XCTAssertFalse(lost.isConnected)
+        s.connected = true
+        XCTAssertTrue(connectionStateOf(pairingLost: false, state: s).isConnected)
+        XCTAssertNil(connectionStateOf(pairingLost: false, state: s).daysUnreachable, "从未确认可达：不编天数")
+    }
+
+    func testChromeFromConnectionStateMatchesTheStateInitializer() {
+        var s = TimelineLiveState()
+        s.hadFailure = true
+        let retrying = TimelineLiveChrome(connection: connectionStateOf(pairingLost: false, state: s))
+        XCTAssertTrue(retrying.showReconnecting)
+        XCTAssertFalse(retrying.showExhaustedRetry)
+        s.exhausted = true
+        let offline = TimelineLiveChrome(connection: connectionStateOf(pairingLost: false, state: s))
+        XCTAssertFalse(offline.showReconnecting, "与耗尽互斥")
+        XCTAssertTrue(offline.showExhaustedRetry)
+        XCTAssertEqual(offline, TimelineLiveChrome(state: s, pairingLost: false),
+                       "两个初始化器是同一份判定")
+        let lost = TimelineLiveChrome(connection: connectionStateOf(pairingLost: true, state: s))
+        XCTAssertFalse(lost.showReconnecting, "配对失效：红卡是唯一出路")
+        XCTAssertFalse(lost.showExhaustedRetry)
+        XCTAssertEqual(lost, TimelineLiveChrome(state: s, pairingLost: true))
+    }
+
     // MARK: 会话
 
     func testAckConnectsAndEveryInvalidatedSignalsOnce() async {

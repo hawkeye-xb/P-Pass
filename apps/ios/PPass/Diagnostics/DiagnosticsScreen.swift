@@ -1,3 +1,4 @@
+import PPassCore
 import SwiftUI
 
 /// 诊断页（Android 没有这一屏；iOS 为取证加的，入口是设置卡的「版本」行）。
@@ -96,13 +97,12 @@ struct StorageDetailScreen: View {
     @State private var working = false
 
     /// 只陈述有出处的事实：最近成功取引擎账目，配对日期取配对记录，张数取已确认数；不编数据。
+    /// #1904：连接表述从唯一状态 `app.connection` 取（与照片页同一个事实源）。
     private var detailBody: String {
-        if app.pairingLost { return L.s("storage_detail_lost") }
-        let line1 = L.f("storage_detail_connected", LastSuccessText.fragment(app.triplet?.lastSuccessAt))
-        guard let ms = app.pairedAtMs else { return line1 }
-        let line2 = L.f("storage_detail_paired", PairedDateText.format(pairedAt: ms),
-                        (app.triplet?.m ?? 0).formatted())
-        return line1 + "\n" + line2
+        storageDetailBody(app.connection,
+                          lastSuccessAt: app.triplet?.lastSuccessAt,
+                          pairedAtMs: app.pairedAtMs,
+                          confirmedCount: app.triplet?.m ?? 0)
     }
 
     var body: some View {
@@ -111,7 +111,9 @@ struct StorageDetailScreen: View {
                 // Android 信息卡：状态点 9、点与名称间距 10、名称与正文间距 10。
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 10) {
-                        Circle().fill(app.pairingLost ? PPColor.act : PPColor.safe).frame(width: 9, height: 9)
+                        // #1904：状态点跟正文同一份连接状态——绿=真的连上了、红=要人处理、
+                        // 琥珀=重连中、灰=没有连接。
+                        Circle().fill(storageDetailDotColor(app.connection.status)).frame(width: 9, height: 9)
                         Text(app.desktopName ?? L.s("storage_device_default")).font(PPFont.bodyBold)
                     }
                     Text(detailBody).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
@@ -147,4 +149,60 @@ struct StorageDetailScreen: View {
         .navigationTitle(L.s("storage_computer"))
         .navigationBarTitleDisplayMode(.inline)
     }
+}
+
+// MARK: - #1904 详情卡正文与状态点（纯函数，可单测；对位 Android #1883）
+
+/// 详情卡正文的裁决——纯函数，可单测。
+///
+/// 第一行说哪句只由唯一连接状态决定：「已连接」只在那一个状态出现，其余状态一律只说「未连接」。
+/// 配对已失效时正文**只有一行**：那张卡已经说「配对已失效」，再拼一行「配对 X · 已备份 N 张」
+/// 就是同一张卡自相矛盾。
+struct StorageDetailLines: Equatable {
+    let statusKey: String
+    /// 第一行是否带「最近同步 X」这个参数（「配对已失效」不带）。
+    let takesLastSuccess: Bool
+    /// 是否再拼第二行「配对 X · 已备份 N 张」（配对日期未知时不拼）。
+    let showPairedLine: Bool
+}
+
+func storageDetailLines(status: ConnectionState.Status, pairedAtMs: Int64?) -> StorageDetailLines {
+    // 配对记录里 0 = 未知（老 pairing 升级上来）——不硬凑第二行，不编数据。
+    let hasPairedAt = (pairedAtMs ?? 0) > 0
+    switch status {
+    case .pairingLost:
+        return StorageDetailLines(statusKey: "storage_detail_lost", takesLastSuccess: false, showPairedLine: false)
+    case .connected:
+        return StorageDetailLines(statusKey: "storage_detail_connected", takesLastSuccess: true, showPairedLine: hasPairedAt)
+    case .reconnecting, .offline, .unknown:
+        return StorageDetailLines(statusKey: "storage_detail_offline", takesLastSuccess: true, showPairedLine: hasPairedAt)
+    }
+}
+
+/// 详情卡状态点颜色——跟正文同一份连接状态，不再只看配对有效性。
+/// 绿=真的连上了、红=要人处理、琥珀=重连中、灰=没有连接（tokens 的 idle = offline peer）。
+func storageDetailDotColor(_ status: ConnectionState.Status) -> Color {
+    switch status {
+    case .connected: return PPColor.safe
+    case .pairingLost: return PPColor.act
+    case .reconnecting: return PPColor.waiting
+    case .offline, .unknown: return PPColor.idle
+    }
+}
+
+/// 详情卡正文——连接表述从唯一状态 `ConnectionState` 取，与照片页同一个事实源。
+/// 配对已失效直接说失效；真的连上了才说「已连接」；其余（断开 / 重连中 / 还没连上）
+/// 只说「未连接」+ 最近同步——不再把「配对还有效」当成「电脑连得上」。
+/// 行数与参数由 `storageDetailLines` 裁决，本函数只做文案映射。
+func storageDetailBody(_ connection: ConnectionState,
+                       lastSuccessAt: Int64?,
+                       pairedAtMs: Int64?,
+                       confirmedCount: Int64) -> String {
+    let lines = storageDetailLines(status: connection.status, pairedAtMs: pairedAtMs)
+    let line1 = lines.takesLastSuccess
+        ? L.f(lines.statusKey, LastSuccessText.fragment(lastSuccessAt))
+        : L.s(lines.statusKey)
+    guard lines.showPairedLine, let ms = pairedAtMs else { return line1 }
+    let line2 = L.f("storage_detail_paired", PairedDateText.format(pairedAt: ms), confirmedCount.formatted())
+    return line1 + "\n" + line2
 }

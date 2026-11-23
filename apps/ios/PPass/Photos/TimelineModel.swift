@@ -38,7 +38,14 @@ final class TimelineModel: ObservableObject {
             switch event {
             case .invalidated: Task { await self.refreshFromSignal() }
             case .fallbackTick: Task { await self.refreshFallback() }
-            case .state(let s): self.live = s
+            case .state(let s):
+                self.live = s
+                // #1904（对位 Android #1883）：初始整页加载失败留下的 error 不会自己消失，
+                // 而详情页这时已经说「已连接」——照片页不能停在「连不上」上。连上就把那一页补回来：
+                // 成功即清 error（refreshFromSignal 会做），失败保留（页面照旧说「无法连接电脑」，那是实话）。
+                if s.connected, self.error != nil {
+                    Task { await self.refreshFromSignal() }
+                }
             }
         }
     }
