@@ -33,9 +33,38 @@ class PPScreenWiringTest {
     // 嵌套函数有缩进，不匹配，所以不会提前截断。
     private fun topLevelBody(path: String, funSig: String): String {
         val text = File(sourceRoot, path).readText()
-        val after = text.substringAfter(funSig, "")
+        // #1930：签名找不到时必须立刻失败——过去找不到签名会静默返回空串，
+        // 函数重命名后 `!body.contains("PPScreen")` 会假绿，等于这条守卫悄悄失效。
+        check(text.contains(funSig)) { "在 $path 中找不到函数签名：$funSig" }
+        val after = text.substringAfter(funSig)
         val next = Regex("""\n(?:private |internal |public |override |suspend )?fun [A-Za-z]""").find(after)
         return if (next != null) after.substring(0, next.range.first) else after
+    }
+
+    // 只保留会执行的代码行：丢掉 `//`、`*`、`/*` 开头的注释行，避免把「不再嵌套 PPScreen」
+    // 这类解释文字当成真的调用。
+    private fun codeLines(path: String): List<String> =
+        File(sourceRoot, path).readLines()
+            .map { it.trim() }
+            .filterNot { it.startsWith("//") || it.startsWith("*") || it.startsWith("/*") }
+
+    // 从 "name(" 起按括号配对截出整个调用块，比 substringBefore 之类的启发式截断可靠。
+    private fun callBlock(text: String, call: String): String {
+        val start = text.indexOf(call)
+        check(start >= 0) { "在文件中找不到调用：$call" }
+        val open = text.indexOf('(', start)
+        check(open >= 0) { "找不到调用括号：$call" }
+        var depth = 0
+        for (i in open until text.length) {
+            when (text[i]) {
+                '(' -> depth++
+                ')' -> {
+                    depth--
+                    if (depth == 0) return text.substring(start, i + 1)
+                }
+            }
+        }
+        error("调用括号未闭合：$call")
     }
 
     @Test
@@ -82,6 +111,66 @@ class PPScreenWiringTest {
         assertTrue(
             "MainActivity 必须按 photoViewerOpen 切换 TwoTabs 背景色",
             tabsCall.contains("background = twoTabsBackground(viewerOpen = photoViewerOpen)"),
+        )
+    }
+
+    @Test(expected = IllegalStateException::class)
+    fun top_level_body_fails_fast_when_signature_is_missing() {
+        // #1930：签名拼错/函数被改名时必须抛错，不能静默返回空串让调用方误判为绿。
+        topLevelBody("ui/PhotosScreen.kt", "fun 不存在的函数签名(")
+    }
+
+    @Test
+    fun viewer_screens_have_no_nested_ppscreen_anywhere_in_code() {
+        // #1926 的补充：不只看 PhotoViewer / VideoScreen 两个函数体，还扫描两个文件里所有
+        // 非注释代码行——查看器子树任何位置（PhotosScreen 本体、MediaViewer、PhotoViewer…）
+        // 都不允许再套一层 PPScreen，否则外层安全区与系统栏外观会被第二层抢走。
+        val violations = mutableListOf<String>()
+        for (path in listOf("ui/PhotosScreen.kt", "ui/VideoScreen.kt")) {
+            codeLines(path).forEach { line ->
+                if (line.contains("PPScreen(") || line.contains("PPScreen {")) {
+                    violations += "$path: $line"
+                }
+            }
+        }
+        assertTrue("查看器文件全文件代码不得嵌套 PPScreen（注释除外）：$violations", violations.isEmpty())
+    }
+
+    @Test
+    fun viewer_open_is_reported_in_the_same_frame_not_deferred_before_recomposition() {
+        val photos = File(sourceRoot, "ui/PhotosScreen.kt").readText()
+        // 滞后写法：把 onViewerOpenChange 塞进 LaunchedEffect，要等重组后的下一帧协程才通知
+        // 外层，打开/关闭查看器时 TwoTabs 背景色与系统栏图标会晚一帧（闪烁）。
+        assertTrue(
+            "onViewerOpenChange 不得放在 LaunchedEffect 里延后一帧",
+            !Regex("""LaunchedEffect\s*\([^)]*\)\s*\{[^}]*onViewerOpenChange""", RegexOption.DOT_MATCHES_ALL)
+                .containsMatchIn(photos),
+        )
+        val code = codeLines("ui/PhotosScreen.kt").joinToString("\n")
+        assertTrue("查看器开关必须在同一帧同步调用 onViewerOpenChange(", code.contains("onViewerOpenChange("))
+        assertTrue(
+            "打开查看器必须走同一帧的 updateViewer 收口",
+            code.contains("updateViewer(MediaViewerSession.open("),
+        )
+        assertTrue("关闭查看器必须走同一帧的 updateViewer 收口", code.contains("updateViewer(null)"))
+    }
+
+    @Test
+    fun main_activity_wires_photo_viewer_open_into_two_tabs_background() {
+        val mainActivity = File(sourceRoot, "MainActivity.kt").readText()
+        val photosCall = callBlock(mainActivity, "PhotosScreen(")
+        val twoTabsCall = callBlock(mainActivity, "TwoTabs(")
+        assertTrue(
+            "PhotosScreen 必须把查看器开关同步回写到 photoViewerOpen",
+            photosCall.contains("onViewerOpenChange = { photoViewerOpen = it }"),
+        )
+        assertTrue(
+            "TwoTabs 必须按 photoViewerOpen 切换背景色",
+            twoTabsCall.contains("background = twoTabsBackground(viewerOpen = photoViewerOpen)"),
+        )
+        assertTrue(
+            "查看器打开时必须隐藏底部 tab 栏",
+            twoTabsCall.contains("showTabBar = !photoViewerOpen && !storageDetailOpen"),
         )
     }
 

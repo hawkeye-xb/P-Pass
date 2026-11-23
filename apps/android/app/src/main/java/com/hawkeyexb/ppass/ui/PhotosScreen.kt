@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -345,20 +346,32 @@ internal fun PhotosScreen(
     // 查看器页序是打开瞬间的过滤结果快照，不受订阅的后续刷新重排。
     val localNodeId = loader?.localNodeIdHex()
     val shown = filterAssetsBySource(items, filter, localNodeId)
-    val currentViewer = viewer
-    LaunchedEffect(currentViewer) { onViewerOpenChange(currentViewer != null) }
+    // UI-11：打开/关闭查看器必须同一帧同步通知外层（MainActivity 的 photoViewerOpen），
+    // 不能再经 LaunchedEffect 等重组后的下一帧才通知——否则 TwoTabs 背景色与系统栏图标
+    // 会晚一帧切换，肉眼看到闪烁。所有 viewer 写入点都收口到 updateViewer。
+    val updateViewer: (MediaViewerSession?) -> Unit = { next ->
+        val resolved = if (loader != null) next else null
+        viewer = resolved
+        onViewerOpenChange(resolved != null)
+    }
+    // 配对断开会让 loader 置空、查看器不再渲染；同步兜底归零，避免 photoViewerOpen 悬空为
+    // true（这里同样不能用 LaunchedEffect，否则又晚一帧）。
+    SideEffect {
+        if (viewer != null && loader == null) updateViewer(null)
+    }
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose { onViewerOpenChange(false) }
     }
+    val currentViewer = viewer
     if (currentViewer != null && loader != null) {
         // Android 系统边缘返回先到这里；HorizontalPager 只处理内容区域横滑。
         // 查看器关闭后本 Handler 不在 composition，根页面的系统返回继续由 Activity 接管。
         BackHandler(
             enabled = viewerBackAction(viewerOpen = viewer != null) == ViewerBackAction.CloseViewer,
         ) {
-            viewer = null
+            updateViewer(null)
         }
-        MediaViewer(loader, localMedia, currentViewer, localNodeId) { viewer = null }
+        MediaViewer(loader, localMedia, currentViewer, localNodeId) { updateViewer(null) }
         return
     }
 
@@ -531,7 +544,7 @@ internal fun PhotosScreen(
                             localMedia, asset,
                             isMine = localNodeId?.let { asset.sourceDeviceOrNull() == it } == true,
                         ) {
-                            viewer = MediaViewerSession.open(shown, asset.hash)
+                            updateViewer(MediaViewerSession.open(shown, asset.hash))
                         }
                     }
                 }
