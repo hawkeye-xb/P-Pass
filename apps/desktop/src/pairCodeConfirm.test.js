@@ -63,9 +63,13 @@ const row = (hexByte, name) => ({
   expired: false,
 });
 
-/** 常驻服务正常的桌面；`d.pending` 就是 daemon 主人队列（撤回 = 从里面删）。 */
+/**
+ * 常驻服务正常的桌面；`d.pending` 就是 daemon 主人队列（撤回 = 从里面删）。
+ * `confirmDrop`：confirm 失败时 daemon 是否已经撤掉这次申请（码错 = 撤；
+ * 连不上后台的失败 = 队列原样还在，见 #1875）。
+ */
 function desktop() {
-  const d = { pending: [] };
+  const d = { pending: [], confirmDrop: true };
   invokeMock.mockImplementation(async (cmd, args) => {
     switch (daemonMethodOf(cmd) ? "daemon" : cmd) {
       case "wizard_state":
@@ -93,10 +97,12 @@ function desktop() {
           case "pairing.confirm":
             if (d.confirmGate) await d.confirmGate;
             if (d.confirmError) {
-              // 真实时序：daemon 先作废这次申请（撤行 + 推 pending_changed，前端随即 refresh），
-              // 然后才回复 confirm 的错误。854bb867 就是在这一步按「队列空了」把弹窗关掉的。
-              d.pending = d.pending.filter((p) => p.node_id !== args?.node_id);
-              await pushPendingChanged();
+              if (d.confirmDrop) {
+                // 真实时序：daemon 先作废这次申请（撤行 + 推 pending_changed，前端随即 refresh），
+                // 然后才回复 confirm 的错误。854bb867 就是在这一步按「队列空了」把弹窗关掉的。
+                d.pending = d.pending.filter((p) => p.node_id !== args?.node_id);
+                await pushPendingChanged();
+              }
               throw d.confirmError;
             }
             return d.confirmReply ?? { decided: true };
@@ -130,6 +136,16 @@ async function pushPendingChanged() {
 
 // #1118：每一行的确认按钮（输入手机上的验证码后才可点；行在不在看按钮在不在）。
 const allowButtons = () => screen.queryAllByRole("button", { name: "允许加入" });
+
+/** #1875：这个元素在不在 inert 树里（弹窗打开时 dialog.svelte 会把背景整树标 inert）。 */
+function isInert(el) {
+  let cur = el;
+  while (cur) {
+    if (cur.inert === true || (cur.hasAttribute && cur.hasAttribute("inert"))) return true;
+    cur = cur.parentElement;
+  }
+  return false;
+}
 
 /** 点「显示配对二维码」→ 手机扫码入队 → 事件到达，确认弹窗打开。 */
 async function scanned(d, rows) {
@@ -403,5 +419,102 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     const id = within(dialog).getByTestId("desktop-fingerprint");
     expect(id.textContent).toContain("电脑标识");
     expect(id.textContent).toContain("AB12 CD34");
+  });
+
+  // #1875：弹窗打开期间背景整树 inert（dialog.svelte），顶层 toast 读屏和键盘都到不了。
+  // 非码错的提交失败必须落在弹窗内：非 inert 的 role="alert" 播报 + 可点的「重启后台服务」。
+  // 连不上后台时 daemon 没处理，申请还在队列里（confirmDrop: false）。
+  // 反证：错误改回 flashError（顶层 toast）、恢复按钮只放 toast ⇒ 红。
+  it("连不上后台：错误在弹窗内播报，恢复按钮可点，背景仍 inert", async () => {
+    const d = desktop();
+    d.confirmDrop = false;
+    d.confirmError = JSON.stringify({
+      key: "ui.err_connect",
+      params: { err: "Connection refused", method: "pairing.confirm" },
+    });
+    render(App);
+    await settle();
+    await openRow(d, [row("a", "妈妈的手机")]);
+    await fireEvent.input(screen.getByTestId("pair-code-input"), { target: { value: "123456" } });
+    await fireEvent.click(screen.getByRole("button", { name: "允许加入" }));
+    await settle();
+    await settle();
+
+    // 弹窗没有关，背景 inert 照旧
+    expect(dialogOpen()).toBe(true);
+    expect(document.querySelectorAll("[inert]").length).toBeGreaterThan(0);
+
+    const dialog = screen.getByTestId("pair-code-input").closest("[role='dialog']");
+    const alert = within(dialog).getByRole("alert");
+    expect(isInert(alert)).toBe(false);
+    expect(alert.textContent).toContain("没有连上后台服务");
+    expect(alert.textContent).toContain("connect"); // 错误代码随行给出
+
+    // 恢复按钮在弹窗内、可聚焦、可点
+    const restart = within(dialog).getByRole("button", { name: "重启后台服务" });
+    expect(isInert(restart)).toBe(false);
+    expect(restart.disabled).toBe(false);
+    restart.focus();
+    expect(document.activeElement).toBe(restart);
+    await fireEvent.click(restart);
+    await settle();
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "restart_daemon_process")).toBe(true);
+    // 服务回来后再看这条错误已过时
+    expect(screen.queryByTestId("pair-confirm-error")).toBeNull();
+  });
+
+  // 反证：oninput / onpaste 不清错误 ⇒ 这条红。
+  it("改验证码即清掉上一次的失败提示", async () => {
+    const d = desktop();
+    d.confirmDrop = false;
+    d.confirmError = JSON.stringify({ key: "ui.err_connect", params: {} });
+    render(App);
+    await settle();
+    await openRow(d, [row("a", "妈妈的手机")]);
+    await fireEvent.input(screen.getByTestId("pair-code-input"), { target: { value: "123456" } });
+    await fireEvent.click(screen.getByRole("button", { name: "允许加入" }));
+    await settle();
+    await settle();
+    expect(screen.getByTestId("pair-confirm-error")).toBeTruthy();
+    await fireEvent.input(screen.getByTestId("pair-code-input"), { target: { value: "12345" } });
+    await settle();
+    expect(screen.queryByTestId("pair-confirm-error")).toBeNull();
+  });
+
+  // 反证：所有错误都给「重启后台服务」⇒ 这条红。
+  it("与后台连接无关的失败：弹窗内播报，但不给重启按钮", async () => {
+    const d = desktop();
+    d.confirmDrop = false;
+    d.confirmError = "boom";
+    render(App);
+    await settle();
+    await openRow(d, [row("a", "妈妈的手机")]);
+    await fireEvent.input(screen.getByTestId("pair-code-input"), { target: { value: "123456" } });
+    await fireEvent.click(screen.getByRole("button", { name: "允许加入" }));
+    await settle();
+    await settle();
+    const dialog = screen.getByTestId("pair-code-input").closest("[role='dialog']");
+    const alert = within(dialog).getByRole("alert");
+    expect(isInert(alert)).toBe(false);
+    expect(alert.textContent).toContain("配对请求没有处理");
+    expect(within(dialog).queryByRole("button", { name: "重启后台服务" })).toBeNull();
+  });
+
+  // #1875 不回归：码错仍是 failed 终态 + 「重新显示二维码」，且不提供重启服务。
+  it("码错的失败终态不回归，也不提供重启按钮", async () => {
+    const d = desktop();
+    d.confirmError = JSON.stringify({ key: "ui.err_pair_code_wrong", params: {} });
+    render(App);
+    await settle();
+    await openRow(d, [row("a", "妈妈的手机")]);
+    await fireEvent.input(screen.getByTestId("pair-code-input"), { target: { value: "654321" } });
+    await fireEvent.click(screen.getByRole("button", { name: "允许加入" }));
+    await settle();
+    await settle();
+    const block = screen.getByTestId("pending-request");
+    expect(block.dataset.phase).toBe("failed");
+    expect(block.textContent).toContain("验证码不正确");
+    expect(screen.getByRole("button", { name: "重新显示二维码" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重启后台服务" })).toBeNull();
   });
 });
