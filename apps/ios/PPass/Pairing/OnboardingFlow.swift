@@ -33,6 +33,12 @@ struct OnboardingFlow: View {
             }
         }
         .onAppear(perform: applyRoute)
+        // #1964：电脑端移除本机配对、被拒即清理之后说明一次（对位 Android PairingRemovedNoticeStore）。
+        .alert(L.s("pairing_lost_title"), isPresented: $app.showPairingRemovedNotice) {
+            Button(L.s("missing_source_notice_dismiss")) { app.dismissPairingRemovedNotice() }
+        } message: {
+            Text(L.s("pairing_lost_body"))
+        }
     }
 
     /// 同 Android WelcomeScreen：顶部字标「P-PASS」，标题衬线 36 压在下半屏，三步是三行 ink-40 小字（不成卡），
@@ -98,6 +104,12 @@ struct OnboardingFlow: View {
     }
 
     private func applyRoute() {
+        // #1964：配对失效卡「重新连接」时相机已授权 → 直达扫码页（对位 Android #355），不停在欢迎页。
+        if app.resumeToScan {
+            app.consumeResumeToScan()
+            step = .scan
+            return
+        }
         switch LaunchRoute.current {
         case .scan: step = .scan
         case .manual: step = .manual(fromScan: false)
@@ -180,35 +192,13 @@ struct PairStatusScreen: View {
     let onRetry: () -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 14) {
-                // 同 Android PairStatusScreen：只有标题 + 正文，不加状态图标；等待时保留系统转圈（原生的进行中指示）。
-                switch step {
-                case .waiting:
-                    // 10-29 文案 B8：等待页只有标题和转圈。
-                    ProgressView().controlSize(.large).padding(.bottom, 6)
-                    message(title: L.s("pair_waiting_title"))
-                case .code(let shown):
-                    PairCodeView(shown: shown)
-                case .refused(let titleKey, let note, let errorCode):
-                    // 10-29 文案 B5：正文就是原因行（自带操作）；电脑上点了拒绝时没有原因行。
-                    message(title: L.s(titleKey), body: note,
-                            footnote: errorCode.map { L.f("error_code_line", $0) })
-                case .needsUpdate(let side):
-                    // #1069：配对过程中发现版本不兼容——标题「需要更新」，正文说清是哪一端的 P-Pass。
-                    message(title: L.s("pair_needs_update_title"),
-                            body: L.s(side == .phone ? "state_waiting_phone_outdated" : "state_waiting_desktop_outdated"))
-                case .failed(let kind):
-                    // #1264：异常原文不上屏（tokens.json rules 第 10 条），只在日志里。10-29 文案 B7：按种类各一页。
-                    switch kind {
-                    case .unreachable: message(title: L.s("pair_failed_title"), body: L.s("pair_failed_body"))
-                    case .notACode: message(title: L.s("not_a_code"))
-                    case .saveFailed: message(title: L.s("pair_lapsed_title"), body: L.s("pair_save_failed"))
-                    }
-                }
+        // #1964：对位 Android 的垂直居中；`minHeight: geo.size.height` 让内容矮时居中、大字号超高时照常可滚，不被裁掉。
+        GeometryReader { geo in
+            ScrollView {
+                content
+                    .padding(34)
+                    .frame(maxWidth: .infinity, minHeight: geo.size.height)
             }
-            .padding(34)
-            .frame(maxWidth: .infinity)
         }
         .ppScreen()
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -221,6 +211,35 @@ struct PairStatusScreen: View {
                 }
             }
             .padding(.horizontal, 34).padding(.bottom, 24)
+        }
+    }
+
+    /// 同 Android PairStatusScreen：只有标题 + 正文，不加状态图标；等待时保留系统转圈（原生的进行中指示）。
+    @ViewBuilder private var content: some View {
+        VStack(spacing: 14) {
+            switch step {
+            case .waiting:
+                // 10-29 文案 B8：等待页只有标题和转圈。
+                ProgressView().controlSize(.large).padding(.bottom, 6)
+                message(title: L.s("pair_waiting_title"))
+            case .code(let shown):
+                PairCodeView(shown: shown)
+            case .refused(let titleKey, let note, let errorCode):
+                // 10-29 文案 B5：正文就是原因行（自带操作）；电脑上点了拒绝时没有原因行。
+                message(title: L.s(titleKey), body: note,
+                        footnote: errorCode.map { L.f("error_code_line", $0) })
+            case .needsUpdate(let side):
+                // #1069：配对过程中发现版本不兼容——标题「需要更新」，正文说清是哪一端的 P-Pass。
+                message(title: L.s("pair_needs_update_title"),
+                        body: L.s(side == .phone ? "state_waiting_phone_outdated" : "state_waiting_desktop_outdated"))
+            case .failed(let kind):
+                // #1264：异常原文不上屏（tokens.json rules 第 10 条），只在日志里。10-29 文案 B7：按种类各一页。
+                switch kind {
+                case .unreachable: message(title: L.s("pair_failed_title"), body: L.s("pair_failed_body"))
+                case .notACode: message(title: L.s("not_a_code"))
+                case .saveFailed: message(title: L.s("pair_lapsed_title"), body: L.s("pair_save_failed"))
+                }
+            }
         }
     }
 

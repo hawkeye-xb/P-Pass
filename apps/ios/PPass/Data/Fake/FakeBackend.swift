@@ -22,7 +22,8 @@ enum FakeBackend {
     static func make(_ s: FakeScenario = .current) -> Backend {
         let media = FakeMediaLibrary(scenario: s)
         return Backend(isDemo: true, timeline: FakeTimeline(scenario: s), live: FakeTimelineLive(), media: media,
-                       pairing: FakePairing(scenario: s), engine: FakeEngine(scenario: s, media: media))
+                       pairing: FakePairing(scenario: s), engine: FakeEngine(scenario: s, media: media),
+                       pairingRemovedNotice: FakePairingRemovedNotice())
     }
 }
 
@@ -112,6 +113,13 @@ final class FakePairing: PairingService {
 }
 
 enum FakeBackendError: Error { case demoHasNoLedger }
+
+/// #1964：演示 / 单测用的「有一条待说明的移除」；界面读到就会弹一次说明。
+final class FakePairingRemovedNotice: PairingRemovedNoticeService {
+    var pendingFlag = false
+    func pending() -> Bool { pendingFlag }
+    func dismiss() { pendingFlag = false }
+}
 
 final class FakeEngine: BackupEngine {
     private let scenario: FakeScenario

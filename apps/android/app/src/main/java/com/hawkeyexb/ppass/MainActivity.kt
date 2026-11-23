@@ -953,6 +953,7 @@ fun PPassApp() {
                     body = null,
                     action = androidx.compose.ui.res.stringResource(R.string.cancel) to
                         { screen = Screen.Welcome },
+                    loading = true,
                 )
                 is PairPhase.Code -> PairCodeScreen(
                     code = ph.code,

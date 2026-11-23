@@ -6,15 +6,20 @@ package com.hawkeyexb.ppass.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,51 +55,60 @@ fun WelcomeScreen(onScan: () -> Unit, onManual: () -> Unit) {
         androidx.compose.material3.ProvideTextStyle(
             androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
         ) {
-        Column(
-            Modifier.fillMaxSize().padding(32.dp),
-        ) {
-            Text(
-                "P-PASS",
-                fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                letterSpacing = 2.5.sp, color = PPColor.Ink60,
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                stringResource(R.string.welcome_headline),
-                fontSize = 36.sp, lineHeight = 44.sp,
-                fontFamily = PPFont.Serif, color = PPColor.Ink,
-            )
-            Spacer(Modifier.height(12.dp))
-            Text(
-                stringResource(R.string.welcome_sub),
-                fontSize = PPSize.BodyMin, lineHeight = 28.sp, color = PPColor.Ink60,
-            )
-            Spacer(Modifier.height(20.dp))
-            // T-080 layout v1: 三步说明——1 打开电脑端 / 2 扫码 / 3 什么都不用做。
-            Text(
-                stringResource(R.string.welcome_step1),
-                fontSize = 15.sp, lineHeight = 25.sp, color = PPColor.Ink40,
-            )
-            Text(
-                stringResource(R.string.welcome_step2),
-                fontSize = 15.sp, lineHeight = 25.sp, color = PPColor.Ink40,
-            )
-            Text(
-                stringResource(R.string.welcome_step3),
-                fontSize = 15.sp, lineHeight = 25.sp, color = PPColor.Ink40,
-            )
-            Spacer(Modifier.height(40.dp))
-            PrimaryButton(stringResource(R.string.welcome_scan), onScan)
-            // #421：扫不了码的人（不给摄像头 / 摄像头坏了）在这一屏就有退路，
-            // 与扫码页底部同一行文字链接、同一句文案。
-            Text(
-                stringResource(R.string.scan_manual_link),
-                fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink60,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-                    .clickable(onClick = onManual)
-                    .padding(26.dp, 16.dp, 26.dp, 8.dp),
-            )
+        // #1964：系统最大字号下正文会高于屏幕——整屏可纵向滚动；内容矮时用 SpaceBetween 把字标顶到上、主体压在下（对位 iOS）。
+        // 不能在可滚动的 Column 里用 weight 占位：滚动的无限高度约束会直接崩；heightIn(min = maxHeight) + SpaceBetween 是同一效果的合法写法。
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            Column(
+                Modifier.fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .heightIn(min = maxHeight)
+                    .padding(32.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    "P-PASS",
+                    fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                    letterSpacing = 2.5.sp, color = PPColor.Ink60,
+                )
+                Column(Modifier.fillMaxWidth()) {
+                    Text(
+                        stringResource(R.string.welcome_headline),
+                        fontSize = 36.sp, lineHeight = 44.sp,
+                        fontFamily = PPFont.Serif, color = PPColor.Ink,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        stringResource(R.string.welcome_sub),
+                        fontSize = PPSize.BodyMin, lineHeight = 28.sp, color = PPColor.Ink60,
+                    )
+                    Spacer(Modifier.height(20.dp))
+                    // T-080 layout v1: 三步说明——1 打开电脑端 / 2 扫码 / 3 什么都不用做。
+                    Text(
+                        stringResource(R.string.welcome_step1),
+                        fontSize = 15.sp, lineHeight = 25.sp, color = PPColor.Ink40,
+                    )
+                    Text(
+                        stringResource(R.string.welcome_step2),
+                        fontSize = 15.sp, lineHeight = 25.sp, color = PPColor.Ink40,
+                    )
+                    Text(
+                        stringResource(R.string.welcome_step3),
+                        fontSize = 15.sp, lineHeight = 25.sp, color = PPColor.Ink40,
+                    )
+                    Spacer(Modifier.height(40.dp))
+                    PrimaryButton(stringResource(R.string.welcome_scan), onScan)
+                    // #421：扫不了码的人（不给摄像头 / 摄像头坏了）在这一屏就有退路，
+                    // 与扫码页底部同一行文字链接、同一句文案。
+                    Text(
+                        stringResource(R.string.scan_manual_link),
+                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink60,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                            .clickable(onClick = onManual)
+                            .padding(26.dp, 16.dp, 26.dp, 8.dp),
+                    )
+                }
+            }
         }
         }
     }
@@ -103,44 +117,60 @@ fun WelcomeScreen(onScan: () -> Unit, onManual: () -> Unit) {
 /**
  * Pairing in flight / refused / failed states share one screen. [body] null = title only (10-29 copy
  * B5/B7/B8); [footnote] = the small "error code" line under the body (B13).
+ * [loading] = 正在等电脑确认（`PairPhase.Asking`）：标题上方画系统转圈（对位 iOS ProgressView）。
  */
 @Composable
-fun PairStatusScreen(title: String, body: String?, action: Pair<String, () -> Unit>?, footnote: String? = null) {
+fun PairStatusScreen(
+    title: String,
+    body: String?,
+    action: Pair<String, () -> Unit>?,
+    footnote: String? = null,
+    loading: Boolean = false,
+) {
     PPScreen {
         androidx.compose.material3.ProvideTextStyle(
             androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
         ) {
-        Column(
-            Modifier.fillMaxSize().padding(34.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Text(
-                title, fontSize = 30.sp, fontFamily = PPFont.Serif,
-                color = PPColor.Ink, textAlign = TextAlign.Center,
-            )
-            if (!body.isNullOrEmpty()) {
-                Spacer(Modifier.height(14.dp))
+        // #1964：内容矮时垂直居中（`heightIn(min = maxHeight)` + Center），大字号超高时照常可滚，不被裁掉。
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            Column(
+                Modifier.fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .heightIn(min = maxHeight)
+                    .padding(34.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                if (loading) {
+                    CircularProgressIndicator(color = PPColor.Ink60, modifier = Modifier.padding(bottom = 18.dp))
+                }
                 Text(
-                    body, fontSize = PPSize.BodyMin, lineHeight = 26.sp,
-                    color = PPColor.Ink40, textAlign = TextAlign.Center,
+                    title, fontSize = 30.sp, fontFamily = PPFont.Serif,
+                    color = PPColor.Ink, textAlign = TextAlign.Center,
                 )
-            }
-            if (footnote != null) {
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    footnote, fontSize = 14.sp, lineHeight = 21.sp,
-                    color = PPColor.Ink40, textAlign = TextAlign.Center,
-                )
-            }
-            if (action != null) {
-                Spacer(Modifier.height(36.dp))
-                OutlinedButton(
-                    onClick = action.second,
-                    modifier = Modifier.fillMaxWidth().height(58.dp),
-                    shape = RoundedCornerShape(PPSize.RadiusControl),
-                    border = androidx.compose.foundation.BorderStroke(1.5.dp, PPColor.BorderStrong),
-                ) { Text(action.first, fontSize = 18.sp, color = PPColor.Ink60) }
+                if (!body.isNullOrEmpty()) {
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        body, fontSize = PPSize.BodyMin, lineHeight = 26.sp,
+                        color = PPColor.Ink40, textAlign = TextAlign.Center,
+                    )
+                }
+                if (footnote != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        footnote, fontSize = 14.sp, lineHeight = 21.sp,
+                        color = PPColor.Ink40, textAlign = TextAlign.Center,
+                    )
+                }
+                if (action != null) {
+                    Spacer(Modifier.height(36.dp))
+                    OutlinedButton(
+                        onClick = action.second,
+                        modifier = Modifier.fillMaxWidth().height(58.dp),
+                        shape = RoundedCornerShape(PPSize.RadiusControl),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, PPColor.BorderStrong),
+                    ) { Text(action.first, fontSize = 18.sp, color = PPColor.Ink60) }
+                }
             }
         }
         }

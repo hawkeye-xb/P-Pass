@@ -194,6 +194,21 @@ protocol PairingService: AnyObject {
     func clearLocal() async
 }
 
+/// #1964：电脑端移除本机配对、被拒即清理之后的一次性说明（对位 Android `PairingRemovedNoticeStore` 的读取 / 清除两面）。
+/// 单独一个端口而不是挂在 `PairingService` 上：`LivePairing` 是核心路径（`.github/core-paths.txt`），这个提示只读一个标记文件。
+protocol PairingRemovedNoticeService {
+    /// 有没有还没向用户说明的一次移除。
+    func pending() -> Bool
+    /// 用户看到了说明（或已重新配对）：清掉标记，不再说明。
+    func dismiss()
+}
+
+/// 不提供说明的装配（测试 / 演示的旧构造点）：永远没有待说明的移除。
+struct NoPairingRemovedNotice: PairingRemovedNoticeService {
+    func pending() -> Bool { false }
+    func dismiss() {}
+}
+
 extension PairingService {
     /// 自动化 / 无界面调用：总是连接、不显示验证码。
     func pair(code: String) async -> PairOutcome { await pair(code: code, onCode: { _ in }) }
@@ -289,6 +304,8 @@ struct Backend {
     let media: MediaLibrary
     let pairing: PairingService
     let engine: BackupEngine
+    /// #1964：被移除配对的一次性说明。旧构造点不传 = 永远不说明。
+    var pairingRemovedNotice: PairingRemovedNoticeService = NoPairingRemovedNotice()
 }
 
 /// 配对串的形状校验（对位 Android ScanScreen 的 `startsWith("ppf://pair")`）。手动输入与扫码是同一个字符串。
