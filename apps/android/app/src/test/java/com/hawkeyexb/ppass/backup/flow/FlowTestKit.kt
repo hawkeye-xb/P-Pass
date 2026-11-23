@@ -329,8 +329,12 @@ internal class Rig(
     var conditionsHook: (() -> Conditions)? = null
     var pid: PairingId? = PairingId("e1")
 
-    /** #459：完整相册权限（false = 部分授权 / 没授权：「查不到」不能当「被删了」）。 */
-    var fullMediaAccess = true
+    /** #459 / #1771：完整相册权限（false = 部分授权 / 没授权：「查不到」不能当「被删了」）。委托给来源替身。 */
+    var fullMediaAccess: Boolean
+        get() = media.absenceTrusted
+        set(value) {
+            media.absenceTrusted = value
+        }
     val logs = mutableListOf<String>()
 
     /** #522：系统额度时钟（开机序号 + elapsedRealtime）。引擎和假前台读同一个。 */
@@ -391,7 +395,6 @@ internal class Rig(
                 }
             }
         },
-        mediaAbsenceTrusted = { fullMediaAccess },
         pairingId = { pid },
         scope = scope,
         io = io,

@@ -83,9 +83,12 @@ class FakeMedia(photos: List<FakePhoto> = emptyList(), var scope: Set<Long>? = s
     var existingIdsUnreadable = false
     var existingIdsCalls = 0
 
+    /** #1771：缺席是否可信（false = 非完整相册权限 / 枚举不完整：查不到不能证明被删）。 */
+    var absenceTrusted = true
+
     override fun existingIds(mediaIds: Collection<Long>): Set<Long>? {
         existingIdsCalls++
-        if (existingIdsUnreadable) return null
+        if (!absenceTrusted || existingIdsUnreadable) return null
         val present = photos.mapTo(HashSet()) { it.mediaId }
         return mediaIds.filterTo(HashSet()) { it in present }
     }
