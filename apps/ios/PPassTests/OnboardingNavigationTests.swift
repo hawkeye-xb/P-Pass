@@ -157,6 +157,14 @@ final class OnboardingNavigationTests: XCTestCase {
         }
     }
 
+    /// #1964：扫码页首次申请相机权限被拒时自动去手动输入页（对位 Android），之前拒过则停在说明页（仍有底部链接）。
+    /// 反证：把 `.task` 里的 `onManual()` 去掉，本条红。
+    func testScanScreenRoutesAFreshCameraDenialToManualEntry() throws {
+        let scan = try String(contentsOf: RepoPaths.root.appendingPathComponent("apps/ios/PPass/Pairing/ScanScreen.swift"), encoding: .utf8)
+        XCTAssertTrue(scan.contains("deniedOnFirstAsk"), "首次拒绝要单独分出来")
+        XCTAssertTrue(scan.contains("onManual()"), "首次拒绝 → 自动去手动输入页")
+    }
+
     /// 决定页标题下一行说明照片传到哪台电脑（对位 Android decision_destination）；没有电脑名时退回默认叫法。
     func testDecisionPageSaysWherePhotosGo() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -164,5 +172,69 @@ final class OnboardingNavigationTests: XCTestCase {
         XCTAssertTrue(decision.contains("L.f(\"decision_destination\", computerName)"))
         XCTAssertTrue(decision.contains("return L.s(\"storage_device_default\")"))
         XCTAssertNotEqual(L.s("decision_destination"), "decision_destination")
+    }
+}
+
+/// #1964：被电脑端移除配对之后的一次性说明（对位 Android `PairingRemovedNoticeStore`）；
+/// 相机已授权时「重新连接」直达扫码页（对位 Android #355）。
+@MainActor
+final class PairingRemovedNoticeAndStartOverTests: XCTestCase {
+    private func fake(_ scenario: FakeScenario) -> (Backend, FakePairingRemovedNotice) {
+        let backend = FakeBackend.make(scenario)
+        return (backend, backend.pairingRemovedNotice as! FakePairingRemovedNotice)
+    }
+
+    private func waitUntil(_ what: String, timeout: TimeInterval = 3, _ condition: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(condition(), what)
+    }
+
+    /// 未配对 + 有一条待说明的移除 → 弹一次；点「知道了」清标记，不再弹。
+    /// 反证：`refresh()` 不读 `pairingRemovedNotice.pending()`，第一条红；`dismiss` 不清标记，第三条红。
+    func testRemovedNoticeShowsInTheUnpairedPageAndClearsOnDismiss() {
+        let (backend, notice) = fake(.notPaired)
+        notice.pendingFlag = true
+        let app = AppModel(backend: backend)
+        XCTAssertTrue(app.showPairingRemovedNotice, "被移除的配对要在未配对页说明一次")
+        app.dismissPairingRemovedNotice()
+        XCTAssertFalse(app.showPairingRemovedNotice)
+        XCTAssertFalse(notice.pendingFlag, "确认后清标记，不再弹")
+    }
+
+    /// 已经重新配对：残留标记顺手清掉，不再说明。
+    /// 反证：`refresh()` 在已配对时不 `dismiss`，第二条红。
+    func testStaleNoticeIsClearedOncePaired() {
+        let (backend, notice) = fake(.normal)
+        notice.pendingFlag = true
+        let app = AppModel(backend: backend)
+        XCTAssertFalse(app.showPairingRemovedNotice, "已配对不说明")
+        XCTAssertFalse(notice.pendingFlag, "残留标记顺手清掉")
+    }
+
+    /// 相机已授权：配对失效卡点「重新连接」直达扫码页，不停在欢迎页。
+    /// 反证：`startOver()` 不置 `resumeToScan`，第二条红。
+    func testStartOverJumpsStraightToScanWhenCameraIsAuthorized() async {
+        let (backend, _) = fake(.lost)
+        let app = AppModel(backend: backend)
+        app.cameraAuthorized = { true }
+        app.startOver()
+        await waitUntil("startOver 清本地后回欢迎页") { app.phase == .onboarding }
+        XCTAssertTrue(app.resumeToScan, "相机已授权 → 直达扫码页")
+        app.consumeResumeToScan()
+        XCTAssertFalse(app.resumeToScan, "只消费一次")
+    }
+
+    /// 相机没授权：照常停在欢迎页（底部仍有「手动输入」的退路）。
+    func testStartOverStaysOnWelcomeWhenCameraIsNotAuthorized() async {
+        let (backend, _) = fake(.lost)
+        let app = AppModel(backend: backend)
+        app.cameraAuthorized = { false }
+        app.startOver()
+        await waitUntil("startOver 清本地后回欢迎页") { app.phase == .onboarding }
+        XCTAssertFalse(app.resumeToScan, "没授权 → 停在欢迎页")
     }
 }

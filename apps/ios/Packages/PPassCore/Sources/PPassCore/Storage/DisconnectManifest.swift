@@ -95,6 +95,7 @@ public enum DisconnectState: CaseIterable, Sendable {
     case definitiveNotices
     case sentinel
     case savedToGallery
+    case pairingRemovedNotice
 
     /// 路径相对哪个根。运行时行没有路径，按存储根算。
     public var base: DisconnectBase {
@@ -135,6 +136,7 @@ public enum DisconnectState: CaseIterable, Sendable {
         case .definitiveNotices: return DefinitiveNoticeStore.fileName
         case .sentinel: return SentinelStore.fileName
         case .savedToGallery: return SavedToGalleryStore.fileName
+        case .pairingRemovedNotice: return PairingRemovedNoticeStore.fileName
         }
     }
 
@@ -183,6 +185,7 @@ public enum DisconnectState: CaseIterable, Sendable {
         case .definitiveNotices: return "#130/#981：失败通知的去重状态（已为哪个配对代号发过、上次相册档位 / 后台刷新状态）；对位 Android definitive_notices.json（KEEP）——清掉会让下次评估把现状当基线重发"
         case .sentinel: return "\(undecidedBasis)：「3 天没连上电脑」哨兵（SENT-01），Android 断开从来没碰过"
         case .savedToGallery: return "#1152：「保存到相册」的去重记录（内容哈希 → 相册 localIdentifier），记着这台电脑的哪些照片存进过本机相册，断开清掉；原先在 UserDefaults（清不掉、进备份），现在是存储根里的文件（整个存储根不进备份）。iOS 独有（Android 的「已保存」是 MediaStore 里的现成条目，没有这份记录）"
+        case .pairingRemovedNotice: return "#1964：被电脑端移除配对、「被拒即清理」删掉本地配对后的一次性说明标记（对位 Android PairingRemovedNoticeStore，#1219）。标记在清理**之后**写入，必须活过这次清理，用户在下一次未配对页看到说明后由界面清掉；重新配对成功也会顺手清。断开清单本身不碰它"
         }
     }
 

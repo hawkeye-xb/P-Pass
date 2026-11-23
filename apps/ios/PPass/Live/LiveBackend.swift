@@ -37,6 +37,8 @@ final class LiveBackend: @unchecked Sendable {
     let cardPrefs: BackgroundBackupOfferPrefs
     let pendingAccessPrefs: PendingFullPhotoAccessPrefs
     let noticeStore: DefinitiveNoticeStore
+    /// #1964：被电脑端移除配对、本地被拒即清理之后的一次性说明标记（对位 Android `PairingRemovedNoticeStore`）。
+    let pairingRemovedNotice: PairingRemovedNoticeStore
     /// #1272 挑几张传：手选队列（进程内）+ 批次汇总（落盘）。
     let picked: PickedQueue
     /// #1272 B：「自动备份」规则开关（没存过值时按当前真实状态初始化一次）。
@@ -210,6 +212,7 @@ final class LiveBackend: @unchecked Sendable {
         cardPrefs = BackgroundBackupOfferPrefs(directory: dir, logger: logger)
         pendingAccessPrefs = PendingFullPhotoAccessPrefs(directory: dir, logger: logger)
         noticeStore = DefinitiveNoticeStore(directory: dir, logger: logger)
+        pairingRemovedNotice = PairingRemovedNoticeStore(directory: dir)
         picked = PickedQueue(directory: dir, logger: logger)
         autoRule = AutoBackupRulePrefs(directory: dir, logger: logger)
         // #1262：通知默认关；老用户升级保持原状态。必须在任何 markOnboarded 之前定老用户（新装用户此刻没有配对、没走过 onboarding）。
@@ -344,7 +347,11 @@ final class LiveBackend: @unchecked Sendable {
         rejectedCleanup = RejectedPairingCleanup(
             localPairingId: { pairingStore.load()?.pairingId },
             announce: { [weak self] id in await self?.evaluateNotices(assumeLostPairingId: id) },
-            clear: { [weak self] in await self?.disconnect() },
+            clear: { [weak self] in
+                await self?.disconnect()
+                // #1964：清理之后落标记（这一行在断开清单里是 KEEP），下一次未配对页说明一次。
+                do { try self?.pairingRemovedNotice.record() } catch { self?.logger.log("pairing-removed-notice: record failed: \(error)") }
+            },
             logger: logger)
         pairingLoss.setOnLost { [weak self] id in
             guard let self else { return }
@@ -551,7 +558,8 @@ final class LiveBackend: @unchecked Sendable {
         }, logger: logger, localOriginals: localOriginals)
         timelineLock.lock(); liveTimeline = timeline; timelineLock.unlock()
         return Backend(isDemo: false, timeline: timeline, live: timelineLive, media: media, pairing: pairing,
-                       engine: LiveEngineAdapter(backend: self))
+                       engine: LiveEngineAdapter(backend: self),
+                       pairingRemovedNotice: LivePairingRemovedNotice(store: pairingRemovedNotice))
     }
 
     /// 返回 true = 要提示用户「设置没存上」（见 `applyAutoBackupOnPairing`）。
@@ -1032,4 +1040,12 @@ struct DisconnectActions: DisconnectRuntime {
     func cancelScheduledWakes() { cancelWakes() }
     func stopMediaChangeObserver() { stopMedia() }
     func clearThumbnailMemoryCache() { clearThumbs() }
+}
+
+/// #1964：`PairingRemovedNoticeStore`（只读写一个标记文件）到界面端口的接线。
+/// 不放进 `LivePairing`：那是核心路径（`.github/core-paths.txt`），这个提示与配对协议无关。
+struct LivePairingRemovedNotice: PairingRemovedNoticeService {
+    let store: PairingRemovedNoticeStore
+    func pending() -> Bool { store.pending() }
+    func dismiss() { store.clear() }
 }

@@ -49,15 +49,27 @@ struct ScanScreen: View {
         .foregroundStyle(PPColor.paper)
         .tint(PPColor.paper)
         .background(PPColor.surfaceDark.ignoresSafeArea())
-        .task { cameraState = await Self.cameraAvailable() ? .ready : .unavailable }
+        .task {
+            switch await Self.cameraAccess() {
+            case .ready: cameraState = .ready
+            case .unavailable: cameraState = .unavailable
+            case .deniedOnFirstAsk:
+                cameraState = .unavailable
+                // #1964：首次系统弹框里点了拒绝 → 直接去手动输入页（对位 Android），不停在黑框扫码页等用户再点底部链接。
+                onManual()
+            }
+        }
     }
 
-    static func cameraAvailable() async -> Bool {
-        guard AVCaptureDevice.default(for: .video) != nil else { return false }
+    /// 进入扫码页时相机能不能用。首次申请被拒单独分出来：那一次直接跳手动输入；之前拒过则停在说明页（底部仍有「手动输入」）。
+    enum CameraAccess { case ready, unavailable, deniedOnFirstAsk }
+
+    static func cameraAccess() async -> CameraAccess {
+        guard AVCaptureDevice.default(for: .video) != nil else { return .unavailable }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized: return true
-        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .video)
-        default: return false
+        case .authorized: return .ready
+        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .video) ? .ready : .deniedOnFirstAsk
+        default: return .unavailable
         }
     }
 }

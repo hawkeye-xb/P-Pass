@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import PPassCore
 import SwiftUI
@@ -101,6 +102,8 @@ final class AppModel: ObservableObject {
     @Published var commandInFlight = false
     /// 最近一次失败反馈（设置写盘失败 / 命令出错）。界面 alert 绑定它。
     @Published var notice: UserNotice?
+    /// #1964：电脑端移除配对、被拒即清理之后的一次性说明（对位 Android `PairingRemovedNoticeStore`）：未配对页弹一次，确认即清。
+    @Published var showPairingRemovedNotice = false
     /// 「仅 Wi‑Fi」要关：等用户在确认框里点「仍然关闭」才写盘（Android MOB-02 §三：移动网络会消耗流量）。
     @Published var pendingWifiOff = false
     /// 范围文件读不出来（与「从未保存」不同，#971）；设置行据此显示「读不到」而不是「未选相册」。
@@ -403,6 +406,12 @@ final class AppModel: ObservableObject {
         // #1353：从系统设置改完权限回来按真实权限现算；变了记一行（读到 full = 状态卡消失、自动备份恢复）。
         if access != accessBefore { AppLog.log("photo access now \(access) (was \(accessBefore))") }
         pairing = backend.pairing.status()
+        // #1964：电脑端移除本机配对之后的一次性说明（对位 Android `PairingRemovedNoticeStore`）：
+        // 未配对且待说明 → 弹一次；已重新配对 → 残留标记顺手清掉（不再说明）。
+        if backend.pairingRemovedNotice.pending() {
+            if pairing == .notPaired { showPairingRemovedNotice = true }
+            else { backend.pairingRemovedNotice.dismiss() }
+        }
         // #1119：配对被清掉（被拒即清理）→ 回欢迎页。界面不在欢迎页（含选相册 / 首次备份）而配对没了，就是这一种。
         let next = Self.phase(phase, whenPairing: pairing)
         if next != phase { AppLog.log("pairing cleared while in \(phase); back to onboarding"); tab = .photos; phase = next }
@@ -749,12 +758,27 @@ final class AppModel: ObservableObject {
         return .onboarding
     }
 
+    /// #1964：用户确认了「配对已被移除」的说明：清掉标记，不再弹。
+    func dismissPairingRemovedNotice() {
+        backend.pairingRemovedNotice.dismiss()
+        showPairingRemovedNotice = false
+    }
+
+    /// #1964：相机是否已授权（对位 Android #355）。可注入，单测不碰真机权限。
+    var cameraAuthorized: () -> Bool = { AVCaptureDevice.authorizationStatus(for: .video) == .authorized }
+    /// #1964：配对失效卡「重新连接」时相机已授权就跳过欢迎页直达扫码页；`OnboardingFlow` 出现时消费一次。
+    @Published var resumeToScan = false
+
+    func consumeResumeToScan() { resumeToScan = false }
+
     /// 配对失效卡的「重新连接」：先按断开清单清本地（不通知电脑，它本就不认这台手机），再回欢迎页重新扫码（#1119）。
+    /// #1964：相机已授权时直接进扫码页（对位 Android #355），不再让用户在欢迎页多点一次。
     func startOver() {
         Task {
             await backend.pairing.clearLocal()
             refresh()
             tab = .photos
+            resumeToScan = cameraAuthorized()
             phase = .onboarding
         }
     }

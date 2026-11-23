@@ -31,6 +31,7 @@ final class DisconnectManifestTests: XCTestCase {
         try DefinitiveNoticeStore(directory: root).save(DefinitiveNoticeState(notifiedLostPairingId: "e"))
         try SentinelStore(directory: root).recordReachable(now: 1)
         try SavedToGalleryStore(directory: root).remember(hash: "h", localIdentifier: "L")
+        try PairingRemovedNoticeStore(directory: root).record()
         try BackupScopeStore(directory: root, daemonNodeId: nil).saveScope(selected: ["x"], allCurrent: ["x"])
         try BackupScopeStore(directory: root, daemonNodeId: "node-a").saveScope(selected: ["a"], allCurrent: ["a"])
         let flow = FlowControlStore(directory: root)
@@ -87,6 +88,8 @@ final class DisconnectManifestTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.file(DeviceIdentity.legacyPlaintextFileName).path), "旧明文私钥随断开清掉")
         // #1152：「保存到相册」去重记录随断开清掉。反证：savedToGallery 行改成 .keep ⇒ 红。
         XCTAssertNil(SavedToGalleryStore(directory: tmp.url).localIdentifier(for: "h"), "保存到相册的记录随断开清掉")
+        // #1964：被移除说明的标记在清理**之后**写入，断开清单必须 KEEP 它。反证：这一行改成 .clear ⇒ 红。
+        XCTAssertTrue(PairingRemovedNoticeStore(directory: tmp.url).pending(), "被移除说明的标记活过断开")
         XCTAssertTrue(OnboardedDesktopsStore(directory: tmp.url).wasOnboarded("node-a"))
         XCTAssertEqual(try BackupScopeStore(directory: tmp.url, daemonNodeId: "node-a").selectedBucketIds(), ["a"])
         XCTAssertFalse(BackupSettings(directory: tmp.url).wifiOnly())
@@ -163,6 +166,19 @@ final class DisconnectManifestTests: XCTestCase {
         XCTAssertTrue(DisconnectState.backupScopeUnpaired.matches("backup_scope.json"))
         XCTAssertTrue(DisconnectState.nativeBlobStore.matches("iroh-blobs-provider/data/blob"))
         XCTAssertFalse(DisconnectState.flowRuntime.matches("anything"))
+    }
+
+    /// #1964：一次性说明标记的往返；断开清单这一行是 KEEP（标记在清理之后写入，必须活过清理）。
+    /// 反证：把 `pairingRemovedNotice` 改成 `.clear`，最后一条红；`record` 不落盘，第二条红。
+    func testPairingRemovedNoticeRoundTripsAndSurvivesTheManifest() throws {
+        let tmp = TempDir()
+        let store = PairingRemovedNoticeStore(directory: tmp.url)
+        XCTAssertFalse(store.pending())
+        try store.record()
+        XCTAssertTrue(PairingRemovedNoticeStore(directory: tmp.url).pending(), "落盘后新实例读得到")
+        store.clear()
+        XCTAssertFalse(store.pending(), "用户看到后清掉")
+        XCTAssertEqual(DisconnectState.pairingRemovedNotice.disposition, .keep)
     }
 
     /// 每一行都有依据，CLEAR / RESET / STOP 只出现在定过语义的行上。
