@@ -120,6 +120,10 @@ final class AppModel: ObservableObject {
     private(set) var transferMark: (orderId: Int64, bytes: Int64, at: Date)?
     /// #1763 素材文件夹：已登记目录数（设置行值；不探测可达性）。
     @Published private(set) var folderCount = 0
+    /// #1904：实时订阅会话的当前状态（对位 Android `SubscriptionSessionState`）。照片页与存储电脑详情页
+    /// 都从 `connection` 这一份取连接表述，不再各自读一个信号。订阅属于 App 前台，不随页面出现 / 消失。
+    @Published private(set) var liveState = TimelineLiveState()
+    private var liveToken: UUID?
 
     init(backend: Backend) {
         self.backend = backend
@@ -130,6 +134,17 @@ final class AppModel: ObservableObject {
         refreshExistingAlbums()
         refreshNotificationAuthorization()
         backend.engine.observe { [weak self] in Task { @MainActor in self?.refresh() } }
+        // #1904：订阅属于 App 前台（LiveBackend 管开关），这里只跟读它的状态；注册时立刻补发一次当前状态。
+        liveToken = backend.live.observe { [weak self] event in
+            guard case .state(let s) = event else { return }
+            self?.liveState = s
+        }
+    }
+
+    deinit {
+        guard let token = liveToken else { return }
+        let feed = backend.live
+        Task { @MainActor in feed.remove(token) }
     }
 
     /// 回到前台：照常刷新，并重读系统相册（相册可能在系统相册里被删了）。枚举 PhotoKit 有成本，不放进每次引擎回调的 refresh。
@@ -487,6 +502,16 @@ final class AppModel: ObservableObject {
     }
 
     var pairedAtMs: Int64? { backend.pairing.pairedAtMs() }
+
+    /// #1904（对位 Android #1883）：唯一的连接状态——配对有效性（`pairingLost`）+ 实时订阅会话（`liveState`）
+    /// + 失联天数在这里合成一次。照片页与存储电脑详情页都读这一份，同屏不可能出现相反结论。
+    var connection: ConnectionState {
+        connectionStateOf(
+            pairingLost: pairingLost,
+            state: liveState,
+            daysUnreachable: daysSinceLastReachable
+        )
+    }
 
     /// 只在用户要后台备份时才说（Android：OffByUser 不出告示）；关着后台备份时，后台刷新关不关与用户无关。
     static func backgroundNotice(_ refresh: BackgroundRefreshAvailability, backgroundRequested: Bool) -> BackgroundNotice? {

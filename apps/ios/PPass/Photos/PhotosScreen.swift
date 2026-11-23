@@ -9,12 +9,16 @@ struct PhotosScreen: View {
     @StateObject private var model = TimelineModel()
     @State private var viewer: ViewerSession?
 
+    /// #1904：唯一的连接状态（`AppModel.connection`）——照片页与存储电脑详情页读同一份事实源，
+    /// 同一时刻不可能一个说已连接、一个说已中断。
+    private var conn: ConnectionState { app.connection }
+
     var body: some View {
         NavigationStack {
             // 顺序同 Android：失联红卡 → 筛选胶囊 → 实时连接提示 → 网格。失联时胶囊和已加载的照片照常可看
             // （Android PhotosScreen 只收起重连 / 连不上这类提示，见 TimelineLiveChrome）。
             VStack(spacing: 0) {
-                if app.pairingLost { lostCard }
+                if conn.needsRepair { lostCard }
                 // #1324（ADR 结论 6）：引导位——同一时间最多一张，在过滤条上面，不挡浏览、不弹窗。失联时让位给红卡。
                 if guideShown { guideCard(app.photosGuide) }
                 chips
@@ -43,7 +47,7 @@ struct PhotosScreen: View {
     private var lostCard: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(L.s("photos_lost_title")).font(PPFont.cardTitle).foregroundStyle(PPColor.act)
-            Text(app.daysSinceLastReachable.map { L.p("photos_lost_body_days", $0) } ?? L.s("photos_lost_body_unknown"))
+            Text(conn.daysUnreachable.map { L.p("photos_lost_body_days", $0) } ?? L.s("photos_lost_body_unknown"))
                 .font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
             PPButton(title: L.s("photos_lost_action")) { app.startOver() }.padding(.top, 6)
         }
@@ -94,15 +98,15 @@ struct PhotosScreen: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, PPUI.Layout.photosGutter).padding(.top, app.pairingLost || guideShown ? 0 : 8).padding(.bottom, 12) // 提示条、筛选条、照片网格左右同一条线（#1405）
+        .padding(.horizontal, PPUI.Layout.photosGutter).padding(.top, conn.needsRepair || guideShown ? 0 : 8).padding(.bottom, 12) // 提示条、筛选条、照片网格左右同一条线（#1405）
         .background(PPColor.paper)
     }
 
-    private var guideShown: Bool { !app.pairingLost && app.photosGuide != .none }
+    private var guideShown: Bool { !conn.needsRepair && app.photosGuide != .none }
 
     /// 实时更新的提示（Android `photosTimelineChrome`）：断线重连中给一行小字；退避用完停下来，提示 + 重试，不挡住已加载的照片。
     @ViewBuilder private var disconnected: some View {
-        let chrome = TimelineLiveChrome(state: model.live, pairingLost: app.pairingLost)
+        let chrome = TimelineLiveChrome(connection: conn)
         if chrome.showReconnecting {
             Text(L.s("photos_live_reconnecting")).font(PPFont.sans(13)).foregroundStyle(PPColor.ink40)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -124,7 +128,7 @@ struct PhotosScreen: View {
     @ViewBuilder private var content: some View {
         if model.loading && model.items.isEmpty {
             PPStateMessage(text: L.s("photos_loading"), loading: true)
-        } else if model.error != nil, model.items.isEmpty, app.pairingLost {
+        } else if model.error != nil, model.items.isEmpty, conn.needsRepair {
             // 失联时出路只有红卡上的「重新扫码」，不再露「连不上」和原始错误（Android showTimelineError）。
             Spacer()
         } else if let error = model.error, model.items.isEmpty {

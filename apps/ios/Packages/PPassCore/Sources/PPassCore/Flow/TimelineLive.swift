@@ -43,20 +43,82 @@ public struct TimelineLiveState: Equatable, Sendable {
     public init() {}
 }
 
+/// #1904（对位 Android #1883）：手机与电脑之间**唯一**的连接状态——存储电脑详情页与照片页都从这里取文案与
+/// 显示条件，同一时刻不可能给出相反结论。
+///
+/// 词汇表对齐桌面 `crates/transport/src/conninfo.rs` 的 `ConnectionStatus`（Direct / Relay / Offline / Unknown），
+/// 另加一档「配对已失效」：那是另一个维度（配对还有没有效），不是连接状态本身。
+///
+/// 手机侧不区分直连与中继——实时订阅只知道「连上没有」，路径分类只存在于诊断探测里，拿不到就不编：
+/// 连上就是 `.connected`。
+public struct ConnectionState: Equatable, Sendable {
+    public enum Status: Equatable, Sendable {
+        /// 配对已失效（桌面吊销 / 移除本设备）——重新扫码连接是唯一出路。
+        case pairingLost
+        /// 实时连上了（直连或中继）。
+        case connected
+        /// 断过、正在退避重连。
+        case reconnecting
+        /// 退避耗尽：没有实时连接。
+        case offline
+        /// 还没有依据（刚进前台、这次订阅还没连上）。
+        case unknown
+    }
+
+    public let status: Status
+    /// 距上次确认可达的天数（`SentinelStore.lastReachableAt` 推算）；nil = 从未确认过，不编天数。
+    public let daysUnreachable: Int?
+
+    public init(status: Status, daysUnreachable: Int? = nil) {
+        self.status = status
+        self.daysUnreachable = daysUnreachable
+    }
+
+    /// 「已连接」这种强断言只能在真的有连接时用——两页共用这一条判定。
+    public var isConnected: Bool { status == .connected }
+
+    /// 配对已失效：两页都收起各自的提示，只留「重新扫码连接」这一条出路。
+    public var needsRepair: Bool { status == .pairingLost }
+}
+
+/// #1904（对位 Android #1883 `connectionStateOf`）：把三份信号合成唯一状态——配对有效性、实时订阅会话、
+/// 失联天数。配对有效性是另一个维度，优先；其余按订阅会话判定。
+///
+/// 顺序即优先级：配对已失效 > 已连上 > 退避耗尽（断开）> 重连中 > 未知。
+/// 「已连上」排在「退避耗尽」前面——真的连上了就是连上了，即便上一轮的退避记录还在。
+public func connectionStateOf(
+    pairingLost: Bool,
+    state: TimelineLiveState,
+    daysUnreachable: Int? = nil
+) -> ConnectionState {
+    let status: ConnectionState.Status
+    if pairingLost {
+        status = .pairingLost
+    } else if state.connected {
+        status = .connected
+    } else if state.exhausted {
+        status = .offline
+    } else if state.hadFailure {
+        status = .reconnecting
+    } else {
+        status = .unknown
+    }
+    return ConnectionState(status: status, daysUnreachable: daysUnreachable)
+}
+
 /// 页面上的提示，对位 Android `photosTimelineChrome`：配对失效时全部收起（红卡是唯一出路）。
 public struct TimelineLiveChrome: Equatable, Sendable {
     public let showReconnecting: Bool
     public let showExhaustedRetry: Bool
 
-    public init(state: TimelineLiveState, pairingLost: Bool) {
-        if pairingLost {
-            showReconnecting = false
-            showExhaustedRetry = false
-        } else {
-            // 与「耗尽」互斥：耗尽之后不会再是「重连中」。
-            showReconnecting = state.hadFailure && !state.connected && !state.exhausted
-            showExhaustedRetry = state.exhausted
-        }
+    /// #1904：从唯一连接状态取——重连中 / 断开两档由同一个事实源决定，与存储电脑详情页同源。
+    public init(connection: ConnectionState) {
+        showReconnecting = connection.status == .reconnecting
+        showExhaustedRetry = connection.status == .offline
+    }
+
+    public init(state: TimelineLiveState, pairingLost: Bool = false) {
+        self.init(connection: connectionStateOf(pairingLost: pairingLost, state: state))
     }
 }
 

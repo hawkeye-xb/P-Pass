@@ -181,6 +181,93 @@ final class TimelineModelLiveTests: XCTestCase {
         XCTAssertEqual(feed.retries, 1)
     }
 
+    // MARK: 唯一连接状态（#1904，对位 Android #1883）
+
+    /// 初始整页加载失败留下的 error 不会自己消失；订阅连上后必须补拉一次整页，成功即清 error。
+    func testConnectedStateAfterFailedFirstLoadRefetchesAndClearsTheError() async {
+        let s = Source([.fail, .page([1, 2], next: nil)])
+        let feed = Feed()
+        let m = await loaded(s)
+        XCTAssertNotNil(m.error, "前提：首屏加载失败留下错误")
+        XCTAssertTrue(m.items.isEmpty)
+        m.attach(feed)
+        var st = TimelineLiveState(); st.connected = true
+        feed.emit(.state(st))
+        await waitUntil("连上后补拉首页") { m.items.count == 2 }
+        XCTAssertNil(m.error, "补拉成功后「连不上」要能自己消掉")
+        XCTAssertEqual(s.callCount, 2, "只补一次整页")
+    }
+
+    /// 反证面：没连上（重连中 / 断开）不补拉——只剩旧错误时不能凭空变成「连上了」。
+    func testNotConnectedStateDoesNotRefetch() async {
+        let s = Source([.fail, .page([1], next: nil)])
+        let feed = Feed()
+        let m = await loaded(s)
+        m.attach(feed)
+        var st = TimelineLiveState(); st.hadFailure = true
+        feed.emit(.state(st))
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(s.callCount, 1, "重连中不补拉")
+        XCTAssertNotNil(m.error)
+    }
+
+    // MARK: 存储电脑详情卡（#1904，对位 Android #1883 `storageDetailLines`）
+
+    /// 只有真的连上才说「已连接」；其余三档一律「未连接 · 最近同步 X」。反证：改回「非配对失效一律已连接」即红。
+    func testStorageDetailLinesOnlyClaimConnectedWhenActuallyConnected() {
+        let paired: Int64 = 1_760_000_000_000
+        for status in [ConnectionState.Status.reconnecting, .offline, .unknown] {
+            let lines = storageDetailLines(status: status, pairedAtMs: paired)
+            XCTAssertEqual(lines.statusKey, "storage_detail_offline", "\(status) 不得说已连接")
+            XCTAssertTrue(lines.takesLastSuccess)
+            XCTAssertTrue(lines.showPairedLine, "\(status) 配对日期有出处：第二行照常")
+        }
+        let connected = storageDetailLines(status: .connected, pairedAtMs: paired)
+        XCTAssertEqual(connected.statusKey, "storage_detail_connected")
+        XCTAssertNotEqual(connected.statusKey, "storage_detail_offline")
+    }
+
+    /// 配对已失效：正文只有单行「配对已失效」，不拼「配对 X · 已备份 N 张」（同一张卡自相矛盾）。
+    func testStorageDetailLinesPairingLostIsSingleLine() {
+        let lines = storageDetailLines(status: .pairingLost, pairedAtMs: 1_760_000_000_000)
+        XCTAssertEqual(lines.statusKey, "storage_detail_lost")
+        XCTAssertFalse(lines.takesLastSuccess, "「配对已失效」不带最近同步参数")
+        XCTAssertFalse(lines.showPairedLine, "不得再拼第二行")
+    }
+
+    func testStorageDetailBodyRendersTheDecidedLines() {
+        let paired: Int64 = 1_760_000_000_000
+        let lost = storageDetailBody(ConnectionState(status: .pairingLost), lastSuccessAt: nil,
+                                     pairedAtMs: paired, confirmedCount: 6)
+        XCTAssertEqual(lost, L.s("storage_detail_lost"))
+        XCTAssertFalse(lost.contains("\n"), "配对失效只有一行")
+
+        let offline = storageDetailBody(ConnectionState(status: .offline), lastSuccessAt: nil,
+                                        pairedAtMs: paired, confirmedCount: 6)
+        let firstLine = offline.components(separatedBy: "\n")[0]
+        XCTAssertEqual(firstLine, L.f("storage_detail_offline", L.s("last_success_never")),
+                       "断开时只说「未连接 · 最近同步 X」")
+        XCTAssertEqual(offline.components(separatedBy: "\n").count, 2, "配对日期有出处：第二行照常")
+
+        let unknownNoPairedAt = storageDetailBody(ConnectionState(status: .unknown), lastSuccessAt: nil,
+                                                  pairedAtMs: nil, confirmedCount: 0)
+        XCTAssertEqual(unknownNoPairedAt.components(separatedBy: "\n").count, 1, "配对日期未知：不硬凑第二行")
+        XCTAssertTrue(unknownNoPairedAt.hasPrefix(L.f("storage_detail_offline", L.s("last_success_never"))))
+
+        let connected = storageDetailBody(ConnectionState(status: .connected), lastSuccessAt: nil,
+                                          pairedAtMs: paired, confirmedCount: 6)
+        XCTAssertTrue(connected.hasPrefix(L.f("storage_detail_connected", L.s("last_success_never"))))
+    }
+
+    /// 状态点颜色跟正文同一份状态：绿=连上、红=配对失效、琥珀=重连中、灰=断开/未知。
+    func testStorageDetailDotColorFollowsTheUnifiedStatus() {
+        XCTAssertTrue(UIColor(storageDetailDotColor(.connected)).isEqual(UIColor(PPColor.safe)))
+        XCTAssertTrue(UIColor(storageDetailDotColor(.pairingLost)).isEqual(UIColor(PPColor.act)))
+        XCTAssertTrue(UIColor(storageDetailDotColor(.reconnecting)).isEqual(UIColor(PPColor.waiting)))
+        XCTAssertTrue(UIColor(storageDetailDotColor(.offline)).isEqual(UIColor(PPColor.idle)))
+        XCTAssertTrue(UIColor(storageDetailDotColor(.unknown)).isEqual(UIColor(PPColor.idle)))
+    }
+
     func testFeedFallbackTickAppendsOnly() async {
         let s = Source([.page([2, 1], next: nil), .page([3, 2, 1], next: nil)])
         let feed = Feed()
