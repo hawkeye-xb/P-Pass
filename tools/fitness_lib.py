@@ -1,31 +1,51 @@
-"""适应度函数（architectural fitness functions）共用库：扫描仓库 + 比对登记表。
+"""适应度函数（architectural fitness functions）共用库：外部物理扫描仓库 + 比对登记表。
 
-三条门禁共用的做法（check-egress.py / check-autostart.py / check-disk-growth.py）：
-  1. 只看 git 跟踪的文件（--root 指向的仓库），限定在 SCAN_ROOTS 内，剔掉测试 / 生成物；
-     Rust 文件从第一个 `#[cfg(test)]` 起截断（内联测试不算产品代码）。
-  2. 每条规则把命中归一成一个「键」（文件路径 / 主机名 / 依赖名 / 目录名）。
-  3. 与登记表逐键比对：命中但没登记 → 红（新增必须登记）；登记了却不再命中 → 红
-     （登记表必须跟现状精确相等，避免成了无人维护的垃圾堆）；登记缺「用途 / 触发条件」→ 红。
-
-登记表格式：每行 `种类|键|…|说明`，`#` 开头是注释。说明不许为空——为什么要有这一处，
-是登记的全部意义。例外怎么登记见 docs/runbook/fitness.md。
+外部物理独立性铁律（V3 #1954）：
+  适应度脚本与本共享库只许通过外部文件读取、正则/AST 扫描与 git 清单独立断言，严禁 import 或调用任何业务包（crates/、apps/）
+  内的自判辅助函数。`assert_zero_product_imports()` 在启动时同时自检入口脚本与 `fitness_lib.py` 本身的 AST。
 """
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import subprocess
 import sys
 from pathlib import Path
 
 SCAN_ROOTS = ("crates/", "apps/", "config/")
-# 路径里出现这些片段 = 测试 / 样例 / 生成物，不算产品代码。
 _TEST_PATH = re.compile(
     r"(/tests?/|/Tests?/|[A-Za-z]Tests?/|androidTest|/src/test/|/fixtures?/|/examples?/|/node_modules/|/target/|"
     r"/build/|/Fake/|/Debug/|(^|/)tests?\.rs$|_tests?\.rs$|\.test\.[a-z]+$|Tests?\.(kt|swift)$|"
     r"/IntegrationHost/|\.generated\.)"
 )
 _COMMENT = re.compile(r"^\s*(//|\*|/\*|#|<!--)")
+_TRIVIAL_GUARD_BODY = re.compile(
+    r"(?:\bfn\s+{sym}\s*\([^)]*\)\s*(?:->\s*bool\s*)?\{{\s*(?:return\s+)?(?:true|false)\s*;?\s*\}})"
+    r"|(?:\bfun\s+{sym}\s*\([^)]*\)\s*(?::\s*Boolean\s*)?=\s*(?:true|false)\s*(?:;|$))"
+    r"|(?:\bfun\s+{sym}\s*\([^)]*\)\s*(?::\s*Boolean\s*)?\{{\s*return\s+(?:true|false)\s*;?\s*\}})"
+    r"|(?:\b(?:boolean|Boolean)\s+{sym}\s*\([^)]*\)\s*\{{\s*return\s+(?:true|false)\s*;\s*\}})"
+    r"|(?:\bfunc\s+{sym}\s*\([^)]*\)\s*(?:->\s*Bool\s*)?\{{\s*(?:return\s+)?(?:true|false)\s*\}})",
+    re.M | re.S,
+)
+
+
+def assert_zero_product_imports(script_file: str) -> None:
+    """自检：确保门禁入口脚本与共享库 `fitness_lib.py` 自身 AST 零导入任何非标准库的业务包。"""
+    allowed = {"__future__", "argparse", "ast", "fnmatch", "glob", "hashlib", "json", "os", "pathlib", "re", "shutil", "subprocess", "sys", "tempfile", "fitness_lib"}
+    targets = {str(Path(script_file).resolve()), str(Path(__file__).resolve())}
+    for target in sorted(targets):
+        tree = ast.parse(Path(target).read_text(encoding="utf-8"), filename=target)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                mods = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                mods = [node.module.split(".")[0]]
+            else:
+                continue
+            bad = [m for m in mods if m not in allowed]
+            if bad:
+                die([f"✗ 适应度门禁违反外部物理原语铁律：{target} 导入了外部/业务模块 {bad}"])
 
 
 def parse_args(desc: str) -> argparse.Namespace:
@@ -59,7 +79,6 @@ def read_product(root: Path, rel: str) -> list[tuple[int, str]]:
 
 
 def load_registry(path: Path, kinds: dict[str, int]) -> dict[tuple[str, str], list[str]]:
-    """kinds: 种类 -> 该种类的字段数（含种类、键、末尾说明）。返回 {(种类, 键): 其余字段}。"""
     reg: dict[tuple[str, str], list[str]] = {}
     errors: list[str] = []
     if not path.exists():
@@ -87,7 +106,6 @@ def load_registry(path: Path, kinds: dict[str, int]) -> dict[tuple[str, str], li
 
 
 def compare(found: dict[tuple[str, str], str], reg: dict, what: str, how: str) -> list[str]:
-    """found: {键: 命中位置示例}。返回错误列表。"""
     errs = []
     for key in sorted(set(found) - set(reg)):
         errs.append(f"✗ 未登记的{what}：{key[0]}|{key[1]}（命中 {found[key]}）\n    → {how}")
@@ -103,9 +121,20 @@ def die(errors: list[str]) -> None:
 
 
 def symbol_exists(root: Path, symbol: str) -> bool:
-    """符号（函数名 / 测试名）在被扫描范围内至少出现一次（含测试文件）。"""
     r = subprocess.run(
         ["git", "-C", str(root), "grep", "-qwF", "--", symbol, "--", *[s.rstrip("/") for s in SCAN_ROOTS]],
         capture_output=True,
     )
     return r.returncode == 0
+
+
+def guard_symbol_compromised(root: Path, symbol: str) -> str | None:
+    """外部物理扫描产品代码中的守卫函数定义，拦截把守卫函数直接改成恒返回字面量 true/false 的 T5 式退化绕过。"""
+    pat = re.compile(_TRIVIAL_GUARD_BODY.pattern.format(sym=re.escape(symbol)), re.M | re.S)
+    for rel in tracked_files(root):
+        if not rel.endswith((".rs", ".kt", ".java", ".swift")):
+            continue
+        stripped = "\n".join(line for _, line in read_product(root, rel))
+        if pat.search(stripped):
+            return rel
+    return None

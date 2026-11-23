@@ -141,8 +141,8 @@ case "$PR_AUTHOR" in app/dependabot | dependabot | "dependabot[bot]") IS_DEPENDA
 CLOSE_CARDS=""
 REF_CARDS=""
 if [ "$IS_DEPENDABOT" != 1 ]; then
-  CLOSE_CARDS="$(printf '%s\n' "$PR_BODY" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) +#[0-9]+' | grep -oE '[0-9]+' | sort -un || true)"
-  REF_CARDS="$(printf '%s\n' "$PR_BODY" | grep -oiE 'refs +#[0-9]+' | grep -oE '[0-9]+' | sort -un || true)"
+  CLOSE_CARDS="$(printf '%s\n' "$PR_BODY" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' | grep -oE '[0-9]+' | sort -un || true)"
+  REF_CARDS="$(printf '%s\n' "$PR_BODY" | grep -oiE 'refs?[[:space:]]+#[0-9]+' | grep -oE '[0-9]+' | sort -un || true)"
 fi
 CARDS="$(printf '%s\n%s\n' "$CLOSE_CARDS" "$REF_CARDS" | sed '/^$/d' | sort -un)"
 CARD_TEXT=""
@@ -440,12 +440,13 @@ VERDICT="$AGENT_VERDICT"
 # 过 acceptance gate：碰核心的正文要引用已采纳方案（看不见的还要带测试），不满足就算未通过（即使 agent 说 PASS、即使 owner 复核放行）；
 # 用户看得到的改动 gate 直接绿（随版本验收）。与 CI 的 acceptance gate 共用 acceptance-gate.sh check，不在这里再抄一份。复用结论时也用当前正文重判。
 printf '%s\n' "$PR_BODY" >"${WORK}/body.check"
-if [ "$VERDICT" = "PASS" ] && [ -n "$NEEDS_ACCEPT" ] &&
-  ! bash "${FLOW_DIR}/acceptance-gate.sh" check --repo "$TOP" --core-rules "${WORK}/core-paths.txt" \
+gate_head_arg=()
+[ -d "${WT:-}" ] && gate_head_arg+=(--head-dir "$WT")
+if [ "$VERDICT" = "PASS" ] &&
+  ! bash "${FLOW_DIR}/acceptance-gate.sh" check --repo "$TOP" ${gate_head_arg[@]+"${gate_head_arg[@]}"} --cards "${CARDS:-}" --core-rules "${WORK}/core-paths.txt" \
     --diff "${WORK}/pr.full.diff" --files "${WORK}/pr.files" --body "${WORK}/body.check" >"${WORK}/gate.out" 2>&1; then
   VERDICT="FAIL"
-  # 缺什么由 acceptance-gate.sh 说（已采纳方案 / 测试），这里不另写一份。
-  REASON="${NEEDS_ACCEPT}：$(tr '\n' ' ' <"${WORK}/gate.out")acceptance gate 不过不开自动合入；补上后推新提交或改正文即重评。"
+  REASON="${NEEDS_ACCEPT:-验收与封条门禁}：$(tr '\n' ' ' <"${WORK}/gate.out")acceptance gate 不过不开自动合入；补上后推新提交或改正文即重评。"
 fi
 
 if [ "$VERDICT" = "PASS" ]; then STATE=success; DESC="独立评审通过"; else STATE=failure; DESC="独立评审未通过"; fi

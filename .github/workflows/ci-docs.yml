@@ -136,6 +136,9 @@ jobs:
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -147,6 +150,8 @@ jobs:
           bash tools/test-release-acceptance.sh
       - name: 核心方案检查
         env:
+          GH_TOKEN: ${{ github.token }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_BODY: ${{ github.event.pull_request.body }}
           BASE_REF: ${{ github.base_ref }}
         run: |
@@ -154,8 +159,10 @@ jobs:
           git -c core.quotepath=false diff --name-only --no-renames "origin/${BASE_REF}...HEAD" >"${RUNNER_TEMP}/pr-files.txt"
           # 完整 diff：只改版本号行的核心文件不算核心（#1451，判定在 tools/ci-paths.sh）。
           git -c core.quotepath=false diff --no-color --no-renames --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ "origin/${BASE_REF}...HEAD" >"${RUNNER_TEMP}/pr.diff"
+          cards_arg=()
+          case "$PR_AUTHOR" in app/dependabot | dependabot | "dependabot[bot]") cards_arg+=(--cards "") ;; esac
           bash tools/flow/acceptance-gate.sh check --files "${RUNNER_TEMP}/pr-files.txt" --body "${RUNNER_TEMP}/pr-body.txt" \
-            --diff "${RUNNER_TEMP}/pr.diff"
+            --diff "${RUNNER_TEMP}/pr.diff" ${cards_arg[@]+"${cards_arg[@]}"}
 
   docs:
     name: md-check + token-check

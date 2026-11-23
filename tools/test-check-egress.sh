@@ -56,4 +56,13 @@ printf 'site|crates/gone/src/old.rs|已删除的旧出口\n' >>"$R/tools/egress-
 expect_red "登记了但代码里已找不到" "已找不到"
 cp "$TMP/base.txt" "$R/tools/egress-allowlist.txt"
 expect_green "还原：登记表"
+
+mkdir -p "$TMP/mut_egress"
+cp "$REPO/tools/check-egress.py" "$REPO/tools/fitness_lib.py" "$TMP/mut_egress/"
+python3 "$TMP/mut_egress/check-egress.py" --root "$R" >/dev/null 2>&1 && ok "基线：check-egress 原样副本通过 AST 自检" || bad "check-egress 原样副本失败"
+: >"$TMP/mut_egress/fake_biz_mod.py"
+printf '\nimport fake_biz_mod\n' >>"$TMP/mut_egress/check-egress.py"
+out_e="$(python3 "$TMP/mut_egress/check-egress.py" --root "$R" 2>&1)" && bad "check-egress 导入业务模块仍通过" || {
+  printf '%s' "$out_e" | grep -qF "违反外部物理原语铁律" && ok "反证：check-egress 导入业务模块时 AST 自检判红" || bad "check-egress 红因不对：$out_e"
+}
 finish

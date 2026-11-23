@@ -42,18 +42,24 @@ shift
 FILES_F=""
 BODY_F=""
 REPO="$(cd "${HERE}/../.." && pwd)"
+HEAD_DIR=""
 CORE_RULES=""
 DIFF_F=""
+CARDS_SET=0
+CARDS_OVR=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --files) FILES_F="${2:-}"; shift 2 || shift ;;
     --body) BODY_F="${2:-}"; shift 2 || shift ;;
     --repo) REPO="${2:-}"; shift 2 || shift ;;
+    --head-dir) HEAD_DIR="${2:-}"; shift 2 || shift ;;
     --core-rules) CORE_RULES="${2:-}"; shift 2 || shift ;;
     --diff) DIFF_F="${2:-}"; shift 2 || shift ;;
+    --cards) CARDS_SET=1; CARDS_OVR="${2:-}"; shift 2 || shift ;;
     *) usage ;;
   esac
 done
+[ -n "$HEAD_DIR" ] || HEAD_DIR="$REPO"
 
 # 用户可见：apps/** 下的非测试文件（如安卓备份行为 backup/**），或界面与文案路径。
 # 界面路径清单与 owner-triage.sh 共用同一份；读不到按可见处理（宁严勿松）。
@@ -103,10 +109,67 @@ classify() {
 # PR 自己加进来的方案文件不算（没合进 main 就不是已采纳）。
 adopted_in_body() { (cd "$REPO" && adopted_adrs "$(cat "$BODY_F")"); }
 
+# V3 链外封条 SHA256 核验（#1954）：若关联卡（closes/fixes/resolves/refs）或传入正文带有 ```v3-seal 块，
+# 统一复用 v3_harness.parse_issue_seal 的路径与 64 位 SHA256 白名单规则校验检出文件，任何畸形/缺失/读卡失败一律 fail-closed。
+check_one_seal_text() { # check_one_seal_text <来源标签> <文本>
+  python3 -B -I - "$HEAD_DIR" "${HERE}" "$1" "$2" <<'PY' || exit 1
+import sys
+from pathlib import Path
+repo, flow_dir, label, text = Path(sys.argv[1]).resolve(), sys.argv[2], sys.argv[3], sys.argv[4]
+sys.path.insert(0, flow_dir)
+import v3_harness
+if not v3_harness.has_issue_seal(text):
+    sys.exit(0)
+try:
+    seal = v3_harness.parse_issue_seal(text)
+except Exception as e:
+    print(f"acceptance gate ❌：{label} 的 v3-seal 封条非法或未闭合：{e}", file=sys.stderr)
+    sys.exit(1)
+rel, want = seal["exam_rel"], seal["exam_sha256"]
+target = (repo / rel).resolve()
+if target != repo and not str(target).startswith(str(repo) + "/"):
+    print(f"acceptance gate ❌：{label} 的 exam_rel 逃逸仓库根目录：{rel}", file=sys.stderr)
+    sys.exit(1)
+got = v3_harness.sha256_file(str(target))
+if got != want:
+    print(f"acceptance gate ❌：{label} 锁定的验收测试 `{rel}` SHA256 不匹配或文件缺失", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
+verify_v3_seals() {
+  local body_txt cards c ibody repo_slug=""
+  body_txt="$(cat "$BODY_F")"
+  check_one_seal_text "PR正文" "$body_txt"
+  if [ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
+    repo_slug="${PPASS_HOOK_REPO:-$(git -C "$REPO" config --get remote.origin.url 2>/dev/null | sed -E -e 's#/+$##' -e 's#\.git$##' -e 's#^.*[:/]([^/:]+/[^/:]+)$#\1#' || true)}"
+    if [ "$CARDS_SET" -eq 1 ]; then
+      cards="$CARDS_OVR"
+    else
+      cards="$(printf '%s\n' "$body_txt" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?|refs?)[[:space:]]+#[0-9]+' | grep -oE '[0-9]+' | sort -u || true)"
+    fi
+    for c in $cards; do
+      if [ -n "$repo_slug" ] && [[ "$repo_slug" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
+        ibody="$(gh issue view "$c" -R "$repo_slug" --json body --jq .body 2>&1)" || {
+          echo "acceptance gate ❌：读取关联卡 #${c} 失败，拒绝静默跳过封条检查：$(printf '%s' "$ibody" | head -n 2 | tr '\n' ' ')" >&2
+          exit 1
+        }
+      else
+        ibody="$(gh issue view "$c" --json body --jq .body 2>&1)" || {
+          echo "acceptance gate ❌：读取关联卡 #${c} 失败，拒绝静默跳过封条检查：$(printf '%s' "$ibody" | head -n 2 | tr '\n' ' ')" >&2
+          exit 1
+        }
+      fi
+      check_one_seal_text "关联卡 #${c}" "$ibody"
+    done
+  fi
+}
+
 case "$MODE" in
   classify) classify ;;
   check)
     [ -f "$FILES_F" ] && [ -f "$BODY_F" ] || usage
+    verify_v3_seals
     KIND="$(classify <"$FILES_F")"
     case "$KIND" in
       none)

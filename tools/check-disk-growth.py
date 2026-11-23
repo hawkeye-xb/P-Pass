@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from fitness_lib import compare, die, load_registry, parse_args, read_product, tracked_files
+from fitness_lib import assert_zero_product_imports, compare, die, load_registry, parse_args, read_product, tracked_files
 
 KW = r"(?:quarantine|trash|recycle|staging|cache|spool|retired|superseded|stash|blobs?|thumbs?)"
 PPF = re.compile(r"\.ppf/([A-Za-z0-9_-]+)")
@@ -31,6 +31,7 @@ def norm(name: str) -> str:
 
 
 def main() -> None:
+    assert_zero_product_imports(__file__)
     args = parse_args("占盘 1x 结构信号门禁")
     root = Path(args.root)
     reg = load_registry(Path(args.registry or root / "tools/disk-growth-registry.txt"), {"dir": 3})

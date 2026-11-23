@@ -81,11 +81,12 @@ cp "${ROOT}/tools/flow/bench/bootstrap.py" "${mut_dir}/flow/bench/bootstrap.py"
 cp "${ROOT}/tools/flow/bench/bench.py" "${mut_dir}/flow/bench/bench.py"
 
 # 3. 反证 A：去掉 SHA256 封条检查必须变红
-python3 -I - "${mut_dir}/flow/v3_harness.py" <<'PY'
+python3 -I - "${mut_dir}/flow/v3_harness.py" <<'PY' || exit 1
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
 src = p.read_text(encoding="utf-8")
-mut = src.replace("if sha256_file(exam_abs) != locked_sha:", "if False:")
+old = 'if not re.fullmatch(r"[0-9a-f]{64}", (locked_sha or "").lower()) or sha256_file(exam_abs) != locked_sha.lower():'
+mut = src.replace(old, "if False:")
 assert mut != src, "failed to mutate sha256 check"
 p.write_text(mut, encoding="utf-8")
 PY
@@ -134,8 +135,8 @@ python3 -I - "${mut_dir}/flow/v3_harness.py" <<'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
 src = p.read_text(encoding="utf-8")
-old = '    while pat.startswith("./"):\n        pat = pat[2:]'
-mut = src.replace(old, '    pat = pat.lstrip("./")')
+old = '    pat = re.sub(r"^(?:\\./)+", "", pat.strip())'
+mut = src.replace(old, '    pat = pat.strip().lstrip("./")')
 assert mut != src, "failed to mutate lstrip('./')"
 p.write_text(mut, encoding="utf-8")
 PY
