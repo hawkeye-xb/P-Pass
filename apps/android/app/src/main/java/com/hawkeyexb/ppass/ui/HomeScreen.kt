@@ -690,9 +690,12 @@ internal fun HomeScreen(
                                 )
                             }
                             if (idleLine != null) {
+                                // #1888：英雄区主状态行会随状态变化（等待原因/空闲裁决文案）——
+                                // 标 liveRegion=polite，TalkBack 在变化后主动播报一句；只加语义标注，不改视觉与行为。
                                 Text(
                                     idleLine,
                                     fontSize = 13.5.sp, color = PPColor.Ink60,
+                                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                                 )
                             }
                         }
@@ -1085,9 +1088,11 @@ private fun MorePage(
                     tint = PPColor.Ink,
                 )
             }
+            // #1888：二级页标题标 heading 语义，TalkBack 按标题导航直达本页（与 BucketScreen 页标题同款）；不改视觉。
             Text(
                 stringResource(R.string.more_label),
                 fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
+                modifier = Modifier.semantics { heading() },
             )
         }
         Spacer(Modifier.height(16.dp))
@@ -1162,9 +1167,11 @@ private fun StorageComputerDetail(
                     tint = PPColor.Ink,
                 )
             }
+            // #1888：二级页标题标 heading 语义，TalkBack 按标题导航直达本页（与 BucketScreen 页标题同款）；不改视觉。
             Text(
                 stringResource(R.string.storage_computer),
                 fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
+                modifier = Modifier.semantics { heading() },
             )
         }
         Spacer(Modifier.height(16.dp))

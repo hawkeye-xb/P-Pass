@@ -18,6 +18,9 @@
 #      跑法因此是两步：`tools/e3/run …`（act + 判定，此时 judge 红在「缺人工判定」）→
 #      看本轮截图后在场景 main 目录（judge 读的目录）写 manual-bigfont.md →
 #      `tools/e3/run judge android/a11y-bigfont <main目录>` 出最终结论；两次输出都留在证据里。
+#   7. 系统设置回读（#1888）：act 逐语种把实际生效的 font_scale 与三个动画缩放 `settings get`
+#      回读进 `${lang}/scales.txt`，judge 断言 font_scale=1.5、三个动画缩放=0——put 静默失败
+#      （写入没生效）会让证据其实是 1.0x，不许判过。
 #
 # 需要：候选 debug 包与配对桩（同 a11y-semantics）。语种默认 zh-CN en-US 两语都跑。
 DESC="1.5x 大字体+减少动态效果逐页取证：关键信息仍在、无崩溃、48dp 硬判红（#1882 Chip 白名单）、截断归人工判定"
@@ -152,6 +155,14 @@ act() {
     local d="$OUT/$loc"
     mkdir -p "$d"
     A shell cmd locale get-app-locales "$PKG" >"$d/locale-set.txt" 2>/dev/null
+    # #1888：put 只写不回读会被静默失败骗过——字体其实还是 1.0x 也能判过。逐语种回读
+    # 实际生效的字号与三个动画缩放，以 key=value 落盘，judge 按语种断言 1.5 与 0。
+    {
+      echo "font_scale=$(A shell settings get system font_scale 2>/dev/null | tr -d '\r')"
+      echo "window_animation_scale=$(A shell settings get global window_animation_scale 2>/dev/null | tr -d '\r')"
+      echo "transition_animation_scale=$(A shell settings get global transition_animation_scale 2>/dev/null | tr -d '\r')"
+      echo "animator_duration_scale=$(A shell settings get global animator_duration_scale 2>/dev/null | tr -d '\r')"
+    } >"$d/scales.txt"
     app_start
     sleep 5
     ui_dump >/dev/null && dismiss_update
@@ -241,6 +252,30 @@ for d in locale_dirs:
     for name in REQUIRED:
         if not (d / name).is_file():
             fails.append(f"{d.name}/{name} 缺证据（act 没跑完？）")
+    # 7. 系统设置回读（#1888）：字号必须真是 1.5x、三个动画缩放必须真为 0。put 静默失败
+    #    会让证据其实是 1.0x 也判过——这里按语种读回 act 写的 scales.txt 断言。
+    scales_path = d / 'scales.txt'
+    if not scales_path.is_file():
+        fails.append(f"{d.name}/scales.txt 缺失——act 必须回读 font_scale 与三个动画缩放（put 静默失败不许判过）")
+    else:
+        kv = {}
+        for ln in scales_path.read_text(errors='replace').splitlines():
+            ln = ln.strip()
+            if '=' in ln:
+                k, v = ln.split('=', 1)
+                kv[k.strip()] = v.strip()
+        def _num(s):
+            try:
+                return float(s)
+            except (TypeError, ValueError):
+                return None
+        fs = _num(kv.get('font_scale'))
+        check(fs is not None and abs(fs - 1.5) < 1e-9,
+              f"{d.name} font_scale 回读必须为 1.5（实际 {kv.get('font_scale')!r}）——put 静默失败不许判过")
+        for key in ('window_animation_scale', 'transition_animation_scale', 'animator_duration_scale'):
+            av = _num(kv.get(key))
+            check(av is not None and av == 0,
+                  f"{d.name} {key} 回读必须为 0（实际 {kv.get(key)!r}）——减少动态效果没生效不许判过")
     if not (d / 'density.txt').is_file():
         fails.append(f"{d.name}/density.txt 缺失，触控目标换算不了")
         continue
