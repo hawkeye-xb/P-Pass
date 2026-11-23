@@ -36,7 +36,41 @@ else
   ko "bench.py selftest 失败：${out}"
 fi
 
-# 构造隔离沙盒做三组变异反证（不改动工作区真实文件）
+# 2.5 与真实仓库 .github/core-paths.txt + tools/ci-paths.sh core 逐条同源对齐核验
+if python3 -I - "${ROOT}" <<'PY'
+import subprocess, sys
+root = sys.argv[1]
+sys.path.insert(0, f"{root}/tools/flow")
+import v3_harness
+
+rules = v3_harness.core_rules_from_git(root, "HEAD")
+samples = [
+    ".github/core-paths.txt",
+    ".github/workflows/release.yml",
+    ".github/workflows/repair-manifests.yml",
+    ".github/workflows/mirror-latest.yml",
+    ".github/workflows/ci-docs.yml",
+    "crates/pair-pake/src/lib.rs",
+    "crates/daemon/src/pairing.rs",
+    "crates/daemon/src/main.rs",
+    "apps/desktop/src-tauri/tauri.conf.json",
+    "apps/desktop/src/App.svelte",
+    "tools/release/sign.sh",
+    "tools/flow/v3_harness.py",
+]
+for s in samples:
+    py_ans = v3_harness.is_core_path(s, rules)
+    sh_out = subprocess.check_output(["bash", f"{root}/tools/ci-paths.sh", "core", "-", f"{root}/.github/core-paths.txt"], input=s + "\n", text=True).strip()
+    sh_ans = (sh_out == "true")
+    assert py_ans == sh_ans, f"mismatch on {s}: v3_harness={py_ans} vs ci-paths.sh={sh_ans}"
+PY
+then
+  ok "v3_harness 核心路径匹配与真实 .github/core-paths.txt + tools/ci-paths.sh 100% 同源一致"
+else
+  ko "v3_harness 与 tools/ci-paths.sh core 匹配结果不一致"
+fi
+
+# 构造隔离沙盒做四组变异反证（不改动工作区真实文件）
 mut_dir="$(mktemp -d)"
 trap 'rm -rf "${mut_dir}"' EXIT
 mkdir -p "${mut_dir}/flow/bench"
@@ -92,6 +126,23 @@ if python3 -I "${mut_dir}/flow/bench/bench.py" selftest >/dev/null 2>&1; then
 else
   ok "反证 C 通过：放行 gh issue edit 时 selftest 判红"
 fi
+
+# 6. 反证 D：退回错误的前缀剥离 lstrip("./")（导致 .github/* 核心路径漏拦）必须变红
+python3 -I - "${mut_dir}/flow/v3_harness.py" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+src = p.read_text(encoding="utf-8")
+old = '    while pat.startswith("./"):\n        pat = pat[2:]'
+mut = src.replace(old, '    pat = pat.lstrip("./")')
+assert mut != src, "failed to mutate lstrip('./')"
+p.write_text(mut, encoding="utf-8")
+PY
+if python3 -I "${mut_dir}/flow/bench/bench.py" selftest >/dev/null 2>&1; then
+  ko "反证 D 失败：退回 lstrip('./') 漏拦 .github 核心路径后 selftest 仍然通过"
+else
+  ok "反证 D 通过：退回 lstrip('./') 漏拦 .github 核心路径时 selftest 判红"
+fi
+cp "${ROOT}/tools/flow/v3_harness.py" "${mut_dir}/flow/v3_harness.py"
 
 [ "${fail}" -eq 0 ] || exit 1
 echo "ok: V3 门禁与模拟演练场全部判据及反证通过"

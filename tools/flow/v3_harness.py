@@ -67,15 +67,11 @@ def changed_files_since(wt_dir: str, base_sha: str) -> list[str]:
 
 
 def _glob_match(rel_path: str, pat: str) -> bool:
-    pat = pat.strip().lstrip("./")
+    pat = pat.strip()
+    while pat.startswith("./"):
+        pat = pat[2:]
     if not pat:
         return False
-    if pat.endswith("/**"):
-        p = pat[:-3].rstrip("/")
-        return rel_path == p or rel_path.startswith(p + "/")
-    if "*" not in pat and "?" not in pat:
-        p = pat.rstrip("/")
-        return rel_path == p or rel_path.startswith(p + "/")
     rx = "^" + re.escape(pat).replace(r"\*\*/", "(?:.*/)?").replace(r"\*\*", ".*").replace(r"\*", "[^/]*").replace(r"\?", "[^/]") + "$"
     return re.match(rx, rel_path) is not None
 
@@ -187,7 +183,9 @@ def verify_gate(
     if ft.returncode != 0:
         return False, f"FITNESS_RED: {(ft.stderr or ft.stdout).strip()[-240:]}"
 
-    if task.get("require_review") and review_fn is not None:
+    if task.get("require_review", mode == "feature"):
+        if review_fn is None:
+            return False, "REVIEW_MISSING: review required by task/mode=feature, but review_fn is None"
         diff_scope = task.get("review_paths") or ["."]
         run_cmd(["git", "add", "-N", *diff_scope], cwd=wt_dir)
         diff_txt = run_cmd(["git", "diff", base_sha, "--", *diff_scope], cwd=wt_dir).stdout

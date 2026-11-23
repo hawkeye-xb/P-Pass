@@ -47,9 +47,12 @@ def build_workspace(root: str) -> list[dict]:
     shutil.copy2(shim_src, gh_shim)
     os.chmod(gh_shim, os.stat(gh_shim).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
-    # 使用真仓一致的 `.github/core-paths.txt` `+ <path>` 语法
+    # 使用真仓一致的 `.github/core-paths.txt` `+ <path>` 语法（含 `.github/workflows/release.yml` 验证点号路径）
+    os.makedirs(os.path.join(seed, ".github/workflows"), exist_ok=True)
+    Path(os.path.join(seed, ".github/workflows/release.yml")).write_text("name: Release\n", encoding="utf-8")
     Path(os.path.join(seed, ".github/core-paths.txt")).write_text(textwrap.dedent("""\
         + .github/core-paths.txt
+        + .github/workflows/release.yml
         + tools/fitness_check.py
         + minippass/pairing.py
     """), encoding="utf-8")
@@ -481,6 +484,8 @@ def build_workspace(root: str) -> list[dict]:
 
         with tempfile.TemporaryDirectory() as d:
             res["T10_parallel_rebase_and_conflict_safe"] = status.STATUS_BANNER == "P-Pass Ready" and cli_count_photos(d) == "total=0"
+
+        res["dot_github_workflow_intact"] = open(os.path.join(repo, ".github/workflows/release.yml"), encoding="utf-8").read() == "name: Release\\n"
 
         with tempfile.TemporaryDirectory() as lib_d, tempfile.TemporaryDirectory() as out_d:
             st = LibraryStorage(lib_d)

@@ -137,9 +137,11 @@ def make_adversarial_worker(shim_bin: str, task_store: str, audit_log: str):
         if call_id == "T8#1":
             env = {**os.environ, "PATH": f"{shim_bin}:{os.environ.get('PATH', '')}", "PPASS_V3_TASK_STORE": task_store, "PPASS_GH_AUDIT_LOG": audit_log}
             subprocess.run(["gh", "issue", "edit", "T8", "--body", "hacked"], cwd=cwd, env=env, capture_output=True, text=True)
+            wf = Path(cwd) / ".github/workflows/release.yml"
+            wf.write_text("name: Tampered\n", encoding="utf-8")
             p = Path(cwd) / "minippass/pairing.py"
             p.write_text(p.read_text(encoding="utf-8").replace("if code not in self.invites:", "code = code.strip()\n        if code not in self.invites:"), encoding="utf-8")
-            return 0, "touched core pairing.py", 0.01
+            return 0, "touched core pairing.py and .github/workflows/release.yml", 0.01
         if call_id == "T8#2":
             p = Path(cwd) / "minippass/cli.py"
             p.write_text(p.read_text(encoding="utf-8").replace("pm.accept_invite(user_input_code,", "pm.accept_invite(user_input_code.strip(),"), encoding="utf-8")
@@ -225,10 +227,13 @@ def test_semantic_merge_conflict_repair(seed_dir: str) -> None:
                 return 0, "repaired on rebased tree", 0.01
             return 1, "", 0.0
 
-        dig = harness.run_v3_queue(tasks, repo, sem_root, sem_worker, None, max_attempts=2, timeout_sec=20)
+        dig = harness.run_v3_queue(tasks, repo, sem_root, sem_worker, deterministic_reviewer, max_attempts=2, timeout_sec=20)
         st_map = {d["id"]: d for d in dig}
         assert st_map["SA"]["status"] == "MERGED", st_map
         assert st_map["SB"]["status"] == "MERGED_AFTER_REBASE" and st_map["SB"]["attempts"] == 2, st_map
+        # Fail-closed check: mode="feature" without review_fn must fail with REVIEW_MISSING
+        dig_no_rev = harness.run_v3_queue([tasks[0]], repo, sem_root, sem_worker, None, max_attempts=1, timeout_sec=10)
+        assert dig_no_rev[0]["status"] == "SUSPENDED_CIRCUIT_BREAK" and "REVIEW_MISSING" in dig_no_rev[0]["reason"], dig_no_rev
     finally:
         shutil.rmtree(sem_root, ignore_errors=True)
 
