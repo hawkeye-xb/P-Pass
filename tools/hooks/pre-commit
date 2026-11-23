@@ -1,25 +1,22 @@
 #!/usr/bin/env bash
-# 本地提交拦截：核心 + 范围。由转发器（tools/hooks/dispatch.sh）从 HEAD 取出来跑，
+# 本地提交拦截：核心禁区黑名单 + 独立 worktree 保护。由转发器（tools/hooks/dispatch.sh）先执行本机
+# 原有私有钩子（~/.git-allowed-identities、公司词拦截、gitleaks），再从 HEAD 取出本脚本运行，
 # 说明见 docs/runbook/local-hooks.md。
 #
 #   batch/*                         不拦（owner 的批分支）
-#   <type>/<issue号>-<slug>         查该 issue；多卡分支查分支记录的每张卡（git config branch.<分支>.ppasscards，
-#                                   just start <号> <号>… 写入），范围取并集：
-#     - 暂存改动命中核心（tools/ci-paths.sh core，规则 .github/core-paths.txt，带暂存区 diff：
-#       只改版本号行的不算核心，#1451）且没有一张卡带 `core` 标签 → 拒绝
-#     - 暂存改动有文件不在这些卡「范围」代码块的路径/glob 并集里 → 拒绝；任一张卡没有范围代码块 → 拒绝
+#   <type>/<issue号>-<slug>         查该 issue（多卡分支查 branch.<分支>.ppasscards 全部关联卡）：
+#     - 普通业务与测试文件自由修改（不再拦截单卡普通文件范围白名单，#1953）
+#     - 暂存改动命中基线核心路径（优先取 origin/main:.github/core-paths.txt，离线回退 HEAD 规则；
+#       带暂存区 diff：只改版本号行的不算核心，#1451）且没有一张卡带 `core` 标签 → 拒绝
 #     - 卡分支在主仓工作区（不是 linked worktree）里 → 拒绝
-#     - 落后 origin/main 超过 PPASS_HOOK_MAX_BEHIND（默认 20）个提交，或 main 上已有新提交改过范围内
-#       的文件 → 拒绝（现取 origin/main；取不到只告警）
+#     - 落后 origin/main 超过 PPASS_HOOK_MAX_BEHIND（默认 20）个提交，或 main 上已有新提交改过本次暂存
+#       的同一个文件 → 拒绝（现取 origin/main；取不到只告警）
 #     - 合并 origin/main 解冲突的提交：与 MERGE_HEAD 内容相同的文件不算本卡改动
 #   其它分支名、detached HEAD        拒绝
-# 推送时另有 tools/hooks/pre-push：卡分支必须包含最新的 origin/main。
+# 推送时另有 tools/hooks/pre-push：卡分支与远端 main 冲突时拒绝。
 # 查不到 issue（没装 gh、没登录、离线）一律拒绝。
 # 紧急逃生：PPASS_HOOK_BYPASS=1 PPASS_HOOK_BYPASS_REASON=<原因>，commit-msg 会在提交说明末尾记一行
 # `Hook-Bypass: <原因>`。原因为空则拒绝。
-#
-# 环境变量：PPASS_HOOK_ROOT（取规则与脚本的根目录，转发器设置）；PPASS_HOOK_REPO（owner/repo，
-# 默认从 origin 的 URL 解析）。
 
 set -uo pipefail
 
@@ -43,7 +40,7 @@ if [ "${PPASS_HOOK_BYPASS:-}" = "1" ]; then
     deny "PPASS_HOOK_BYPASS=1 必须同时给出原因" \
       "用法：PPASS_HOOK_BYPASS=1 PPASS_HOOK_BYPASS_REASON='<为什么必须绕过>' git commit -s ..." \
       "原因会写进提交说明的 Hook-Bypass: 尾行，供事后审计。"
-  printf '⚠ PPASS_HOOK_BYPASS：跳过核心与范围检查（原因：%s）\n' "$(trim "$PPASS_HOOK_BYPASS_REASON")" >&2
+  printf '⚠ PPASS_HOOK_BYPASS：跳过核心禁区检查（原因：%s）\n' "$(trim "$PPASS_HOOK_BYPASS_REASON")" >&2
   exit 0
 fi
 
@@ -64,18 +61,16 @@ else
     "开分支：git worktree add <目录> -b fix/<issue号>-<slug> origin/main"
 fi
 
-# 卡分支只许在独立 worktree 里提交：主仓工作区是产品负责人与其他会话共用的，
-# 在那里切分支干活会把别人的现场一起改掉。linked worktree 的 git 目录 ≠ 公共目录。
+# 卡分支只许在独立 worktree 里提交：主仓工作区是产品负责人与其他会话共用的。
 GIT_DIR_ABS="$(cd "$(git rev-parse --absolute-git-dir)" && pwd -P)"
 COMMON_ABS="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
 if [ "$GIT_DIR_ABS" = "$COMMON_ABS" ]; then
   deny "卡分支「${BRANCH}」在主仓工作区里，不在独立 worktree 里" \
     "一卡一 worktree：git fetch origin --prune && git worktree add <目录> -b <新卡分支> origin/main" \
-    "已有改动先搬过去：git stash，在新 worktree 里 git stash pop；然后把主仓切回原来的分支。"
+    "已有改动先搬过去，然后把主仓切回原来的分支。"
 fi
 
-# 现取远端 main：判落后用，也用来认出「把 main 合进卡分支」的合并提交。取不到（离线）只告警，
-# 落后检查跳过，合并提交也不做下面的过滤（按全部改动判，宁严勿松）。
+# 现取远端 main：取基线核心规则、判落后、认出合并提交。取不到（离线）只告警并回退 HEAD 核心规则。
 MAIN_REF="refs/remotes/origin/main"
 HAVE_MAIN=""
 if GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o ConnectTimeout=5 -o BatchMode=yes}" \
@@ -85,9 +80,6 @@ else
   printf '⚠ 取不到 origin/main（离线？），这次不检查卡分支是否落后 main\n' >&2
 fi
 
-# 合并提交：MERGE_HEAD 已在 origin/main 里（即把 main 合进来解冲突）时，内容与 MERGE_HEAD
-# 完全一致的文件是从 main 原样带进来的，已经过审，不算本卡的改动；其余文件（冲突解法、
-# 本卡自己的改动）照常判核心与范围。合并别的分支不做过滤——那等于把别处的改动夹带进卡。
 MERGE_HEAD_SHA="$(git rev-parse -q --verify MERGE_HEAD 2>/dev/null)" || MERGE_HEAD_SHA=""
 if [ -n "$MERGE_HEAD_SHA" ] && [ -n "$HAVE_MAIN" ] &&
   git merge-base --is-ancestor "$MERGE_HEAD_SHA" "$MAIN_REF"; then
@@ -114,40 +106,13 @@ fi
 [[ "$REPO" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] ||
   deny "解析不出 GitHub 仓库（origin URL 不认识）" "设 PPASS_HOOK_REPO=<owner>/<repo> 再提交。"
 
-# 这条分支关联的卡：主卡（分支名里的号）+ just start 多卡时记在分支配置里的其余卡。
 CARDS="$(git config --get "branch.${BRANCH}.ppasscards" 2>/dev/null)" || CARDS=""
 case " ${CARDS} " in *" ${ISSUE} "*) ;; *) CARDS="${ISSUE}${CARDS:+ ${CARDS}}" ;; esac
 CARDS_SHOW="#$(printf '%s' "$CARDS" | sed 's/  */、#/g')"
 
 command -v gh >/dev/null 2>&1 ||
-  deny "找不到 gh，查不了 ${CARDS_SHOW} 的标签与范围，按拒绝处理" "装好并登录 gh（gh auth login）后再提交。"
+  deny "找不到 gh，查不了 ${CARDS_SHOW} 的标签，按拒绝处理" "装好并登录 gh（gh auth login）后再提交。"
 
-# ── 范围 ─────────────────────────────────────────────────────────────
-# parse_scope <issue 正文>：「范围」标题之后的第一个 ``` 代码块，追加进 GLOBS；读到了才返回成功。
-# 代码块之前先碰到下一个 **标题** 或 # 标题，就算没有。awk 与 tools/flow/worker-lib.sh 逐字相同。
-parse_scope() {
-  local scope g n=0
-  scope="$(printf '%s\n' "$1" | awk '
-  !insec && /^\*\*范围/ { insec = 1; next }
-  insec && !infence && /^[[:space:]]*```/ { infence = 1; found = 1; next }
-  infence && /^[[:space:]]*```/ { exit }
-  infence { print; next }
-  insec && (/^\*\*[^*]+\*\*/ || /^#/) { exit }
-')"
-  while IFS= read -r g; do
-    g="$(trim "$g")"
-    case "$g" in "" | "#"*) continue ;; esac
-    g="${g#./}"
-    case "$g" in */) g="${g}**" ;; esac
-    GLOBS+=("$g")
-    n=$((n + 1))
-  done <<EOF
-$scope
-EOF
-  [ "$n" -gt 0 ]
-}
-
-GLOBS=()
 CORE_CARD=""
 for c in $CARDS; do
   [[ "$c" =~ ^[0-9]+$ ]] ||
@@ -159,18 +124,32 @@ for c in $CARDS; do
   fi
   OUT="$(printf '%s\n' "$OUT" | tr -d '\r')"
   case ",$(printf '%s\n' "$OUT" | sed -n '1s/^labels://p')," in *,core,*) CORE_CARD="${CORE_CARD:-$c}" ;; esac
-  parse_scope "$(printf '%s\n' "$OUT" | sed '1d')" ||
-    deny "#${c} 没有可读的「范围」" \
-      "issue 正文要有「**范围（只许动这些）**：」，下面跟一个 \`\`\` 代码块，一行一个路径或 glob（** 跨目录，* 不跨 /）。" \
-      "让 owner 先把范围补进 issue，再提交。"
 done
 
-# ── 核心 ─────────────────────────────────────────────────────────────
-# 带上暂存区的 diff：只改版本号行（tools/bump-version.sh）的核心文件不算核心（#1451）。
-# 固定前缀、关掉外部 diff / textconv / 颜色，免得本机 git 配置改掉格式；取不到就不带 --diff，照旧按文件判。
-CORE_ARGS=(core - "$RULES")
+# ── 核心禁区黑名单（优先取不可变基线 origin/main:.github/core-paths.txt，离线回退 HEAD）──
+TMP_FILES=()
+cleanup_tmp() {
+  local t
+  for t in ${TMP_FILES[@]+"${TMP_FILES[@]}"}; do rm -f "$t"; done
+}
+trap cleanup_tmp EXIT
+
+ACTIVE_RULES="$RULES"
+if [ -n "$HAVE_MAIN" ] && BASE_RULES="$(mktemp 2>/dev/null)"; then
+  TMP_FILES+=("$BASE_RULES")
+  if MSYS_NO_PATHCONV=1 git show "${MAIN_REF}:.github/core-paths.txt" >"$BASE_RULES" 2>/dev/null && [ -s "$BASE_RULES" ]; then
+    ACTIVE_RULES="$BASE_RULES"
+  fi
+fi
+
+# 即使卡带 core 标签，也不允许顺手篡改 .github/core-paths.txt 本身（除非专门修核心名单的卡或 batch/*）。
+if printf '%s\n' "$FILES" | grep -qxF '.github/core-paths.txt' && [ -z "$CORE_CARD" ]; then
+  deny "这是核心改动：.github/core-paths.txt 受基线核心禁区保护，无 core 标签禁止修改"
+fi
+
+CORE_ARGS=(core - "$ACTIVE_RULES")
 if STAGED_DIFF="$(mktemp 2>/dev/null)"; then
-  trap 'rm -f "$STAGED_DIFF"' EXIT
+  TMP_FILES+=("$STAGED_DIFF")
   if git -c core.quotepath=false diff --cached --no-renames --no-color --no-ext-diff --no-textconv \
     --src-prefix=a/ --dst-prefix=b/ >"$STAGED_DIFF" 2>/dev/null; then
     CORE_ARGS+=(--diff "$STAGED_DIFF")
@@ -196,8 +175,7 @@ EOF
 fi
 
 # ── 落后 main ────────────────────────────────────────────────────────
-# 两种情况拒绝：落后超过阈值；或 main 上已有本卡还没拿到的提交改过范围内的文件（在旧代码上
-# 改同一处，验证结果作废、合并必冲突）。合并提交把 MERGE_HEAD 也算作已拿到。
+# 两种情况拒绝：落后超过阈值；或 main 上已有本卡还没拿到的提交改过本次暂存的同一个文件（合并必冲突）。
 if [ -n "$HAVE_MAIN" ]; then
   HAVE=(HEAD)
   [ -z "$MERGE_HEAD_SHA" ] || HAVE+=("$MERGE_HEAD_SHA")
@@ -207,33 +185,21 @@ if [ -n "$HAVE_MAIN" ]; then
     deny "卡分支落后 origin/main ${BEHIND} 个提交（上限 ${MAX}）" \
       "先跟上：git fetch origin && git rebase origin/main，重跑本地验证，再提交。"
   fi
+  MAIN_TOUCHED="$(git -c core.quotepath=false log --format= --name-only "$MAIN_REF" --not "${HAVE[@]}" 2>/dev/null | sort -u)"
   STALE=()
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    hit="$(printf '%s\n' "$f" | bash "$PATHS" hit - "${GLOBS[@]}" 2>/dev/null)"
-    [ "$hit" = "true" ] && STALE+=("$f")
-  done <<EOF
-$(git -c core.quotepath=false log --format= --name-only "$MAIN_REF" --not "${HAVE[@]}" 2>/dev/null | sort -u)
+  if [ -n "$MAIN_TOUCHED" ]; then
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      printf '%s\n' "$MAIN_TOUCHED" | grep -qxF -- "$f" && STALE+=("$f")
+    done <<EOF
+$FILES
 EOF
+  fi
   if [ "${#STALE[@]}" -gt 0 ]; then
-    deny "origin/main 上已有新提交改过本卡范围内的文件，卡分支还没跟上" \
+    deny "origin/main 上已有新提交改过本次暂存的文件，卡分支还没跟上" \
       "${STALE[@]/#/main 上改过：}" \
       "先跟上：git fetch origin && git rebase origin/main，重跑本地验证，再提交。"
   fi
 fi
 
-OUTSIDE=()
-while IFS= read -r f; do
-  [ -n "$f" ] || continue
-  hit="$(printf '%s\n' "$f" | bash "$PATHS" hit - "${GLOBS[@]}" 2>/dev/null)"
-  [ "$hit" = "true" ] || OUTSIDE+=("$f")
-done <<EOF
-$FILES
-EOF
-if [ "${#OUTSIDE[@]}" -gt 0 ]; then
-  deny "有 ${#OUTSIDE[@]} 个文件不在 ${CARDS_SHOW} 的「范围」里" \
-    "${OUTSIDE[@]/#/越界：}" \
-    "范围：${GLOBS[*]}" \
-    "做法：git restore --staged <越界文件>；确需扩大，先让 owner 改 issue 的范围，再提交。"
-fi
 exit 0

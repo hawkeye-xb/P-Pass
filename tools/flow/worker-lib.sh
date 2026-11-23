@@ -60,8 +60,7 @@ flow_load_issue() { # flow_load_issue <号>
 
 has_label() { case ",${I_LABELS}," in *",$1,"*) return 0 ;; esac; return 1; }
 
-# 「范围」代码块解析：与 tools/hooks/pre-commit 里那段 awk 逐字相同
-# （tools/test-flow-worker.sh 会比对两边，漂移即红）。结果放进 GLOBS 数组。
+# 「范围」代码块解析（可选提示：供门禁预检与类型推断参考；普通文件不再强制列范围，#1953）。
 flow_parse_scope() { # flow_parse_scope <issue 正文>
   local scope g
   scope="$(printf '%s\n' "$1" | awk '

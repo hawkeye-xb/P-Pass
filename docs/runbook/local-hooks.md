@@ -1,39 +1,25 @@
-# 本地提交拦截（核心 + 范围）
+# 本地提交拦截（本机安全链 + 核心禁区黑名单）
 
-`git commit` 那一刻由 git hook 判两件事，不对就拒绝提交：改动有没有碰核心、
-有没有改出卡的「范围」。`git push` 时再判一件：卡分支有没有跟上最新的 `origin/main`。只靠 git 自身，不依赖任何 agent 外壳的 hook 机制，
-所以不管提交是谁发起的，规则都一样。
+`git commit` 那一刻先经转发器执行本机私有安全钩子（`~/.git-allowed-identities` 身份白名单、个人/公司隔离钩子、`gitleaks` 密钥扫描），再由仓库 git hook 校验**核心禁区黑名单与独立 worktree 保护**（自 #1953 起，单卡普通业务与配套单测文件路径白名单已移除）。`git push` 时再判卡分支与最新 `origin/main` 是否有冲突。只靠 git 自身，不依赖任何 agent 外壳的 hook 机制。
 
 ## 判什么
 
 | 当前分支 | 判定 |
 |---|---|
 | `batch/*`（owner 的批分支） | 不拦 |
-| `<type>/<issue号>-<slug>`，type ∈ feat/fix/docs/test/ci | 必须在独立 worktree 里（在主仓工作区直接拒绝）；用 `gh` 查该 issue，下面两条都要过 |
+| `<type>/<issue号>-<slug>`，type ∈ feat/fix/docs/test/ci | 必须在独立 worktree 里（在主仓工作区直接拒绝）；用 `gh` 查该 issue，核验核心禁区黑名单 |
 | 其它分支名、detached HEAD | 拒绝 |
 
-1. **核心**：暂存改动用 `tools/ci-paths.sh core` 判定，规则是 `.github/core-paths.txt`，
-   和 CI 的 acceptance gate 与独立评审用的是同一套。命中核心、而 issue 没有 `core` 标签时拒绝。
-   这时按 AGENTS.md 红线 6，只写复现、根因和两个修法。
-2. **范围**：issue 正文里「**范围（只许动这些）**：」下面那个 ```` ``` ```` 代码块，一行写一个
-   路径或 glob（`**` 可以跨目录，`*` 和 `?` 不跨 `/`；以 `/` 结尾的行视为 `目录/**`；空行和 `#` 开头的行忽略）。
-   暂存的文件有任何一个不在范围内就拒绝，并列出越界的文件。没有这个代码块，或者代码块是空的，也拒绝，
-   需要先把范围补进 issue。范围不认项目符号列表和 `{a,b}` 写法。
+1. **核心禁区黑名单**：暂存改动用 `tools/ci-paths.sh core` 判定，规则优先读取不可变基线 `origin/main:.github/core-paths.txt`（离线时回退 `HEAD` 规则），和 CI 的 acceptance gate 与独立评审用的是同一套。命中核心、而 issue 没有 `core` 标签时拒绝。这时按 AGENTS.md 红线 6，只写复现、根因和两个修法。
+2. **普通业务与单测文件放开**：不再强制校验 issue 正文里的单卡文件范围白名单，执行会话可自由修改相关普通业务代码与配套单测，消除因漏填关联单测导致的卡壳与衍生碎卡。
 
 暂存列表按 `--no-renames` 取，改名时旧路径和新路径都要判。空提交不判。
 
-**多卡分支**：同一个功能的几张卡可以领到一条分支上（`just start <号> <号>… [--name <功能名>]`）。分支名里是第一张卡的号，
-全部卡号记在本地分支配置 `branch.<分支>.ppasscards`（空格分隔）。这时上面两条按全部卡判：范围取并集，任一张卡没有
-范围代码块就拒绝；命中核心时只要有一张卡带 `core` 标签就放行。`just done` 读同一个配置：回执贴到每张卡，开 PR 时正文
-`closes` 全部卡。
+**多卡分支**：同一个功能的几张卡可以领到一条分支上（`just start <号> <号>… [--name <功能名>]`）。分支名里是第一张卡的号，全部卡号记在本地分支配置 `branch.<分支>.ppasscards`（空格分隔）。命中核心时只要有一张关联卡带 `core` 标签就放行。`just done` 读同一个配置：回执贴到每张卡，开 PR 时正文 `closes` 全部卡。
 
-**主仓工作区**：主仓目录是产品负责人与其他会话共用的现场，卡分支只许在
-`git worktree add` 出来的独立目录里提交。`batch/*` 不受此限。
+**主仓工作区**：主仓目录是产品负责人与其他会话共用的现场，卡分支只许在 `git worktree add` 出来的独立目录里提交。`batch/*` 不受此限。
 
-**落后 main（提交时）**：卡分支提交时先现取一次 `origin/main`，下面两种情况拒绝，并提示
-`git fetch origin && git rebase origin/main`：落后超过 20 个提交（`PPASS_HOOK_MAX_BEHIND` 可调）；
-或 main 上已有本卡还没拿到的提交改过「范围」内的文件（在旧代码上改同一处，验证结果作废，合并必然冲突）。
-取不到 `origin/main`（离线）时只告警，不拒绝。
+**落后 main（提交时）**：卡分支提交时先现取一次 `origin/main`，下面两种情况拒绝，并提示 `git fetch origin && git rebase origin/main`：落后超过 20 个提交（`PPASS_HOOK_MAX_BEHIND` 可调）；或 main 上已有本卡还没拿到的提交改过本次暂存的同一个文件（合并必冲突）。取不到 `origin/main`（离线）时只告警，不拒绝。
 
 **合并 main 解冲突**：卡分支上 `git merge origin/main` 解完冲突后提交，与 MERGE_HEAD 内容完全相同的文件
 是从 main 原样带进来的、已经过审，不算本卡改动；冲突解法和顺手做的改动照常判核心与范围。

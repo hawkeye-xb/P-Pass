@@ -343,8 +343,8 @@ has_lbl 10 "status:inbox" && ok "拒绝后标签不变" || bad "拒绝后标签�
 [ ! -d "${PPASS_WT_ROOT}/10-not-ready" ] && ok "拒绝后没建 worktree" || bad "拒绝后建了 worktree"
 
 issue 11 "status:ready" "[T-11] no scope" ""
-if START 11 >/dev/null 2>&1; then bad "start 放行了没有范围代码块的卡"; else ok "start 拒绝无「范围」代码块"; fi
-has_lbl 11 "status:ready" && ok "拒绝后仍是 ready" || bad "拒绝后标签被改了"
+if START 11 >/dev/null 2>&1; then ok "start 放行没有单卡范围代码块的卡（#1953）"; else bad "start 仍拒绝无「范围」代码块的卡"; fi
+has_lbl 11 "status:doing" && ok "无范围块领卡后转 status:doing" || bad "无范围块领卡后标签不对"
 
 issue 12 "status:ready" "[T-12] closed one" "src/**"
 printf 'CLOSED' >"${FAKE_GH}/12.state"
@@ -490,13 +490,6 @@ OUT="$(START 72 2>&1)" || bad "start 72 失败：$OUT"
 printf '%s' "$OUT" | grep -q '主副本没有 apps/android/local.properties：.*just verify 编不出 APK' &&
   ok "  主副本没有 → 打印影响与补法" || bad "  主副本没有却没打印提示：$OUT"
 
-# 范围解析与 hook 里那份逐字相同（防漂移）；先证明比对本身会红
-awk_block() { sed -n "/awk '\$/,/^')\"/p" "$1" | sed 1d; }
-HOOK_AWK="$(awk_block "${SRC}/tools/hooks/pre-commit")"
-LIB_AWK="$(awk_block "${SRC}/tools/flow/worker-lib.sh")"
-[ -n "$HOOK_AWK" ] && [ "$HOOK_AWK" = "$LIB_AWK" ] && ok "范围解析 awk 与 tools/hooks/pre-commit 逐字一致" || bad "范围解析 awk 与 hook 漂移"
-[ "$HOOK_AWK" != "$(printf '%s' "$HOOK_AWK" | sed 's/infence = 1/infence = 2/')" ] && ok "反证：改动一处比对即红" || bad "比对对改动不敏感"
-
 # ── just done ─────────────────────────────────────────────────────────
 echo "== just done =="
 card() { # card <号> <标题> <范围> [正文附加行] → 领卡并输出 worktree 目录
@@ -510,16 +503,11 @@ commit_file() { # commit_file <目录> <文件> [内容]
   git -C "$1" add -A && git -C "$1" commit -q -s -m "change $2"
 }
 
-# 越界 → 不推、blocked；去掉越界后放行
+# 普通非核心文件跨目录自由修改放行（#1953）；核心文件无 core 标签仍硬拦（反证）
 W="$(card 20 "[T-20] scope" "src/**")"
 commit_file "$W" src/ok.txt
 commit_file "$W" docs/outside.md
-if DONE "$W" >"${TMP}/o20" 2>&1; then bad "done 放行了越界改动"; else ok "done 拒绝范围外文件（退出码非 0）"; fi
-on_origin "fix/20-scope" && bad "越界仍被推送" || ok "越界时没有推送"
-has_lbl 20 "status:blocked" && ! has_lbl 20 "status:doing" && ok "越界时打 status:blocked（去掉 doing）" || bad "越界时标签不对"
-comments_of 20 | grep -q "docs/outside.md" && ok "评论点名了越界文件" || bad "评论没点名越界文件"
-git -C "$W" rm -q docs/outside.md && git -C "$W" commit -q -s -m "drop outside"
-if DONE "$W" >"${TMP}/o20b" 2>&1; then ok "反证：撤掉越界后放行并推送"; else bad "撤掉越界后仍失败：$(tail -5 "${TMP}/o20b")"; fi
+if DONE "$W" >"${TMP}/o20b" 2>&1; then ok "done 放行普通关联文件跨目录修改并推送（#1953）"; else bad "done 仍拦了普通关联文件：$(tail -5 "${TMP}/o20b")"; fi
 on_origin "fix/20-scope" && ok "绿时已推送到 origin" || bad "绿时没推送"
 has_lbl 20 "status:review" && ! has_lbl 20 "status:blocked" && ! has_lbl 20 "status:doing" && ok "标签 → status:review，blocked 已去掉" || bad "交卡后标签不对：$(labels_of 20)"
 C="$(comments_of 20)"
@@ -919,10 +907,11 @@ DONE "$W" >/dev/null 2>&1 && bad "android-test 红时 done 仍成功" || ok "and
 has_lbl 128 "status:doing" && ! has_lbl 128 "status:blocked" && ok "挑选后的门禁红 → 卡保持 doing，不打 blocked" || bad "挑选后的门禁红改写了状态：$(labels_of 128)"
 rm -f "${FAKE_GH}/ci_fail"
 
-# 核心改动无 core 标签 → blocked；
+# 核心改动无 core 标签 → blocked（即使提交里把工作区的 .github/core-paths.txt 删空，done 仍按基线 origin/main 核心规则拦截）
 W="$(card 24 "[T-24] core hit" "core/** src/**")"
+printf '# emptied\n' >"$W/.github/core-paths.txt"
 commit_file "$W" core/x.txt
-if DONE "$W" >/dev/null 2>&1; then bad "无 core 标签却放行了核心改动"; else ok "核心改动且无 core 标签 → 拒绝"; fi
+if DONE "$W" >/dev/null 2>&1; then bad "无 core 标签（且篡改本地 core-paths.txt）却放行了核心改动"; else ok "核心改动无 core 标签（即使篡改分支 core-paths.txt）→ 按基线核心规则拒绝"; fi
 has_lbl 24 "status:blocked" && ok "核心命中时打 status:blocked" || bad "核心命中没打 blocked"
 printf 'status:blocked,core' >"${FAKE_GH}/24.labels"
 DONE "$W" >/dev/null 2>&1 && ok "反证：带 core 标签放行" || bad "带 core 标签仍被拒"
@@ -1176,12 +1165,16 @@ grep -qx 'closes #51' "${FAKE_GH}/pr.body" && grep -qx 'closes #52' "${FAKE_GH}/
 grep -q '不需要真机验收' "${FAKE_GH}/pr.body" && ok "用户看不到的改动：PR 写明不需要真机验收" || bad "PR 没写验收说明"
 grep -q '随版本验收' "${FAKE_GH}/pr.body" && bad "用户看不到的改动也写了随版本验收" || ok "反证：用户看不到的改动不写随版本验收"
 [ ! -e "${FAKE_GH}/pr.draft" ] && ok "自动级：PR 不带 --draft" || bad "自动级 PR 带了 --draft"
-# 反证：同样的改动，分支只记一张卡 → 第二张卡范围内的文件算越界
+# 反证：多卡分支里其中一张带 core 标签放行核心改动；单卡无 core 标签碰核心仍被拒（普通文件已放开，#1953）
 issue 54 "status:ready" "[T-54] single" "src/**" "Bug"
 SW="$(START 54 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/54-"*)"
 commit_file "$SW" src/m.txt
 commit_file "$SW" docs/m.md
-if DONE "$SW" >"${TMP}/o54" 2>&1; then bad "单卡分支放行了别的卡范围里的文件"; else ok "反证：只认一张卡时 docs/ 越界被拒"; fi
+if DONE "$SW" >"${TMP}/o54" 2>&1; then ok "单卡分支自由修改关联普通文件放行（#1953）"; else bad "单卡分支改普通文件仍被拒：$(tail -5 "${TMP}/o54")"; fi
+issue 195 "status:ready" "[T-195] single core block" "src/**" "Bug"
+SW2="$(START 195 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/195-"*)"
+commit_file "$SW2" core/x.txt
+if DONE "$SW2" >"${TMP}/o195" 2>&1; then bad "单卡无 core 标签放行了核心文件"; else ok "反证：单卡无 core 标签碰核心文件仍被拒"; fi
 
 # PR 正文写不进去（#1449）：pr-body.md 的位置被目录占住（不靠 chmod，root 下照样成立）→ 失败、不打印开 PR 命令，
 # 不留半截正文；临时文件写成功再改名

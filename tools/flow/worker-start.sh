@@ -35,7 +35,7 @@ bash "${HERE}/doctor.sh" || exit 1
 command -v gh >/dev/null 2>&1 || die "找不到 gh，查不了 #${N}" "装好并登录：gh auth login"
 REPO="$(flow_repo)"
 
-# 每张卡都校验（有一张不合格就整批不领，不留半截）：open、status:ready、有范围。范围取并集。
+# 每张卡都校验（有一张不合格就整批不领，不留半截）：open、status:ready、有验收场景（普通文件范围不再强制，#1953）。
 ALL_GLOBS=()
 ITYPES=""
 CORE_CARDS=()
@@ -46,17 +46,14 @@ for c in "${CARDS[@]}"; do
   [ "$I_STATE" = "OPEN" ] || die "#${c} 不是 open（现在是 ${I_STATE:-未知}），不领"
   if ! has_label "status:ready"; then
     die "#${c} 没有 status:ready 标签，不能领（现有标签：${I_LABELS:-无}）" \
-      "inbox = 还没写范围与验收；doing = 别人在做；blocked = 卡住；review = 已交卡。" \
-      "去找 owner 把范围与验收写好并转 ready。"
+      "inbox = 还没写验收；doing = 别人在做；blocked = 卡住；review = 已交卡。" \
+      "去找 owner 把验收写好并转 ready。"
   fi
   flow_parse_scope "$I_BODY"
-  [ "${#GLOBS[@]}" -gt 0 ] || die "#${c} 没有可读的「范围」代码块，不领" \
-    "issue 正文要有「**范围（只许动这些）**：」，下面跟一个 \`\`\` 代码块，一行一个路径或 glob。" \
-    "让 owner 先补范围，并保持 status:ready。"
   [ -n "$(flow_field_text "$I_BODY" "验收场景")" ] || die "#${c} 没有可读的「验收场景」，不领" \
     "issue 正文要有「**验收场景**：」，写成 操作 → 期望 → 日志里哪一行算过。" \
     "让 owner 先补验收场景，并保持 status:ready。"
-  ALL_GLOBS+=("${GLOBS[@]}")
+  [ "${#GLOBS[@]}" -eq 0 ] || ALL_GLOBS+=("${GLOBS[@]}")
   has_label core && CORE_CARDS+=("$c")
   TITLES+=("#${c} ${I_TITLE}")
   # type：issue 类型 Feature→feat、Bug→fix（多卡：有 Feature 就 feat，其次有 Bug 就 fix）
@@ -79,22 +76,26 @@ for c in "${CARDS[@]}"; do
   CARD_TEXT="${CARD_TEXT}${I_BODY}
 "
 done
-GLOBS=("${ALL_GLOBS[@]}")
+GLOBS=(${ALL_GLOBS[@]+"${ALL_GLOBS[@]}"})
 flow_requested_gates "$CARD_TEXT" || die "卡面 E1 门禁对账失败" "$REQUESTED_ERROR"
 
-# type：issue 类型 Feature→feat、Bug→fix；Task 按范围推（全在文档里→docs，全在测试里→test，其余→ci）。
+# type：issue 类型 Feature→feat、Bug→fix；Task 有提示范围时按路径推（全在文档→docs，全在测试→test），否则→ci。
 # 注意：本地提交拦截只认 feat/fix/docs/test/ci（tools/hooks/pre-commit），所以没有 chore。
 TYPE=""
 case "$ITYPES " in
   *" Feature "*) TYPE="feat" ;;
   *" Bug "*) TYPE="fix" ;;
   *)
-    alldocs=1 alltest=1
-    for g in "${GLOBS[@]}"; do
-      case "$g" in docs/* | *.md | release/notes/*) ;; *) alldocs=0 ;; esac
-      case "$g" in tools/test-* | */tests/* | */test/*) ;; *) alltest=0 ;; esac
-    done
-    if [ "$alldocs" = 1 ]; then TYPE="docs"; elif [ "$alltest" = 1 ]; then TYPE="test"; else TYPE="ci"; fi
+    if [ "${#GLOBS[@]}" -gt 0 ]; then
+      alldocs=1 alltest=1
+      for g in "${GLOBS[@]}"; do
+        case "$g" in docs/* | *.md | release/notes/*) ;; *) alldocs=0 ;; esac
+        case "$g" in tools/test-* | */tests/* | */test/*) ;; *) alltest=0 ;; esac
+      done
+      if [ "$alldocs" = 1 ]; then TYPE="docs"; elif [ "$alltest" = 1 ]; then TYPE="test"; else TYPE="ci"; fi
+    else
+      TYPE="ci"
+    fi
     ;;
 esac
 if [ -n "$TYPE_OVERRIDE" ]; then
@@ -166,7 +167,7 @@ precheck_script_of() { # 命令里引用的仓库路径（bash <路径>）；没
     bash\ *) set -- $1; [ -n "${2:-}" ] && printf '%s\n' "$2" ;;
   esac
 }
-if [ "${PPASS_GATE_PRECHECK:-on}" != off ]; then
+if [ "${PPASS_GATE_PRECHECK:-on}" != off ] && [ "${#GLOBS[@]}" -gt 0 ]; then
   PRECHECK_PATHS="$(for g in "${GLOBS[@]}"; do
     m="$(git -C "$DIR" ls-files -z -- "$g" 2>/dev/null | tr '\0' '\n')"
     if [ -n "$m" ]; then printf '%s\n' "$m"; else printf '%s\n' "$g"; fi
@@ -323,8 +324,12 @@ else
   echo "   编译缓存：没建成共享配置，本目录单独编（tools/e3/dev cache 看原因）"
 fi
 echo "   ${LOCAL_PROPS}：${LOCAL_PROPS_NOTE}"
-echo "   范围（只许动这些；多卡取并集）："
-printf '     %s\n' "${GLOBS[@]}"
+if [ "${#GLOBS[@]}" -gt 0 ]; then
+  echo "   涉及路径提示（普通业务与配套单测不再拦截；未获批禁止碰 .github/core-paths.txt）："
+  printf '     %s\n' "${GLOBS[@]}"
+else
+  echo "   边界规则：普通业务与单测自由修改；未带 core 标签禁止碰 .github/core-paths.txt"
+fi
 echo
 # 核心卡：正文引用了 origin/main 上「已采纳」的方案 ⇒ 已定案，按方案实现；
 # 没有 ⇒ 还没定案，只写复现、根因和两个修法。
@@ -332,7 +337,7 @@ for c in ${CORE_CARDS[@]+"${CORE_CARDS[@]}"}; do
   flow_load_issue "$c"
   ADRS="$(adopted_adrs "$I_BODY")"
   if [ -n "$ADRS" ]; then
-    echo "⚠ #${c} 是核心卡（带 core 标签），已引用 origin/main 上「已采纳」的方案：按方案实现，只改「范围」里的文件。"
+    echo "⚠ #${c} 是核心卡（带 core 标签），已引用 origin/main 上「已采纳」的方案：按方案实现。"
     printf '%s\n' "$ADRS" | sed 's/^/  方案：/'
     echo "  实现要偏离方案、或方案没覆盖到：just stuck ${c} \"<原因>\"，不自己定。"
   else
@@ -343,7 +348,7 @@ for c in ${CORE_CARDS[@]+"${CORE_CARDS[@]}"}; do
 done
 echo "下一步："
 echo "  1. cd ${DIR}        （之后所有命令都在这个目录里跑）"
-echo "  2. 读 issue：$(printf 'gh issue view %s；' "${CARDS[@]}")按「验收场景」改代码；只改上面「范围」里的文件"
+echo "  2. 读 issue：$(printf 'gh issue view %s；' "${CARDS[@]}")按「验收场景」改代码（未带 core 标签禁止碰核心禁区）"
 echo "  3. git add <文件> && git commit -s -m \"<type>: <说明>\"        （提交说明末尾需有 Signed-off-by）"
 echo "  4. 干完：just done          （跑门禁与验收、推分支、在 issue 里交卡）"
-echo "  卡住（命中核心 / 需改范围外文件 / 没有验收场景 / 连红 3 次）：just stuck ${N} \"<原因>\""
+echo "  卡住（命中核心无已批方案 / 没有验收场景 / 连红 3 次）：just stuck ${N} \"<原因>\""
