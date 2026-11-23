@@ -88,7 +88,11 @@ pub struct UserDirFacts {
 /// 设备命名空间的重解析点（[`crate::contains_remote_reparse_point`]）与网络卷 / 映射
 /// 网络盘（[`crate::is_network_volume_or_ancestor`]）一律拒，避免服务形态下以服务
 /// 身份跟随 junction / 映射盘外连。
-fn is_valid_dir_fact_path(path: &std::path::Path) -> bool {
+fn is_valid_dir_fact_path_with(
+    path: &std::path::Path,
+    reparse_point: &dyn Fn(&std::path::Path) -> bool,
+    network_volume: &dyn Fn(&std::path::Path) -> bool,
+) -> bool {
     let raw = path.as_os_str();
     if raw.is_empty() {
         return false;
@@ -122,9 +126,8 @@ fn is_valid_dir_fact_path(path: &std::path::Path) -> bool {
     // #1927：格式合法后，还要在 `canonicalize()` / `real_path` 之前拦掉指向远端 /
     // 设备命名空间的重解析点，以及网络卷 / 映射网络盘——服务形态下这些都会让服务
     // 账户以服务身份外连 SMB/NTLM（`user_dirs` 进入 `real_path` 前就要拒）。
-    (normal_drive || verbatim_drive || posix)
-        && !crate::contains_remote_reparse_point(path)
-        && !crate::is_network_volume_or_ancestor(path)
+    // 两个判据以探针注入，单测能单独反证任一分支去掉后变红。
+    (normal_drive || verbatim_drive || posix) && !reparse_point(path) && !network_volume(path)
 }
 
 impl UserDirFacts {
@@ -213,9 +216,31 @@ impl UserDirFacts {
     /// `library` 外的全部标准目录均非空、为绝对路径且不含 `..`；可选 `library` 若存在
     /// 也必须同样合法（Windows 的 `library` 按 [`UserDirFacts`] 的定义就是 `None`）。
     /// 连接方存在而事实不齐或不合法 ⇒ 调用方必须拒绝本次选择，不拿自己的目录代答、不按形状猜。
+    ///
+    /// #1927：生产入口固定用平台的真实探测器（[`crate::contains_remote_reparse_point`] /
+    /// [`crate::is_network_volume_or_ancestor`]），判断逻辑在可注入的
+    /// [`Self::selection_ready_with`] 里，单测能单独反证任一条判据被去掉。
     pub fn selection_ready(&self) -> bool {
-        let req = |p: &Option<std::path::PathBuf>| p.as_deref().is_some_and(is_valid_dir_fact_path);
-        let opt = |p: &Option<std::path::PathBuf>| p.as_deref().is_none_or(is_valid_dir_fact_path);
+        self.selection_ready_with(&|p| crate::contains_remote_reparse_point(p), &|p| {
+            crate::is_network_volume_or_ancestor(p)
+        })
+    }
+
+    /// [`Self::selection_ready`] 的可测版本：重解析点 / 网络卷探针可注入。
+    fn selection_ready_with(
+        &self,
+        reparse_point: &dyn Fn(&std::path::Path) -> bool,
+        network_volume: &dyn Fn(&std::path::Path) -> bool,
+    ) -> bool {
+        let req = |p: &Option<std::path::PathBuf>| {
+            p.as_deref().is_some_and(|path| {
+                is_valid_dir_fact_path_with(path, reparse_point, network_volume)
+            })
+        };
+        let opt = |p: &Option<std::path::PathBuf>| {
+            p.as_deref()
+                .is_none_or(|path| is_valid_dir_fact_path_with(path, reparse_point, network_volume))
+        };
         req(&self.home)
             && req(&self.desktop)
             && req(&self.documents)
@@ -702,6 +727,43 @@ mod floor_tests {
         let hydrated = peer.with_dirs(win.clone());
         assert_eq!(hydrated.id(), "S-1-5-21-1");
         assert_eq!(hydrated.dirs(), &win);
+    }
+
+    /// #1927：`selection_ready` 的重解析点 / 网络卷拦截走可注入探针——任一探针命中
+    /// 某个用户目录都必须让整体不就绪；两侧都放行时合法本地绝对目录应就绪，默认入口
+    /// 也确实把平台判据接了进来。
+    /// 反证：去掉 `selection_ready_with` 里的 `!reparse_point(path)` 或
+    /// `!network_volume(path)` ⇒ 对应的「命中即不就绪」断言变红。
+    #[test]
+    fn selection_ready_rejects_remote_reparse_and_network_volume_via_probes() {
+        use super::UserDirFacts;
+        use std::path::{Path, PathBuf};
+
+        let host_home = if cfg!(windows) {
+            PathBuf::from(r"C:\Users\alice")
+        } else {
+            PathBuf::from("/Users/alice")
+        };
+        let facts = UserDirFacts::from_home(host_home);
+        // 全部是合法本地绝对路径，探针都放行 ⇒ 就绪。
+        assert!(
+            facts.selection_ready_with(&|_| false, &|_| false),
+            "合法本地绝对目录 + 探针放行应就绪"
+        );
+        // 仅重解析点探针对 downloads 命中 ⇒ 不就绪。
+        let downloads = facts.downloads.clone().unwrap();
+        assert!(
+            !facts.selection_ready_with(&move |p: &Path| p == downloads.as_path(), &|_| false),
+            "重解析点命中用户目录必须不就绪"
+        );
+        // 仅网络卷探针对 pictures 命中 ⇒ 不就绪。
+        let pictures = facts.pictures.clone().unwrap();
+        assert!(
+            !facts.selection_ready_with(&|_| false, &move |p: &Path| p == pictures.as_path()),
+            "网络卷命中用户目录必须不就绪"
+        );
+        // 默认入口对合法本地绝对路径就绪：证明探针确实接进了 `selection_ready`。
+        assert!(facts.selection_ready(), "合法宿主目录默认入口应就绪");
     }
 }
 

@@ -1454,17 +1454,29 @@ mod tests {
         assert!(err.contains("ui.err_library_target_missing"), "{err}");
     }
 
-    /// #1927：目标直接是网络卷 / 映射网络盘（含尚不存在的新建子目录）时，必须在
-    /// `canonicalize()` 之前以 `ui.err_relocate_network_volume` 拒绝，与搬迁口径一致。
-    /// 反证：去掉 `network_volume(target)` 早退 ⇒ 本用例红。
+    /// #1927：目标直接落在网络卷 / 映射网络盘上时，必须在 `canonicalize()` 之前以
+    /// `ui.err_relocate_network_volume` 拒绝，与搬迁口径一致。
+    ///
+    /// 只让**未解析的字面路径** `link` 命中「网络卷」探测器：真实目标是本地目录，放开
+    /// 前置检查后 `resolve_components` 会把它解析成一个不在网络卷上的真实路径，后置检查
+    /// 兜不住——所以本用例单独变红，证明前置那道早退确实生效，而不是被后置检查掩盖。
+    /// 反证：去掉 `if network_volume(target)` 早退 ⇒ 本用例红（返回 `Ok`）。
     #[test]
     fn network_volume_library_target_is_refused_before_resolve() {
         let tmp = tempfile::tempdir().unwrap();
         let platform_dir = tmp.path().join("platform");
-        // 尚未创建的新建子目录：字面路径本身不存在的场景。
-        let target = tmp.path().join("not-yet-created-lib");
-        assert!(!target.exists());
-        let err = check_library_path_with(&target, &platform_dir, None, &|_| false, &|_| true)
+        let real = tmp.path().join("local-disk-dir");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = tmp.path().join("library-on-network");
+        let kind = &platform::test_support::dir_link_kinds()[0];
+        if let Err(e) = kind.make(&real, &link) {
+            assert!(kind.may_need_privilege, "{} 建不出来：{e}", kind.name);
+            return;
+        }
+        // 只有未 canonicalize 的链接路径算「在网络卷上」；解析后的真实目录不算，
+        // 于是拦截只能来自 resolve_components 之前那道前置检查。
+        let network_volume = |p: &Path| p == link.as_path();
+        let err = check_library_path_with(&link, &platform_dir, None, &|_| false, &network_volume)
             .expect_err("网络卷 / 映射盘必须在 canonicalize 之前被拒");
         assert!(err.contains("ui.err_relocate_network_volume"), "{err}");
     }
