@@ -621,14 +621,7 @@ final class LiveBackend: @unchecked Sendable {
             let source = FolderMediaSource(registry: registry, sourceId: record.id, directory: directory, logger: logger,
                                            scope: { (effective, known, since) })
             do {
-                var after: String? = nil
-                let pageSize = 500
-                while true {
-                    let page = try await source.inScope(after: after, limit: pageSize)
-                    total += Int64(page.count)
-                    guard page.count == pageSize, let lastId = page.last?.mediaId else { break }
-                    after = lastId
-                }
+                total += Int64(try await source.inScopeCount())
             } catch {
                 logger.log("folder \(record.id): in-scope count unreadable: \(error)")
                 return nil

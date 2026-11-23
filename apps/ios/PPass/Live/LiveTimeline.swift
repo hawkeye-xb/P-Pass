@@ -96,6 +96,8 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
             cache.setObject(local, forKey: key)
             return local
         }
+        // #1937：本机读取因任务取消（网格快速滚走）返回 nil 时不再发远端缩略图请求，与 `original` 同口径。
+        try Task.checkCancellation()
         let image = try await logged("thumb.get size=\(large ? 1024 : 256)", { (_: UIImage) in "" }) {
             guard let client = client() else { throw Failure.notPaired }
             let data = try await client.call(Methods.thumbGet, ThumbGet(hash: item.id, size: large ? .s1024 : .s256), as: ThumbData.self)

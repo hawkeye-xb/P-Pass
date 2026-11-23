@@ -551,6 +551,76 @@ final class LocalSourceFirstTests: XCTestCase {
         XCTAssertEqual(loads, 4, "invalidate 后立即重读")
     }
 
+    // MARK: - ④ (#1937) 取消后快速退出 / 拷贝途中改写必须拒绝
+
+    /// 网格快速滚走：本机缩略图读取因取消返回 nil 时，不再发远端 `thumb.get`（对齐 `original`）。
+    /// 反证：删掉 `thumbnail` 里本机读取后的 `Task.checkCancellation()`，远端 thumb.get 次数变 1，本用例红。
+    func test_cancelled_local_thumbnail_skips_remote_thumb_get() async throws {
+        let remoteJpeg = try makeJpeg(width: 16, height: 16)
+        let remoteSpy = RemoteSpy(remoteJpeg: remoteJpeg, remoteBlob: remoteJpeg)
+        let gate = AsyncGate()
+        let reader = GateReader(gate: gate)
+        let index = LocalSourceIndex.of(try seedOrders([
+            (mediaId: photoMediaId, hash: photoHash, state: .confirmed, sourceMissing: false, sourceVersion: photoVersion),
+        ]))
+        let timeline = LiveTimeline(
+            client: { ProtoClient(transport: remoteSpy) },
+            myNodeId: { "me" },
+            fetchBlob: { [photoHash] ticket, dest, progress in
+                try await remoteSpy.fetchBlob(hash: photoHash, ticket: ticket, dest: dest, progress: progress)
+            },
+            logger: LogCapture(),
+            localOriginals: LocalFirstOriginals(reader: reader, loadIndex: { index })
+        )
+        let target = item(hash: photoHash, isMine: true)
+
+        let task = Task { try await timeline.thumbnail(target, large: false) }
+        await gate.waitEntered() // 已进入本机读取；取消发生在读取途中
+        task.cancel()
+        await gate.release()
+        let result = await task.result
+        XCTAssertThrowsError(try result.get()) { error in
+            XCTAssertTrue(error is CancellationError, "取消必须直接抛 CancellationError，实际：\(error)")
+        }
+        XCTAssertEqual(reader.thumbCalls, 1, "取消前已尝试本机读取")
+        XCTAssertEqual(remoteSpy.thumbCalls, 0, "取消后不得再发远端 thumb.get")
+    }
+
+    /// 拷后复核前清 `URL` 缓存资源值：拷贝途中源文件被改写（大小不变、修改时间变了）必须判失败。
+    /// 反证：去掉 `folderFileVersion` 里的 `removeAllCachedResourceValues()`，拷后复核读到拷贝前缓存的旧修改时间，
+    /// 版本比对通过、返回 true，本用例红。
+    func test_folder_copy_rejects_source_rewritten_mid_copy_and_leaves_no_partial_file() async throws {
+        let logger = LogCapture()
+        let registryDir = tempDir.appendingPathComponent("reg-cache", isDirectory: true)
+        let folderRoot = tempDir.appendingPathComponent("cache-folder", isDirectory: true)
+        try FileManager.default.createDirectory(at: folderRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: registryDir, withIntermediateDirectories: true)
+        let registry = FolderRegistry(directory: registryDir, logger: logger)
+        let sourceId = try registry.addFolder(at: folderRoot, displayName: "CacheFolder")
+        let fileURL = folderRoot.appendingPathComponent("changing.jpg")
+        let original = try makeJpeg(width: 120, height: 80, color: .systemGreen)
+        try original.write(to: fileURL)
+        let opaque = registry.opaqueId(sourceId: sourceId, relativePath: "changing.jpg")
+        let mediaId = "folder:\(sourceId):\(opaque)"
+        let values = try fileURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        let modifiedMs = try XCTUnwrap(values.contentModificationDate.map { Int64($0.timeIntervalSince1970 * 1000) })
+        let recordedVersion = FolderMediaSource.sourceVersion(modifiedAtMs: modifiedMs, sizeBytes: Int64(original.count))
+
+        let once = OnceFlag()
+        let reader = IOSOriginalReader(folders: registry, logger: logger)
+        let dest = tempDir.appendingPathComponent("mid-copy.jpg")
+        let ok = await reader.copy(mediaId: mediaId, sourceVersion: recordedVersion, isVideo: false, dest: dest, progress: { _ in
+            guard once.take() else { return }
+            // 大小不变，只有修改时间变：确保只有拷后复核（而不是拷贝字节数校验）能发现改写。
+            try? FileManager.default.setAttributes(
+                [.modificationDate: Date(timeIntervalSince1970: Double(modifiedMs) / 1000 + 10)],
+                ofItemAtPath: fileURL.path
+            )
+        })
+        XCTAssertFalse(ok, "拷完复核必须读到最新修改时间并判失败，不能凭 URL 缓存当没变")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dest.path), "失败不留半截文件")
+    }
+
     func test_photo_access_gate_and_adjustment_digest_alignment() async {
         struct StubAuth: PhotoAuthorizationProviding {
             let level: PhotoAccessLevel
@@ -575,5 +645,66 @@ final class LocalSourceFirstTests: XCTestCase {
         let edited = originalContent(types: [.photo, .adjustmentData, .fullSizePhoto], mediaType: .image, adjustmentDigest: digest, modifiedAtMs: 1_000)
         XCTAssertEqual(edited.version, "5:adj:\(digest)")
         XCTAssertFalse(edited.degraded)
+    }
+}
+
+/// #1937 测试用：让「本机读取在进行中」与「外部取消」两件事有确定的先后顺序。
+private actor AsyncGate {
+    private var entered = false
+    private var released = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func enter() async {
+        entered = true
+        let waiters = enteredWaiters
+        enteredWaiters = []
+        waiters.forEach { $0.resume() }
+        if !released {
+            await withCheckedContinuation { releaseWaiters.append($0) }
+        }
+    }
+
+    func waitEntered() async {
+        if entered { return }
+        await withCheckedContinuation { enteredWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters = []
+        waiters.forEach { $0.resume() }
+    }
+}
+
+/// 本机读取一进入就停住，等测试取消任务后再返回 nil（模拟网格滚走后读取被取消）。
+private final class GateReader: LocalOriginalReading, @unchecked Sendable {
+    private let gate: AsyncGate
+    private let lock = NSLock()
+    private var _thumbCalls = 0
+
+    init(gate: AsyncGate) { self.gate = gate }
+    var thumbCalls: Int { lock.lock(); defer { lock.unlock() }; return _thumbCalls }
+
+    func thumb(mediaId: String, sourceVersion: String, isVideo: Bool, maxPx: Int) async -> UIImage? {
+        lock.lock(); _thumbCalls += 1; lock.unlock()
+        await gate.enter()
+        return nil
+    }
+
+    func copy(mediaId: String, sourceVersion: String, isVideo: Bool, dest: URL,
+              progress: @escaping @Sendable (Double) -> Void) async -> Bool { false }
+}
+
+/// 只放行第一次的标记（拷贝进度回调里只改写一次源文件）。
+private final class OnceFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func take() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !done else { return false }
+        done = true
+        return true
     }
 }

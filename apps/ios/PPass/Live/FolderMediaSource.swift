@@ -44,8 +44,9 @@ final class FolderMediaSource: MediaSource, FolderSourceIdentifying, @unchecked 
         let sizeBytes: Int64?
     }
 
-    /// 递归枚举根目录里的图片 / 视频文件元数据。完整成功返回 (路径集合, 缺席 opaqueId)；中途失败抛错（本轮「不知道」）。
-    private func enumerate(root: FolderRoot, readsCapture: Bool = true) async throws -> (files: [ScannedFile], missing: Set<String>) {
+    /// 递归枚举一次根目录里的图片 / 视频文件元数据（不排序、不写映射）。中途失败抛错（本轮「不知道」）。
+    /// `scan`（对账 / 快照）与 `inScopeCount`（只数总数）共用同一份过滤与捕获时间回退规则。
+    private func walk(root: FolderRoot, readsCapture: Bool) async throws -> [ScannedFile] {
         var scanned: [ScannedFile] = []
         var failed = false
         let fm = FileManager.default
@@ -81,6 +82,12 @@ final class FolderMediaSource: MediaSource, FolderSourceIdentifying, @unchecked 
         }
         // 中途失败：本轮报错（不是完整枚举），缺席不能判源缺失。
         guard !failed else { throw FolderSourceError(reason: "enumeration failed mid-way") }
+        return scanned
+    }
+
+    /// 完整枚举 + 对账（每轮发现都全量对账，ADR §4）。完整成功返回 (路径集合, 缺席 opaqueId)；中途失败抛错。
+    private func enumerate(root: FolderRoot, readsCapture: Bool = true) async throws -> (files: [ScannedFile], missing: Set<String>) {
+        var scanned = try await walk(root: root, readsCapture: readsCapture)
         scanned.sort { $0.relativePath.utf8.lexicographicallyPrecedes($1.relativePath.utf8) }
         // 只有完整枚举成功才对账映射（缺席 = 源缺失）。
         let missing = try registry.reconcile(sourceId: sourceId, observedPaths: scanned.map(\.relativePath))
@@ -170,9 +177,42 @@ final class FolderMediaSource: MediaSource, FolderSourceIdentifying, @unchecked 
         return out
     }
 
+    /// 单次轻量计数（#1937）：`LiveBackend.folderInScopeCount` 在 `refreshFacts()` 热路径里只要总数，
+    /// 不再按每页 500 条循环调 `inScope`（那样每页都会全量递归枚举 + 对账，O(N²/500) 重复扫描）。
+    /// 选中判定与时间档过滤和 `inScope` 同口径；`since == .all` 时跳过逐文件 EXIF / AVAsset 拍摄时间解析；
+    /// 只数数量，不生成 opaque 映射、不写对账表、不排序。
+    func inScopeCount() async throws -> Int {
+        let sourceBucket = Self.bucketId(sourceId: sourceId)
+        let scope = scopeProvider()
+        guard isSourceSelected(sourceBucket, scope: scope) else { return 0 }
+        guard let record = registry.record(id: sourceId) else {
+            throw SourceUnavailable(reason: "folder source \(sourceId) not registered")
+        }
+        let root: FolderRoot
+        do {
+            root = try FolderBookmarks.resolve(record, registry: registry, logger: logger)
+        } catch let e as FolderSourceError {
+            logger.log("folder \(sourceId): source unavailable (\(e.reason))")
+            throw SourceUnavailable(reason: e.reason)
+        }
+        let since = scope?.since ?? .all
+        return try await FolderBookmarks.withScope(root.url) { _ in
+            let scanned: [ScannedFile]
+            do {
+                scanned = try await self.walk(root: root, readsCapture: !since.isAll)
+            } catch let e as FolderSourceError {
+                throw SourceUnavailable(reason: e.reason)
+            }
+            let count = scanned.reduce(into: 0) { total, file in
+                if ScopeKey.inTime(capturedAtMs: file.capturedAtMs, since: since) { total += 1 }
+            }
+            self.logger.log("folder \(self.sourceId): count ok items=\(count)")
+            return count
+        }
+    }
+
     /// ADR：目录新项不依赖 incremental changes——恒返回空批。
     func changes(after position: DiscoveryPosition, limit: Int) async throws -> [MediaSnapshot] { [] }
-
     /// 稳定占位，仅满足协议；不表示扫描进度。
     func currentPosition() async throws -> DiscoveryPosition { DiscoveryPosition(raw: Data(Self.positionPlaceholder.utf8)) }
 

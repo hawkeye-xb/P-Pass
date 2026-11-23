@@ -350,7 +350,11 @@ final class IOSOriginalReader: LocalOriginalReading, @unchecked Sendable {
     }
 
     private static func folderFileVersion(at url: URL) -> (version: String, sizeBytes: Int64)? {
-        guard let values = try? url.resourceValues(forKeys: [
+        // #1937：`URL.resourceValues` 按 URL 实例缓存；`folderCopy` 在同一 NSFileCoordinator 回调里先验一次、
+        // 拷完再复核同一个 URL，不复位缓存会读到拷贝前的旧属性。读之前清空，确保拿到当前磁盘属性。
+        var fresh = url
+        fresh.removeAllCachedResourceValues()
+        guard let values = try? fresh.resourceValues(forKeys: [
             .isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey, .fileSizeKey, .totalFileAllocatedSizeKey
         ]) else {
             return nil
