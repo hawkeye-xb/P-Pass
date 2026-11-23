@@ -267,6 +267,266 @@ pub fn is_network_volume(p: &Path) -> bool {
     }
 }
 
+// ── #1927：不跟随重解析点地拦截指向远端 / 设备命名空间的目标与网络卷 ─────────
+//
+// 服务形态（`NT SERVICE\P-Pass`）下，本机主人 SID 的进程可能预先在本地盘符下建好
+// 指向远端 SMB 的 junction / symlink，或直接传入映射网络盘符（`Z:\...`）。光按字面
+// 拦 UNC / 设备前缀不够：`canonicalize()` 会**跟随**重解析点，让服务账户以服务身份
+// 向远端发起 SMB/NTLM 连接。下面两个判据都在 `canonicalize()` / `real_path` 之前用，
+// 且探测重解析点时**不跟随**它。
+
+/// #1927：重解析点目标（[`std::fs::read_link`] 的返回串）按形状分类。
+///
+/// 纯字符串判据，跨平台可单测；盘符 / 卷 GUID 是否真是远端由 Windows 侧
+/// `drive_type_is_remote` 用 `GetDriveTypeW` 补齐（`DRIVE_REMOTE = 4`）。
+#[cfg(any(windows, test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReparseTargetClass {
+    /// 确定远端或设备命名空间：UNC（`\\server\share`、`//server/share`、
+    /// `\??\UNC\...`、`\\?\UNC\...`）、设备（`\\.\...`）、其它非盘符命名空间
+    /// （`\??\GlobalRoot\...` 等）。一律拒绝。
+    RemoteOrDevice,
+    /// 本地盘符路径（`C:\...`、`\??\C:\...`、`\\?\C:\...`）。`root` 是盘符根
+    /// `C:\`，`normalized` 是可用于继续扫描的路径。
+    DriveLetter { root: String, normalized: PathBuf },
+    /// 卷 GUID 路径（`\??\Volume{...}\...` / `\\?\Volume{...}\...`）。
+    VolumeGuid { root: String, normalized: PathBuf },
+    /// 相对目标（junction 的相对打印名）：拼到重解析点父目录后再判。
+    Relative,
+}
+
+/// #1927：去掉 `\??\` / `\\?\` 命名空间前缀（其余原样返回）。
+#[cfg(any(windows, test))]
+fn strip_ns_prefix(s: &str) -> &str {
+    if let Some(rest) = s.strip_prefix(r"\??\") {
+        rest
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        rest
+    } else {
+        s
+    }
+}
+
+/// #1927：从路径串里取本地盘符根 `C:\`（兼容 `C:/`、`\??\C:\`、`\\?\C:\`）。
+#[cfg(any(windows, test))]
+fn drive_letter_root(s: &str) -> Option<String> {
+    let b = strip_ns_prefix(s).as_bytes();
+    if b.len() >= 2
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && (b.len() == 2 || b[2] == b'\\' || b[2] == b'/')
+    {
+        return Some(format!("{}:\\", (b[0] as char).to_ascii_uppercase()));
+    }
+    None
+}
+
+#[cfg(any(windows, test))]
+fn starts_with_ignore_ascii_case(s: &str, prefix: &str) -> bool {
+    s.len() >= prefix.len() && s.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+}
+
+/// #1927：把一个重解析目标字符串分类。纯函数，跨平台单测。
+#[cfg(any(windows, test))]
+pub(crate) fn classify_reparse_target(raw: &str) -> ReparseTargetClass {
+    let s = raw.trim_matches('\0');
+    // 1. UNC：`\??\UNC\`、`\\?\UNC\`、`\\server\`、`//server/`。
+    if starts_with_ignore_ascii_case(s, r"\\?\UNC\")
+        || starts_with_ignore_ascii_case(s, r"\??\UNC\")
+    {
+        return ReparseTargetClass::RemoteOrDevice;
+    }
+    if let Some(rest) = s.strip_prefix(r"\\") {
+        // `\\?\` / `\\.\` 是命名空间前缀，其余 `\\server\...` 是 UNC。
+        if !rest.starts_with('?') && !rest.starts_with('.') {
+            return ReparseTargetClass::RemoteOrDevice;
+        }
+    }
+    if let Some(rest) = s.strip_prefix("//") {
+        if !rest.starts_with('?') && !rest.starts_with('.') {
+            return ReparseTargetClass::RemoteOrDevice;
+        }
+    }
+    // 2. 设备命名空间 `\\.\...`。
+    if s.starts_with(r"\\.\") {
+        return ReparseTargetClass::RemoteOrDevice;
+    }
+    // 3. 盘符 / 卷 GUID；其余带命名空间前缀的（GlobalRoot 等）按设备处理。
+    let had_ns = s.starts_with(r"\??\") || s.starts_with(r"\\?\");
+    let body = strip_ns_prefix(s);
+    if let Some(root) = drive_letter_root(body) {
+        let normalized = if s.starts_with(r"\??\") {
+            // `\??\C:\...` 是 NT 对象前缀，std 的 Win32 路径要把它去掉。
+            PathBuf::from(body)
+        } else {
+            // `\\?\C:\...` 原样保留（verbatim）。
+            PathBuf::from(s)
+        };
+        return ReparseTargetClass::DriveLetter { root, normalized };
+    }
+    if body.len() >= 7 && body[..7].eq_ignore_ascii_case("Volume{") {
+        if let Some(close) = body.find('}') {
+            let guid = &body[..=close]; // `Volume{...}`
+            let rest = body[close + 1..].trim_start_matches(['\\', '/']);
+            let root = format!(r"\\?\{guid}\");
+            let normalized = if rest.is_empty() {
+                PathBuf::from(root.trim_end_matches('\\'))
+            } else {
+                PathBuf::from(format!(r"\\?\{guid}\{rest}"))
+            };
+            return ReparseTargetClass::VolumeGuid { root, normalized };
+        }
+    }
+    if had_ns {
+        // `\??\GlobalRoot\...` 等非盘符命名空间 ⇒ 设备 / 远端。
+        return ReparseTargetClass::RemoteOrDevice;
+    }
+    ReparseTargetClass::Relative
+}
+
+/// #1927：纯字符串判据——重解析目标是不是远端或设备命名空间（不含映射盘，那要看
+/// `GetDriveTypeW`）。跨平台单测直接用；产品代码走 [`classify_reparse_target`]。
+#[cfg(any(windows, test))]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn is_remote_or_device_reparse_target_str(raw: &str) -> bool {
+    matches!(
+        classify_reparse_target(raw),
+        ReparseTargetClass::RemoteOrDevice
+    )
+}
+
+/// #1927：`p` 的任一段是不是**指向远端 / 设备命名空间**的重解析点（junction /
+/// 符号链接），探测时不跟随它去 `canonicalize()`。
+///
+/// Windows 实现从根逐段 `symlink_metadata`（不跟随），命中重解析点就 `read_link`
+/// 读目标：目标是 UNC / 设备命名空间、或映射网络盘（`GetDriveTypeW == DRIVE_REMOTE`）
+/// ⇒ `true`；目标是本地盘符 / 本地卷则把「目标 + 剩余分量」拼回去继续扫描（限 16 跳，
+/// 防环路）。读不出目标、超过跳数一律 fail-closed 返回 `true`。非 Windows 恒 `false`。
+pub fn contains_remote_reparse_point(p: &Path) -> bool {
+    #[cfg(not(windows))]
+    {
+        let _ = p;
+        false
+    }
+    #[cfg(windows)]
+    {
+        windows_contains_remote_reparse_point(p)
+    }
+}
+
+#[cfg(windows)]
+fn windows_contains_remote_reparse_point(p: &Path) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    const MAX_REPARSE_HOPS: usize = 16;
+
+    // 传入的本身就是 UNC / 设备路径：不 stat（会外连），直接按远端处理。
+    if local_peer::UserDirFacts::is_unc_or_device_path(p) {
+        return true;
+    }
+    let mut current = p.to_path_buf();
+    for _hop in 0..MAX_REPARSE_HOPS {
+        let comps: Vec<std::path::Component> = current.components().collect();
+        let mut cur = PathBuf::new();
+        let mut next: Option<PathBuf> = None;
+        for (i, comp) in comps.iter().enumerate() {
+            cur.push(comp.as_os_str());
+            // 只有盘符前缀（`C:`）还没拼上根时不可 stat（会指向「C: 盘当前目录」）。
+            if matches!(comp, std::path::Component::Prefix(_)) {
+                continue;
+            }
+            let meta = match std::fs::symlink_metadata(&cur) {
+                Ok(m) => m,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // 后续分量尚未创建：没有可跟随的重解析点。
+                    return false;
+                }
+                Err(_) => {
+                    // 读不出元数据（权限、I/O）：不猜，fail-closed。
+                    return true;
+                }
+            };
+            let is_reparse = meta.file_type().is_symlink()
+                || (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+            if !is_reparse {
+                continue;
+            }
+            // 只跟随目录 / 链接形态的重解析点；读不出目标 ⇒ fail-closed。
+            let target = match std::fs::read_link(&cur) {
+                Ok(t) => t,
+                Err(_) => return true,
+            };
+            let base = match classify_reparse_target(&target.to_string_lossy()) {
+                ReparseTargetClass::RemoteOrDevice => return true,
+                ReparseTargetClass::DriveLetter { root, normalized }
+                | ReparseTargetClass::VolumeGuid { root, normalized } => {
+                    if drive_type_is_remote(&root) {
+                        return true;
+                    }
+                    normalized
+                }
+                ReparseTargetClass::Relative => {
+                    cur.parent().unwrap_or_else(|| Path::new("")).join(&target)
+                }
+            };
+            let mut rebuilt = base;
+            for rest in &comps[i + 1..] {
+                rebuilt.push(rest.as_os_str());
+            }
+            next = Some(rebuilt);
+            break;
+        }
+        match next {
+            Some(n) => current = n,
+            None => return false,
+        }
+    }
+    // 超过跳数上限：环路或过深链，按远端处理（fail-closed）。
+    true
+}
+
+#[cfg(windows)]
+fn drive_type_is_remote(root: &str) -> bool {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+    const DRIVE_REMOTE: u32 = 4;
+    let w: Vec<u16> = std::ffi::OsStr::new(root)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: w 以 0 结尾；GetDriveTypeW 只读。
+    unsafe { GetDriveTypeW(w.as_ptr()) == DRIVE_REMOTE }
+}
+
+/// #1927：`p` 所在卷是不是网络卷——包括**尚未创建**的新建子目录（回到最近一个已
+/// 存在的祖先判卷类型）与映射网络盘符（Windows 下先对盘符根查 `GetDriveTypeW`，即便
+/// 子目录还不存在也能零外连识破 `Z:\new_lib`）。
+///
+/// UNC / 设备命名空间由 [`local_peer::UserDirFacts::is_unc_or_device_path`] 专职拦，
+/// 这里不碰它们、更不去 stat 触发外连。整条链都不存在 ⇒ `false`。
+pub fn is_network_volume_or_ancestor(p: &Path) -> bool {
+    if local_peer::UserDirFacts::is_unc_or_device_path(p) {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        if let Some(root) = drive_letter_root(&p.to_string_lossy()) {
+            if drive_type_is_remote(&root) {
+                return true;
+            }
+        }
+    }
+    // 从 p 向最近一个已存在的祖先探测卷类型（新建子目录尚不存在时退回父目录）。
+    let mut cur: Option<&Path> = Some(p);
+    while let Some(a) = cur {
+        if std::fs::symlink_metadata(a).is_ok() {
+            return is_network_volume(a);
+        }
+        cur = a.parent();
+    }
+    false
+}
+
 /// Windows 上 [`copy_dir_contents`] 把文件链接拷成指向文件的内容（见它的 `/XJD` 说明）；
 /// 核对拷贝结果时据此放宽。
 pub const COPY_MAY_MATERIALIZE_FILE_LINKS: bool = cfg!(windows);
@@ -1862,6 +2122,77 @@ mod tests {
     }
 
     use super::*;
+
+    /// #1927：重解析目标字符串判据（纯函数，跨平台都跑）。
+    /// - UNC（`\\server\...`、`//server/...`、`\??\UNC\`、`\\?\UNC\`）、设备命名空间
+    ///   （`\\.\...`、`\??\GlobalRoot\...`）⇒ 远端/设备，必须拒；
+    /// - 本地盘符目标（`\??\C:\...`、`\\?\C:\...`）⇒ 不是远端/设备（映射盘要看盘类型）；
+    /// - 相对目标 ⇒ 归为相对，交给调用方拼父目录后再判。
+    ///
+    /// 反证：把盘符 / 相对两类的分支删掉（一律判远端）⇒ 后两条断言红。
+    #[test]
+    fn reparse_target_string_classification() {
+        for remote in [
+            r"\\attacker\share\photos",
+            "//attacker/share/photos",
+            r"\\?\UNC\attacker\share\photos",
+            r"\??\UNC\attacker\share\photos",
+            r"\\.\pipe\ppf-svc",
+            r"\\.\PhysicalDrive0",
+            r"\??\GlobalRoot\Device\HarddiskVolume1\photos",
+            r"\\?\GlobalRoot\Device\HarddiskVolume1\photos",
+        ] {
+            assert!(
+                is_remote_or_device_reparse_target_str(remote),
+                "{remote:?} 必须判为远端/设备"
+            );
+        }
+        for local in [
+            r"\??\C:\Photos",
+            r"\\?\C:\Photos",
+            r"C:\Photos",
+            "C:/Photos",
+        ] {
+            assert!(
+                !is_remote_or_device_reparse_target_str(local),
+                "{local:?} 是本地盘符目标，不该判远端"
+            );
+        }
+        // 盘符根抽取：兼容普通 / 前置 `\??\` / 前置 `\\?\`，大小写归一。
+        assert_eq!(drive_letter_root(r"\??\c:\Photos").as_deref(), Some("C:\\"));
+        assert_eq!(drive_letter_root(r"\\?\D:\Pics").as_deref(), Some("D:\\"));
+        assert_eq!(drive_letter_root(r"E:\").as_deref(), Some("E:\\"));
+        assert_eq!(drive_letter_root("/Users/alice"), None);
+        // 相对目标归为相对（既非远端也非盘符）。
+        assert_eq!(
+            classify_reparse_target(r"..\other\photos"),
+            ReparseTargetClass::Relative
+        );
+        // 卷 GUID 目标保留为可继续扫描的 verbatim 根（是否远端由盘类型补判）。
+        match classify_reparse_target(r"\??\Volume{00000000-0000-0000-0000-000000000000}\photos") {
+            ReparseTargetClass::VolumeGuid { root, normalized } => {
+                assert!(root.starts_with(r"\\?\Volume{"), "{root}");
+                assert_eq!(
+                    normalized,
+                    PathBuf::from(r"\\?\Volume{00000000-0000-0000-0000-000000000000}\photos")
+                );
+            }
+            other => panic!("卷 GUID 目标应归为 VolumeGuid，实得 {other:?}"),
+        }
+    }
+
+    /// #1927：非 Windows 上不跟随重解析点的检查恒为 `false`（磁盘上根本没有
+    /// Windows 重解析点语义）；本地已存在 / 不存在的普通目录都不该被误判。
+    #[test]
+    fn reparse_check_is_inert_off_windows() {
+        if !cfg!(windows) {
+            let tmp = tempfile::tempdir().unwrap();
+            assert!(!contains_remote_reparse_point(tmp.path()));
+            assert!(!contains_remote_reparse_point(
+                &tmp.path().join("does-not-exist")
+            ));
+        }
+    }
 
     /// 取消是独立的一类，不能被归成失败——否则 UI 会把用户自己的选择
     /// 说成出错（macOS 的 `disable_auto_sleep` 仍走这条路径）。

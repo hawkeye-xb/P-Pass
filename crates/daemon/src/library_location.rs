@@ -404,6 +404,28 @@ pub fn check_library_path(
     platform_dir: &Path,
     peer: Option<&platform::PeerUser>,
 ) -> Result<(), String> {
+    // 生产入口：重解析点 / 网络卷探测器用平台的真实判据。
+    check_library_path_with(
+        target,
+        platform_dir,
+        peer,
+        &|p| platform::contains_remote_reparse_point(p),
+        &|p| platform::is_network_volume_or_ancestor(p),
+    )
+}
+
+/// [`check_library_path`] 的可测版本：两个探测器可注入，单测能在不依赖真实远端卷 /
+/// 重解析点的前提下反证「任一前置检查去掉都变红」。生产入口传平台的真实判据。
+///
+/// 顺序（都在任何 `canonicalize()` 之前）：连接方事实 → UNC/设备或远端重解析点 →
+/// 网络卷/映射盘 → 解析真实路径 → 再核一次解析后的卷 → 敏感目录。
+fn check_library_path_with(
+    target: &Path,
+    platform_dir: &Path,
+    peer: Option<&platform::PeerUser>,
+    remote_reparse: &dyn Fn(&Path) -> bool,
+    network_volume: &dyn Fn(&Path) -> bool,
+) -> Result<(), String> {
     // 有连接方却取不全它的用户目录事实（家目录与各标准目录）：服务形态下不能拿服务
     // 账户的目录代答（那会把主人的桌面当普通目录放行），当场拒绝并说清楚。
     if let Some(peer) = peer {
@@ -412,18 +434,28 @@ pub fn check_library_path(
             return Err(config::ui_err("ui.err_library_user_dirs", &[]));
         }
     }
-    // #1918：在任何 `canonicalize()` 之前先拒绝 UNC 网络共享与 Windows 设备/非盘符
-    // 命名空间路径，防止服务端以 `NT SERVICE\P-Pass` 身份向网络位置发起 SMB/NTLM 连接
-    // 或访问设备对象（与 `user_dirs` 共用同一份判据）。
-    if platform::UserDirFacts::is_unc_or_device_path(target) {
+    // #1918 / #1927：在任何 `canonicalize()` 之前先拒绝 UNC 网络共享、Windows 设备/
+    // 非盘符命名空间，以及**指向远端 / 设备命名空间的重解析点**（本地盘符下的 junction
+    // / symlink）。否则服务端会以 `NT SERVICE\P-Pass` 身份跟随重解析点向网络位置发起
+    // SMB/NTLM 连接或访问设备对象（与 `user_dirs` 共用同一份判据）。
+    if platform::UserDirFacts::is_unc_or_device_path(target) || remote_reparse(target) {
         tracing::warn!(
-            "#1918: 拒绝 UNC 或设备命名空间路径作为照片库位置：{}",
+            "#1918/#1927: 拒绝 UNC / 设备命名空间或指向远端的重解析点作为照片库位置：{}",
             target.display()
         );
         return Err(config::ui_err(
             "ui.err_library_target_missing",
             &[("dir", &target.display())],
         ));
+    }
+    // #1927：首次建库与搬迁对齐——直接选网络卷 / 映射网络盘（`Z:\new_lib`，子目录尚不
+    // 存在也能识破）一律拒绝，且必须在 `canonicalize()` 之前。
+    if network_volume(target) {
+        tracing::warn!(
+            "#1927: 拒绝网络卷 / 映射网络盘作为照片库位置：{}",
+            target.display()
+        );
+        return Err(config::ui_err("ui.err_relocate_network_volume", &[]));
     }
     let Some(real) = resolve_components(target) else {
         tracing::info!("#1826: 选择的位置解析不出真实路径：{}", target.display());
@@ -432,6 +464,15 @@ pub fn check_library_path(
             &[("dir", &target.display())],
         ));
     };
+    // #1927：本地符号链接跳往已挂载网络卷时，字面路径看不出来，解析出真实路径后再核一次。
+    if network_volume(&real) {
+        tracing::info!(
+            "#1927: 解析后的真实路径落在网络卷上，拒绝：{}（真实路径 {}）",
+            target.display(),
+            real.display()
+        );
+        return Err(config::ui_err("ui.err_relocate_network_volume", &[]));
+    }
     let env = LocationEnvironment::platform(platform_dir, peer);
     match sensitive_kind(&real, &env) {
         Some(kind) => {
@@ -1397,6 +1438,71 @@ mod tests {
                 "{bad:?}: {err}"
             );
         }
+    }
+
+    /// #1927：目标带指向远端 / 设备命名空间的重解析点时，必须在 `resolve_components`
+    /// 之前以 `ui.err_library_target_missing` 拒绝（注入探测器恒真，等价于平台判据命中）。
+    /// 反证：去掉 `check_library_path_with` 里的 `remote_reparse(target)` 早退 ⇒ 探测器
+    /// 恒真也放行，本用例红。
+    #[test]
+    fn remote_reparse_library_target_is_refused_before_resolve() {
+        let tmp = tempfile::tempdir().unwrap();
+        let platform_dir = tmp.path().join("platform");
+        let target = tmp.path().join("library");
+        let err = check_library_path_with(&target, &platform_dir, None, &|_| true, &|_| false)
+            .expect_err("远端重解析点必须在 resolve_components 之前被拒");
+        assert!(err.contains("ui.err_library_target_missing"), "{err}");
+    }
+
+    /// #1927：目标直接落在网络卷 / 映射网络盘上时，必须在 `canonicalize()` 之前以
+    /// `ui.err_relocate_network_volume` 拒绝，与搬迁口径一致。
+    ///
+    /// 只让**未解析的字面路径** `link` 命中「网络卷」探测器：真实目标是本地目录，放开
+    /// 前置检查后 `resolve_components` 会把它解析成一个不在网络卷上的真实路径，后置检查
+    /// 兜不住——所以本用例单独变红，证明前置那道早退确实生效，而不是被后置检查掩盖。
+    /// 反证：去掉 `if network_volume(target)` 早退 ⇒ 本用例红（返回 `Ok`）。
+    #[test]
+    fn network_volume_library_target_is_refused_before_resolve() {
+        let tmp = tempfile::tempdir().unwrap();
+        let platform_dir = tmp.path().join("platform");
+        let real = tmp.path().join("local-disk-dir");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = tmp.path().join("library-on-network");
+        let kind = &platform::test_support::dir_link_kinds()[0];
+        if let Err(e) = kind.make(&real, &link) {
+            assert!(kind.may_need_privilege, "{} 建不出来：{e}", kind.name);
+            return;
+        }
+        // 只有未 canonicalize 的链接路径算「在网络卷上」；解析后的真实目录不算，
+        // 于是拦截只能来自 resolve_components 之前那道前置检查。
+        let network_volume = |p: &Path| p == link.as_path();
+        let err = check_library_path_with(&link, &platform_dir, None, &|_| false, &network_volume)
+            .expect_err("网络卷 / 映射盘必须在 canonicalize 之前被拒");
+        assert!(err.contains("ui.err_relocate_network_volume"), "{err}");
+    }
+
+    /// #1927：本地符号链接跳往已挂载网络卷时，字面路径看不出来——解析出真实路径后
+    /// 必须再核一次并以 `ui.err_relocate_network_volume` 拒绝。
+    /// 反证：去掉 `network_volume(&real)` 那道后置检查 ⇒ 本用例红（返回 Ok）。
+    #[test]
+    fn library_link_into_network_volume_is_refused_after_resolve() {
+        let tmp = tempfile::tempdir().unwrap();
+        let platform_dir = tmp.path().join("platform");
+        let real = tmp.path().join("network-backed");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = tmp.path().join("library-link");
+        let kind = &platform::test_support::dir_link_kinds()[0];
+        if let Err(e) = kind.make(&real, &link) {
+            assert!(kind.may_need_privilege, "{} 建不出来：{e}", kind.name);
+            return;
+        }
+        let real_canon = real.canonicalize().unwrap();
+        // 只有解析后的真实路径算「在网络卷上」；字面链接路径不算，用来证明拦截发生在
+        // resolve_components 之后的那道检查，而不是前置的 network_volume(target)。
+        let network_volume = |p: &Path| p == real_canon.as_path();
+        let err = check_library_path_with(&link, &platform_dir, None, &|_| false, &network_volume)
+            .expect_err("本地链接跳往网络卷必须在解析真实路径后拒绝");
+        assert!(err.contains("ui.err_relocate_network_volume"), "{err}");
     }
 
     /// 默认库自己是指向桌面的链接：拒绝（默认库的例外是**词法位置**，不 canonicalize
