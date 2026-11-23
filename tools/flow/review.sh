@@ -443,7 +443,7 @@ printf '%s\n' "$PR_BODY" >"${WORK}/body.check"
 gate_head_arg=()
 [ -d "${WT:-}" ] && gate_head_arg+=(--head-dir "$WT")
 if [ "$VERDICT" = "PASS" ] &&
-  ! bash "${FLOW_DIR}/acceptance-gate.sh" check --repo "$TOP" ${gate_head_arg[@]+"${gate_head_arg[@]}"} --core-rules "${WORK}/core-paths.txt" \
+  ! bash "${FLOW_DIR}/acceptance-gate.sh" check --repo "$TOP" ${gate_head_arg[@]+"${gate_head_arg[@]}"} --cards "${CARDS:-}" --core-rules "${WORK}/core-paths.txt" \
     --diff "${WORK}/pr.full.diff" --files "${WORK}/pr.files" --body "${WORK}/body.check" >"${WORK}/gate.out" 2>&1; then
   VERDICT="FAIL"
   REASON="${NEEDS_ACCEPT:-验收与封条门禁}：$(tr '\n' ' ' <"${WORK}/gate.out")acceptance gate 不过不开自动合入；补上后推新提交或改正文即重评。"

@@ -45,6 +45,8 @@ REPO="$(cd "${HERE}/../.." && pwd)"
 HEAD_DIR=""
 CORE_RULES=""
 DIFF_F=""
+CARDS_SET=0
+CARDS_OVR=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --files) FILES_F="${2:-}"; shift 2 || shift ;;
@@ -53,6 +55,7 @@ while [ "$#" -gt 0 ]; do
     --head-dir) HEAD_DIR="${2:-}"; shift 2 || shift ;;
     --core-rules) CORE_RULES="${2:-}"; shift 2 || shift ;;
     --diff) DIFF_F="${2:-}"; shift 2 || shift ;;
+    --cards) CARDS_SET=1; CARDS_OVR="${2:-}"; shift 2 || shift ;;
     *) usage ;;
   esac
 done
@@ -140,7 +143,11 @@ verify_v3_seals() {
   check_one_seal_text "PR正文" "$body_txt"
   if [ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
     repo_slug="${PPASS_HOOK_REPO:-$(git -C "$REPO" config --get remote.origin.url 2>/dev/null | sed -E -e 's#/+$##' -e 's#\.git$##' -e 's#^.*[:/]([^/:]+/[^/:]+)$#\1#' || true)}"
-    cards="$(printf '%s\n' "$body_txt" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?|refs?)[[:space:]]+#[0-9]+' | grep -oE '[0-9]+' | sort -u || true)"
+    if [ "$CARDS_SET" -eq 1 ]; then
+      cards="$CARDS_OVR"
+    else
+      cards="$(printf '%s\n' "$body_txt" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?|refs?)[[:space:]]+#[0-9]+' | grep -oE '[0-9]+' | sort -u || true)"
+    fi
     for c in $cards; do
       if [ -n "$repo_slug" ] && [[ "$repo_slug" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
         ibody="$(gh issue view "$c" -R "$repo_slug" --json body --jq .body 2>&1)" || {
