@@ -139,4 +139,18 @@ final class SingleTransferStatusTests: XCTestCase {
             }
         }
     }
+
+    /// #1962：设置页二级路由（范围 / 存储详情 / 诊断 / 更多）隐藏底部双 Tab 栏，对齐 Android 二级页
+    /// 收起 Photos/设置 tab 栏。反证：去掉 `.toolbar(.hidden, for: .tabBar)`，本条判红。
+    func testSecondaryRoutesHideTheBottomTabBar() throws {
+        let settings = try source("apps/ios/PPass/Home/SettingsScreen.swift")
+        let nav = try XCTUnwrap(settings.range(of: ".navigationDestination(for: Route.self)")?.lowerBound)
+        let slice = String(settings[nav...].prefix(800))
+        XCTAssertTrue(slice.contains(".toolbar(.hidden, for: .tabBar)"), "二级路由必须隐藏底部 tabBar")
+        let destination = try XCTUnwrap(settings.range(of: "func secondaryDestination(")?.lowerBound)
+        let body = String(settings[destination...])
+        for route in [".bucket", ".storage", ".diagnostics", ".more"] {
+            XCTAssertTrue(body.contains("case \(route)"), "二级路由必须覆盖 \(route)")
+        }
+    }
 }

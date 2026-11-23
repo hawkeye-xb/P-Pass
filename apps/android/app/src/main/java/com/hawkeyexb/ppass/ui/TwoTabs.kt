@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
@@ -68,17 +67,11 @@ fun TwoTabs(
     // M13 哨兵态：长期失联时设置图标角标一个红点（不是文字变色/变红——
     // 那个方案照的是过时设计稿快照，已在 798b7ae 里被官方最新稿否掉）。
     settingsAlert: Boolean = false,
-    // UI-04a/c: 全局唯一提示呈现层。调用方（MainActivity）把已算好
-    // 最高优先级的那一条 HomeNotice 包进这个 slot，这里只是渲染。
-    // 放在 Box 上方，让它在 Photos 页和 Backup 页都可见——这就是
-    // 「中断提示不再只有总览」的最小实现：一个宿主，而不是各页各拼一个。
-    notice: (@Composable () -> Unit)? = null,
+    // #1962：系统告示条不再挂在两个 Tab 的顶层——它只在「设置」页（HomeScreen 的
+    // 备份 tab）里展示，与 iOS `SettingsScreen` 对齐。见 `HomeScreen(notice = …)`。
 ) {
     PPScreen(background = background) {
         Column(Modifier.fillMaxSize()) {
-            if (notice != null) {
-                Box(Modifier.fillMaxWidth().padding(PPSize.PageGutter, 12.dp, PPSize.PageGutter, 0.dp)) { notice() }
-            }
             Box(Modifier.weight(1f)) {
                 if (tab == 0) photos() else backup()
             }

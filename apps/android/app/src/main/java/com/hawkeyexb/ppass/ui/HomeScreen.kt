@@ -222,6 +222,18 @@ fun allSafeTextAllowed(
         (triplet?.skippedByUser ?: 0L) == 0L
 
 /**
+ * #1962：英雄卡空闲状态行（`idleLine`）的颜色，对齐 iOS `HeroCard.statusColor`——
+ * 绿色只给「已确认的安全」（`AllSafe` 且五条闸门全过），等待用琥珀，其余用系统次级色。
+ * 反证：改回写死 `PPColor.Ink60`，`HomeHeroStatusColorTest` 的三条绿 / 琥珀断言立刻红。
+ */
+internal fun heroIdleLineColor(waitReason: Int?, line: StatusLine, allSafeAllowed: Boolean): Color =
+    when {
+        waitReason != null -> PPColor.Waiting
+        line is StatusLine.AllSafe && allSafeAllowed -> PPColor.Safe
+        else -> PPColor.Ink60
+    }
+
+/**
  * 规则 P（事实源 §2.5，#361 步骤 2）→ #418 → #413：等待中把**为什么在等**说出来——**不新增横幅**，
  * 它是英雄卡状态行（A7）的替换文案。每个等待原因一句（Wi‑Fi、电量、后台额度 / 被拒、连不上电脑、
  * 电脑空间满、照片库打不开、电脑存储出错……），由投影给出（[com.hawkeyexb.ppass.backup.flow.waitReasonTextRes]）。
@@ -382,6 +394,9 @@ internal fun HomeScreen(
     hasSelectedAlbum: Boolean = true,
     // #1789：单次传输的「从文件选择」入口。
     onPickFiles: () -> Unit = {},
+    // #1962：系统告示条的唯一宿主——从 TwoTabs 顶层移到这里，只在设置页（本页）展示，
+    // 照片页 / 大图查看 / 存储详情等二级页都不再出现，与 iOS `SettingsScreen` 对齐。
+    notice: (@Composable () -> Unit)? = null,
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -662,29 +677,24 @@ internal fun HomeScreen(
                             // #1789：自动备份关着是正常状态——Ready 不说「插电 + Wi-Fi 时自动进行」
                             //（iOS Ready / 闸门不过时同样不出字），等待与进行中照常说话；
                             // 单次传输的计数由下方 picked 行说，不在这里重复。
+                            // UI-16 规则 S：文字版的绿色谎言走同一组闸门；#1962 颜色也读同一份裁决。
+                            val allSafeAllowed = allSafeTextAllowed(
+                                mediaAccess = mediaAccess,
+                                triplet = triplet,
+                                pairingLost = pairingLost,
+                                missingSourceCount = missingSourceNotice?.count ?: 0,
+                            )
                             val idleLine: String? = when {
                                 waitReason != null -> stringResource(waitReason)
                                 !autoBackupRuleOn -> when (line) {
                                     is StatusLine.Pending -> pluralStringResource(R.plurals.state_pending, line.k.toInt(), line.k)
                                     is StatusLine.AllSafe ->
-                                        if (allSafeTextAllowed(
-                                                mediaAccess = mediaAccess,
-                                                triplet = triplet,
-                                                pairingLost = pairingLost,
-                                                missingSourceCount = missingSourceNotice?.count ?: 0,
-                                            )
-                                        ) stringResource(R.string.state_safe) else null
+                                        if (allSafeAllowed) stringResource(R.string.state_safe) else null
                                     else -> null
                                 }
                                 else -> idleStatusText(
                                     line,
-                                    // UI-16 规则 S：文字版的绿色谎言走同一组闸门。
-                                    allSafeTextAllowed(
-                                        mediaAccess = mediaAccess,
-                                        triplet = triplet,
-                                        pairingLost = pairingLost,
-                                        missingSourceCount = missingSourceNotice?.count ?: 0,
-                                    ),
+                                    allSafeAllowed,
                                     backgroundBackupState,
                                     wifiOnly,
                                 )
@@ -692,9 +702,11 @@ internal fun HomeScreen(
                             if (idleLine != null) {
                                 // #1888：英雄区主状态行会随状态变化（等待原因/空闲裁决文案）——
                                 // 标 liveRegion=polite，TalkBack 在变化后主动播报一句；只加语义标注，不改视觉与行为。
+                                // #1962：颜色对齐 iOS HeroCard.statusColor（等待琥珀 / 确认安全绿 / 其余次级色）。
                                 Text(
                                     idleLine,
-                                    fontSize = 13.5.sp, color = PPColor.Ink60,
+                                    fontSize = 13.5.sp,
+                                    color = heroIdleLineColor(waitReason = waitReason, line = line, allSafeAllowed = allSafeAllowed),
                                     modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                                 )
                             }
@@ -767,6 +779,13 @@ internal fun HomeScreen(
                 color = PPColor.Waiting,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
             )
+        }
+
+        // #1962：系统告示条从 TwoTabs 顶层移到设置页——在英雄卡（含低空间提示）正下方、
+        // 故障红卡上方渲染；只在设置页可见，照片页 / 大图查看 / 二级页不再出现。
+        if (notice != null) {
+            Spacer(Modifier.height(12.dp))
+            notice()
         }
 
         // ── 失败才说话（T-083 目标 3 红线）：红卡正文只有人话（当前语言

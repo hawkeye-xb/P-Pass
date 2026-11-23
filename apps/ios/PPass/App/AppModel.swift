@@ -25,6 +25,9 @@ struct GuideFacts: Equatable {
     var backgroundOn: Bool
     /// 「onboarding 已走完」：用户点过引导位的 ×。按手机记（`background_backup_offer.json`，断开清单 KEEP），断开、换电脑都不重置。
     var finished: Bool
+    /// #1962：还没定过备份范围——只有「从未保存且没有既有目录」这一个时机算（对位 Android
+    /// `scopeNeedsFirstChoice`，产品负责人 2026-11-17 口径）。保存过任何值（含空集）都不再反复引导。
+    var firstChoicePending: Bool = true
 }
 
 /// 一条需要用户看到的失败反馈（#971 / #972）：设置没存上、命令没执行成。界面用 alert 呈现，点掉即清。
@@ -582,7 +585,9 @@ final class AppModel: ObservableObject {
     /// 起点按现状：决定页直接选了范围备份的，不会出现「开启范围备份」。
     nonisolated static func photosGuideOf(_ f: GuideFacts) -> PhotosGuide {
         if f.finished { return .none }
-        if !f.scopeOn { return .enableScope }
+        // #1962：首次引导只发生一次——没开范围备份也不再无条件弹「开启范围备份」，
+        // 只有从未保存过范围（且没有既有目录）才出第一步；保存过（含空集）后主动关掉规则只是正常状态。
+        if !f.scopeOn { return f.firstChoicePending ? .enableScope : .none }
         if f.firstUploaded && !f.backgroundOn { return .enableBackground }
         return .none
     }
@@ -593,7 +598,10 @@ final class AppModel: ObservableObject {
 
     var guideFacts: GuideFacts {
         GuideFacts(scopeOn: autoRule && (scopeUnreadable || !noAlbums), firstUploaded: facts.lastSuccessAt > 0,
-                   backgroundOn: Self.backgroundBackupOn(intent: autoBackup, refresh: backgroundRefresh), finished: backgroundCardDismissed)
+                   backgroundOn: Self.backgroundBackupOn(intent: autoBackup, refresh: backgroundRefresh), finished: backgroundCardDismissed,
+                   // #1962：对位 Android `scopeNeedsFirstChoice(read, existingFolderCount)`——
+                   // 只有从未保存过范围、范围未损坏且没有旧版登记目录时才算「还没定过」。
+                   firstChoicePending: !scopeUnreadable && scope == nil && folderCount == 0)
     }
 
     /// iOS 后台备份真正生效 = App 里「后台备份」开着（这是 App 自己的开关，系统里没有对应项，只能读它的存值）
@@ -608,12 +616,12 @@ final class AppModel: ObservableObject {
     }
 
     /// 第二步卡的按钮名：系统「后台 App 刷新」没开 →「去设置」；系统已放行、只差 App 里的开关 →「开启」。
-    /// 第一步卡的按钮名：有目录来源（folder-only / 混合）→「开启自动备份」，点了真的直接开启；
-    /// 只有纯相册范围、有限授权 → 点了会去系统设置改权限，按钮说「去设置」；其余「开启」。
+    /// 第一步卡的按钮名（#1962 对齐 Android 英雄卡）：只有纯相册范围、有限授权且没有可用目录来源时，
+    /// 点了会去系统设置改权限，按钮说「去设置」；folder-only / 混合 / 完整授权都是「开启」。
+    /// 词条统一收口到 `photos_guide_enable` 与 `auto_backup_blocked_action`。
     var scopeGuideActionKey: String {
-        if autoRule { return "photos_guide_enable" }
-        if sourceAvailability.hasUsableFolder { return "photos_first_run_enable" }
-        return sourceAvailability.needsFullPhotoAccessSettings ? "background_refresh_notice_action" : "photos_guide_enable"
+        if !autoRule && sourceAvailability.needsFullPhotoAccessSettings { return "auto_backup_blocked_action" }
+        return "photos_guide_enable"
     }
 
     var backgroundGuideActionKey: String { backgroundRefresh == .available ? "photos_guide_enable" : "background_refresh_notice_action" }

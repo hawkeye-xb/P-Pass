@@ -93,17 +93,8 @@ struct SettingsScreen: View {
                 Button(L.s("cancel"), role: .cancel) { app.cancelWifiOff() }
             } message: { Text(L.s("wifi_off_confirm_body")) }
             .navigationDestination(for: Route.self) { route in
-                switch route {
-                case .bucket:
-                    BucketScreen(firstTime: false) { selected, known, wantsAll in
-                        app.albumsChosen(selected, known: known, wantsAll: wantsAll, firstTime: false) {
-                            path.removeAll()
-                        }
-                    }
-                case .storage: StorageDetailScreen()
-                case .diagnostics: DiagnosticsScreen()
-                case .more: moreScreen
-                }
+                // #1962：二级页隐藏底部双 Tab 栏，对齐 Android 二级页收起 Photos/设置 tab 栏。
+                secondaryDestination(route).toolbar(.hidden, for: .tabBar)
             }
         }
         .onAppear { if app.wantsScopeEditor { app.wantsScopeEditor = false; path = [.bucket] } }
@@ -115,6 +106,22 @@ struct SettingsScreen: View {
             case .diagnostics: path = [.diagnostics]
             default: break
             }
+        }
+    }
+
+    /// #1962：设置页的二级路由（范围 / 存储详情 / 诊断 / 更多）。
+    /// 统一在 `navigationDestination` 处挂 `.toolbar(.hidden, for: .tabBar)`，收起底部双 Tab 栏。
+    @ViewBuilder private func secondaryDestination(_ route: Route) -> some View {
+        switch route {
+        case .bucket:
+            BucketScreen(firstTime: false) { selected, known, wantsAll in
+                app.albumsChosen(selected, known: known, wantsAll: wantsAll, firstTime: false) {
+                    path.removeAll()
+                }
+            }
+        case .storage: StorageDetailScreen()
+        case .diagnostics: DiagnosticsScreen()
+        case .more: moreScreen
         }
     }
 

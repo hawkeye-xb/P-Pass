@@ -38,13 +38,19 @@ class BackgroundBackupPresentationContractTest {
     }
 
     @Test
-    fun background_interruption_is_not_a_global_notice_and_viewers_hide_shell_notices() {
+    fun background_interruption_is_not_a_global_notice_and_notice_host_lives_on_settings_tab() {
         val notices = source("ui/HomeNotices.kt")
-        val tabsCall = source("MainActivity.kt").substringAfter("TwoTabs(")
-            .substringBefore("photos = {")
-
+        val main = source("MainActivity.kt")
+        val tabsCall = main.substringAfter("TwoTabs(").substringBefore("photos = {")
+        val photosBranch = main.substringAfter("photos = {").substringBefore("backup = {")
+        val backupBranch = main.substringAfter("backup = {")
+        // #1962：系统告示条从 TwoTabs 顶层移到设置页——TwoTabs 与照片页分支都不再挂载 NoticeHost，
+        // 只在 backup = { } 里的 HomeScreen(notice = …) 挂载（对齐 iOS SettingsScreen）。
         assertFalse(notices.substringAfter("fun NoticeHost(").contains("backupInterrupted"))
-        assertTrue(tabsCall.contains("if (!photoViewerOpen && !storageDetailOpen)"))
+        assertFalse("TwoTabs 不再持有 notice 槽", tabsCall.contains("NoticeHost("))
+        assertFalse("照片页不再挂载 NoticeHost", photosBranch.contains("NoticeHost("))
+        assertTrue("设置页 HomeScreen 必须挂载 NoticeHost", backupBranch.contains("notice = {"))
+        assertTrue("设置页 HomeScreen 必须挂载 NoticeHost", backupBranch.contains("NoticeHost("))
     }
 
     @Test
@@ -53,8 +59,9 @@ class BackgroundBackupPresentationContractTest {
         // `settingsAlert` 曾用 `!= OffByUser` 判后台备份，把正常运行中的
         // `Armed` 状态也算作"需要提示"——只要用户开着后台备份就永久亮红点。
         // 红点只应在两个真出问题的状态触发：待授权白名单 / 监听被系统清掉。
+        // #1962：settingsAlert 仍在 TwoTabs 调用头里；切片止于 photos 分支（notice 已移出这里）。
         val tabsCall = source("MainActivity.kt").substringAfter("TwoTabs(")
-            .substringBefore("notice = if")
+            .substringBefore("photos = {")
 
         assertFalse(
             "settingsAlert must not treat every non-OffByUser state as an alert",
@@ -85,9 +92,10 @@ class BackgroundBackupPresentationContractTest {
             noticeHostBody.contains("HomeNoticeKind.BACKUP_INTERRUPTED"),
         )
 
+        // #1962：NoticeHost 调用点从 TwoTabs 移到设置页 HomeScreen，切片按参数列表自身的锚点收口。
         val mainActivityNoticeCall = source("MainActivity.kt")
             .substringAfter("NoticeHost(")
-            .substringBefore("}\n                } else null,")
+            .substringBefore("locationRedacted")
         assertTrue(
             "MainActivity's NoticeHost call site must pass the resolved background-backup state through",
             mainActivityNoticeCall.contains("backgroundBackupState = backgroundBackupState"),
