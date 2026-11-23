@@ -126,6 +126,8 @@ if python3 -I "${mut_dir}/flow/bench/bench.py" selftest >/dev/null 2>&1; then
 else
   ok "反证 C 通过：放行 gh issue edit 时 selftest 判红"
 fi
+cp "${ROOT}/tools/flow/gh-readonly-shim.sh" "${mut_dir}/flow/gh-readonly-shim.sh"
+chmod +x "${mut_dir}/flow/gh-readonly-shim.sh"
 
 # 6. 反证 D：退回错误的前缀剥离 lstrip("./")（导致 .github/* 核心路径漏拦）必须变红
 python3 -I - "${mut_dir}/flow/v3_harness.py" <<'PY'

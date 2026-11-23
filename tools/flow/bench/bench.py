@@ -264,6 +264,8 @@ def run_selftest() -> dict:
         assert r_edit.returncode != 0 and "PERMISSION_DENIED" in r_edit.stderr
         r_api_mut = subprocess.run(["gh", "api", "-X", "PATCH", "repos/o/r/issues/1"], cwd=root, env=shim_env, capture_output=True, text=True)
         assert r_api_mut.returncode != 0 and "PERMISSION_DENIED" in r_api_mut.stderr
+        r_gql = subprocess.run(["gh", "api", "graphql"], input='{"query":"mutation { updateIssue(input:{id:\\"x\\"}) { clientMutationId } }"}', cwd=root, env=shim_env, capture_output=True, text=True)
+        assert r_gql.returncode != 0 and "PERMISSION_DENIED" in r_gql.stderr
 
         # 3. 验证语义冲突变基重验
         test_semantic_merge_conflict_repair(seed)

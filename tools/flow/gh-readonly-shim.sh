@@ -30,7 +30,7 @@ case "${sub1}:${sub2}" in
     allow=1
     ;;
   api:*)
-    # gh api 仅允许默认 GET（不含 -X/--method 写动词或 -f/-F/--input 表单写载荷）
+    # gh api 仅允许显式只读 REST GET（禁止 graphql 端点与任何写动词/载荷标志，转发时强制补 -X GET）
     allow=1
     prev=""
     for a in "${args[@]:1}"; do
@@ -38,6 +38,9 @@ case "${sub1}:${sub2}" in
         case "${a}" in GET | get) ;; *) allow=0 ;; esac
       fi
       case "${a}" in
+        graphql | /graphql | */graphql)
+          allow=0
+          ;;
         -X* | --method=* | -f | -f* | --raw-field* | -F | -F* | --field* | --input | --input=*)
           case "${a}" in -XGET | -Xget | --method=GET | --method=get) ;; *) allow=0 ;; esac
           ;;
@@ -49,6 +52,10 @@ esac
 
 if [ "${allow}" -ne 1 ]; then
   log_blocked
+fi
+
+if [ "${sub1}" = "api" ]; then
+  args=("api" "-X" "GET" "${args[@]:1}")
 fi
 
 # 模拟演练场模式：直接从本地任务存储返回只读元数据（不暴露锁定文件源路径）
