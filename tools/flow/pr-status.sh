@@ -12,8 +12,8 @@
 set -uo pipefail
 
 FLOW_DIR="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck source=worker-lib.sh
-. "${FLOW_DIR}/worker-lib.sh"
+# shellcheck source=repo-lib.sh
+. "${FLOW_DIR}/repo-lib.sh"
 
 [ $# -eq 1 ] && [[ "$1" =~ ^[0-9]+$ ]] || {
   printf '%s\n' "用法: just pr-status <PR号>" >&2

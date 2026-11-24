@@ -81,8 +81,7 @@ bash 能否真执行、本地提交拦截、gh 能否读 issue、提交身份、
 - **独立评审**：由一个没参与写这个 PR 的 agent 只读评审（对照关联卡的范围与验收查漏），没有阻断项才合入（产品负责人 2026-11-06 定）。
   **CI 评审 job 即独立评审**（`.github/workflows/ci-review.yml`），结论写在 PR 评论和提交状态 `review/agent` 里，
   `review/agent` 是 main 的必需检查，只认 GitHub Actions 写的状态。
-  - **只评正式 PR，与 CI 并行**：草稿不评，转正式时评。推新提交自动重评，但只评
-    上次评到的提交之后的增量；改写历史（强推）就全量评一次。只改正文（如补方案引用）、只合进了 main 的，复用上次结论、不调模型。
+  - **只评正式 PR，全量审阅完整 diff**：草稿不评，转正式时评。每次推新提交只要整体 diff 变了就审阅完整 `origin/main...HEAD` diff（彻底废除增量盲区，防止漏看前序提交缺陷）；只改正文（如补方案引用）或只合进了 main 的，复用上次结论、不调模型。
   - **意见分三级**：阻断（只有误放行、安全、越界三类）、建议、风格。只有阻断让 `review/agent` 为 failure，按评论里的阻断项修，
     推新提交即重评；建议与风格不挡合入，由开 PR 的会话自己判断改不改，不改就回一句理由。评审没跑成（`error`）不算通过，在 Actions 里重跑即可。
   - **判不了的交 owner**：owner 复核后可在 PR 上评论 `/review-override <理由>` 放行，评审 job 只认对本仓有 admin 权限的账号，
@@ -156,10 +155,11 @@ just done                     交卡：过门禁与验收，全绿才推送、�
 just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去做下一张
 ```
 
-- **有人 / 无人双轨与本机远端分层（V3，[方案](docs/decisions/2026-11-21-v3-outcome-driven-collab-flow.md)）**：
-  - **有人在场**：集中拍板取向、批核心方案、真机结对看界面（迭代期跳过慢测试）。
-  - **无人模式（`--unattended`）**：100% 免打扰；开工先探设备在线与未锁屏，遇锁屏/离线立即 `0s` 标 `SUSPENDED_ENV` 跳下一张，连续 2 轮未过门禁即触发 `SUSPENDED_CIRCUIT_BREAK` 熔断跳过；合入前自动 `git rebase origin/main` 并重跑门禁防语义冲突（行冲突安全 `rebase --abort`）。
-  - **本机与远端各司其职**：本机专属安全白名单（`~/.git-allowed-identities`、个人/公司隔离钩子、`gitleaks`、`tools/hooks/dispatch.sh` 转发链、`.claude/settings.local.json`）永远留在本机不削弱；远端守 `.github/allowed-identities.txt`、`.github/core-paths.txt` 核心禁区、链外 `v3-seal` 哈希锁与 `review/agent` 独立评审。改流程规则先跑 `just flow-bench selftest`。
+- **有人 / 无人双轨与自适应资源调度（V3 统一引擎 `tools/flow/flow.py`）**：
+  - **有人在场（轨 A）**：集中拍板取向、批核心方案、真机结对看界面（迭代期跳过慢测试）；本机默认限 `1` 个后台重编译槽保障秒回响应，探测到空闲远端节点自动分流跨平台任务。
+  - **无人模式（轨 B，`--unattended`）**：100% 免打扰；开工先探设备在线与未锁屏，遇锁屏/离线立即 `0s` 标 `SUSPENDED_ENV` 跳下一张，连续 2 轮未过门禁即触发 `SUSPENDED_CIRCUIT_BREAK` 熔断跳过，单步超 15 分钟看门狗自动终止放锁；合入前自动 `git rebase origin/main` 并重跑门禁防语义冲突（行冲突安全 `rebase --abort`）。
+  - **单测与真机物理隔离 & 禁假考卷**：普通单测（`just ios-test` 等）100% 跑模拟器/宿主，绝不自动抢物理真机；严禁提交任何 `exam_*` 一次性考卷或读取源码字符串的假测试，回归测试直接写进各端正式测试套件并在 `fix` 模式下做基线反证；worktree 统一建在仓内 `.worktrees/`。
+  - **本机与远端各司其职**：本机守专属安全白名单（`~/.git-allowed-identities`、公私隔离、`gitleaks`、`tools/hooks/dispatch.sh`）、基线 `.github/core-paths.txt` 核心禁区、秒级架构/适应度底线（`arch-check`、`fitness-check`）与改动模块的精准单测（绝不因未知配置文件回退跑全仓 `just ci`）；远端守跨平台矩阵与全量 diff `review/agent` 独立评审。改流程规则先跑 `python3 tools/test-flow.py`。
 - `just start` 只领 open、`status:ready`、有「验收场景」的卡（单卡普通文件范围白名单已移除，允许自由修改关联普通业务与配套单测，#1953）；Bug 卡还必须有「复现路径」（稳定复现的步骤/命令），缺一样不领。核心卡（`core` 标签）正文引用了
   `origin/main` 上「已采纳」的方案就按方案实现，没有引用就只写复现、根因和两个修法，不改代码。
 - **核心禁区与 worktree 保护**：本地 hook（`tools/hooks/pre-commit`）与 `just done` 统一按不可变基线 `origin/main:.github/core-paths.txt` 拦截未带 `core` 标签的核心改动，并拒绝在主仓根目录直接提交卡分支，见 `tools/hooks/` 与

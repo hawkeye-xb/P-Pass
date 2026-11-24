@@ -67,7 +67,7 @@ extract "${TMP}/gate-mutant.sh" 1 2>/dev/null || { bad "造反证副本失败"; 
 R="${TMP}/repo"
 FAKE="${TMP}/fake"
 mkdir -p "${R}/tools/flow" "${R}/.github" "${TMP}/bin" "${FAKE}" "${TMP}/tpl"
-for f in release-scope.sh release-acceptance.sh acceptance-gate.sh owner-triage.sh worker-lib.sh decision-lib.sh; do
+for f in release-scope.sh release-acceptance.sh acceptance-gate.sh repo-lib.sh decision-lib.sh; do
   cp "${SRC}/tools/flow/${f}" "${R}/tools/flow/"
 done
 cp "${SRC}/tools/ci-paths.sh" "${R}/tools/"

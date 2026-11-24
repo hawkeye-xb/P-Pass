@@ -52,8 +52,8 @@ infra_report() {
 }
 
 load_repo() {
-  # shellcheck source=worker-lib.sh
-  . "${FLOW_DIR}/worker-lib.sh"
+  # shellcheck source=repo-lib.sh
+  . "${FLOW_DIR}/repo-lib.sh"
   REPO="$(flow_repo)"
 }
 
@@ -74,7 +74,7 @@ do_prepare() {
     gh api -X POST "repos/${REPO}/statuses/${sha}" -f state=pending -f context="review/agent" \
       -f description="独立评审进行中" >/dev/null 2>&1 || echo "ci-review: 写状态 pending 失败" >&2
   fi
-  PPASS_REVIEW_PHASE=prepare PPASS_REVIEW_STATE="$STATE" bash "${FLOW_DIR}/review.sh" "$pr" >"${STATE}/prepare.log" 2>&1 || rc=$?
+  PPASS_REVIEW_PHASE=prepare PPASS_REVIEW_STATE="$STATE" python3 -B -I "${FLOW_DIR}/flow.py" review "$pr" >"${STATE}/prepare.log" 2>&1 || rc=$?
   cat "${STATE}/prepare.log"
   if [ "$rc" -ne 0 ]; then
     # 读不到 PR、没有 closes #N、头提交在途中变了……：评审没开始，后面两步跳过
@@ -146,12 +146,12 @@ do_publish() {
     echo "agent 步骤没有跑完（被取消或崩溃）" >"${STATE}/agent.err"
   fi
   PPASS_REVIEW_NO_MERGE=1 PPASS_REVIEW_PHASE=publish PPASS_REVIEW_STATE="$STATE" \
-    bash "${FLOW_DIR}/review.sh" "$pr" >"${STATE}/publish.log" 2>&1 || rc=$?
+    python3 -B -I "${FLOW_DIR}/flow.py" review "$pr" >"${STATE}/publish.log" 2>&1 || rc=$?
   cat "${STATE}/publish.log"
-  # 只认 review.sh 在状态真正写成功后才打的标记行（#1441）：报错文案里出现 review/agent 字样不算已写。
+  # 只认评审引擎在状态真正写成功后才打的标记行（#1441）：报错文案里出现 review/agent 字样不算已写。
   if [ "$rc" -ne 0 ] && ! grep -qE '^REVIEW_STATUS_WRITTEN=(success|failure|error)$' "${STATE}/publish.log"; then
-    # review.sh 没走到「写完状态」就退了（贴评论、写状态的 gh 调用失败）
-    infra_report "$pr" "$sha" "review.sh 没写出评审状态就退出了（退出码 ${rc}）：$(tail -n 3 "${STATE}/publish.log" | tr '\n' ' ')"
+    # 没走到「写完状态」就退了（贴评论、写状态的 gh 调用失败）
+    infra_report "$pr" "$sha" "review 没写出评审状态就退出了（退出码 ${rc}）：$(tail -n 3 "${STATE}/publish.log" | tr '\n' ' ')"
   fi
 }
 

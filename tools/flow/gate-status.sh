@@ -24,8 +24,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck source=worker-lib.sh
-. "${HERE}/worker-lib.sh"
+# shellcheck source=repo-lib.sh
+. "${HERE}/repo-lib.sh"
 
 REPO="$(flow_repo)"
 LIMIT="${GATE_STATUS_ISSUE_LIMIT:-300}"
