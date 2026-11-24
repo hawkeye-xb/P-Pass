@@ -296,6 +296,8 @@ mobile-static-check:
   python3 tools/ios/gen-strings.py --check
   tools/ios/check-no-color-literals.sh --self-test > /dev/null
   tools/ios/check-no-color-literals.sh
+  tools/check-ui-truth-table.sh --self-test > /dev/null
+  tools/check-ui-truth-table.sh
   @for l in en zh; do cmp -s assets/i18n/$l.json apps/android/app/src/main/assets/i18n/$l.json || { echo "✗ apps/android/app/src/main/assets/i18n/$l.json 与 assets/i18n 不一致——从 assets/i18n 复制过去"; exit 1; }; done
   @echo "ok: Android i18n 副本与 assets/i18n 逐字节一致"
 

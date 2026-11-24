@@ -221,17 +221,18 @@ fun allSafeTextAllowed(
         missingSourceCount == 0 &&
         (triplet?.skippedByUser ?: 0L) == 0L
 
-/**
- * #1962：英雄卡空闲状态行（`idleLine`）的颜色，对齐 iOS `HeroCard.statusColor`——
- * 绿色只给「已确认的安全」（`AllSafe` 且五条闸门全过），等待用琥珀，其余用系统次级色。
- * 反证：改回写死 `PPColor.Ink60`，`HomeHeroStatusColorTest` 的三条绿 / 琥珀断言立刻红。
- */
 internal fun heroIdleLineColor(waitReason: Int?, line: StatusLine, allSafeAllowed: Boolean): Color =
     when {
         waitReason != null -> PPColor.Waiting
         line is StatusLine.AllSafe && allSafeAllowed -> PPColor.Safe
         else -> PPColor.Ink60
     }
+
+internal fun showsFromTodayEmpty(
+    render: HeroRender,
+    triplet: BackupTriplet?,
+    scopeHasStart: Boolean,
+): Boolean = render == HeroRender.Triplet && triplet != null && triplet.n == 0L && triplet.m == 0L && scopeHasStart
 
 /**
  * 规则 P（事实源 §2.5，#361 步骤 2）→ #418 → #413：等待中把**为什么在等**说出来——**不新增横幅**，
@@ -524,8 +525,7 @@ internal fun HomeScreen(
                 val t = triplet
                 val heroRender = heroRenderOf(mediaAccess, t, countsReadable = countsReadable, scopeSaved = scopeSaved,
                     hasUsableSource = hasUsableSource, hasSelectedAlbum = hasSelectedAlbum)
-                if (heroRender == HeroRender.Triplet && t != null && t.n == 0L && t.m == 0L && scopeHasStart) {
-                    // #1272 §5：「从某天起」且范围里还没有照片——空状态一句话（拍完回到 P-Pass，前台补捞会把它传上去）。
+                if (showsFromTodayEmpty(heroRender, t, scopeHasStart)) {
                     Text(stringResource(R.string.auto_backup_from_today_empty), color = PPColor.Ink, fontSize = 15.sp)
                 } else if (heroRender == HeroRender.Triplet && t != null) {
                     // UI-16 规则 G：五条闸门全过才准绿；任一条不成立退回墨色。

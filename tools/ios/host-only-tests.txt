@@ -1,4 +1,5 @@
 # Tests that read repository source files and must run in the host/CI lane.
+CrossPlatformUiStateTruthTableTests
 DebugLaunchInputTests
 DesignTokensTests
 DesktopThumbTests
