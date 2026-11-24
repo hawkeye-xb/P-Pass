@@ -1,14 +1,14 @@
 # 【E3-4a】ADR「验收标准 E3」第 4 条前半：Blackmagic 实拍摄素材经目录来源完成真实备份。
 # 授权必须走真系统目录选择器（安全作用域书签只能由创建它的进程解析；App 本期无目录 UI——ADR 明确）：
 # App 的 DEBUG 钩子（PPASS_BGTEST_FOLDER_PICK）在启动时弹选择器，UI 测试（PPassUITests/FolderPickerDrive）
-# 像用户一样点「我的 iPhone → Blackmagic Cam → 打开」，授权回调内经真实 FolderRegistry.addFolder 登记。
+# 像用户一样点「我的 iPhone → Blackmagic Cam → Media → 打开」，授权回调内经真实 FolderRegistry.addFolder 登记。
 # 之后全部走正式备份链：配对沙盒桌面 → 相册范围清空 → folder: 项全部备份 → 桌面逐个落地；
 # 同一份素材同时经相册（seedRun 种入测试相册的拷贝）与目录出现 → 桌面只有一份（E3-4 后半同轮覆盖）。
 # 手机侧只读：登记与取样都是读操作，不动用户素材（测试不删用户素材，ADR E3）。
 # shellcheck source=ios-lib.bashlib
 source "$(dirname "${BASH_SOURCE[0]}")/ios-lib.bashlib"
 RUN="e3-$(date +%s)"
-TARGET="${PPASS_E3_FOLDER_TARGET:-Blackmagic Cam}"
+TARGET="${PPASS_E3_FOLDER_TARGET:-Blackmagic Cam/Media}"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/ppass-e3-ios.XXXXXX")
 DESK="$WORK/A"
 
@@ -18,33 +18,49 @@ COUNTER=off
 setup() {
   ios_require_tools
   ios_resolve_device
+  # 两种模式都构建安装当前代码的 App 并记录 commit/installed：人工/外部驱动模式不许拿设备上的旧包当当前包
+  # （跳过构建只能走既有 PPASS_SKIP_BUILD=1 口径，由操作者自证已是当前 Debug 包）。
   ios_ensure_installed "$EV"
   ios_reset "$EV"
   ios_desk_start "$DESK"
   ios_pair_allow_start "$EV" "$DESK"
-  # UI 测试（点选择器）要先 build-for-testing
-  local ios="$REPO_ROOT/apps/ios"
-  [ -d "$ios/TransportFFITests/Generated/TransportFFI.xcframework" ] \
-    || "$REPO_ROOT/tools/build-ios-transport-xcframework.sh" "$ios/TransportFFITests/Generated" >>"$EV/build.log" 2>&1
-  (cd "$ios" && xcodegen generate --quiet) >>"$EV/build.log" 2>&1
-  xcodebuild build-for-testing -project "$ios/PPass.xcodeproj" -scheme PPassUI -configuration Debug \
-    -destination "id=$IOS_HW_UDID" -allowProvisioningUpdates \
-    -derivedDataPath "$ios/build/derived-device" >>"$EV/build.log" 2>&1 \
-    || { tail -20 "$EV/build.log" >&2; die "UI 测试构建失败（$EV/build.log）"; }
+  # UI 测试（点选择器）要先 build-for-testing；人工/外部驱动分支直接点真选择器，用不上 UI 测试，跳过
+  if [ "${PPASS_E3_PICK_MANUAL:-0}" != 1 ]; then
+    local ios="$REPO_ROOT/apps/ios"
+    [ -d "$ios/TransportFFITests/Generated/TransportFFI.xcframework" ] \
+      || "$REPO_ROOT/tools/build-ios-transport-xcframework.sh" "$ios/TransportFFITests/Generated" >>"$EV/build.log" 2>&1
+    (cd "$ios" && xcodegen generate --quiet) >>"$EV/build.log" 2>&1
+    xcodebuild build-for-testing -project "$ios/PPass.xcodeproj" -scheme PPassUI -configuration Debug \
+      -destination "id=$IOS_HW_UDID" -allowProvisioningUpdates \
+      -derivedDataPath "$ios/build/derived-device" >>"$EV/build.log" 2>&1 \
+      || { tail -20 "$EV/build.log" >&2; die "UI 测试构建失败（$EV/build.log）"; }
+  fi
 }
 
 act() {
-  # 1) 授权登记：启动 App（PPASS_BGTEST_FOLDER_PICK=1 弹选择器）→ UI 测试点「我的 iPhone → <target> → 打开」
-  # TEST_RUNNER_* 必须作为 xcodebuild 的**环境变量**传入（去掉前缀后进测试进程）；写成命令末尾的参数
-  # 只是 build setting，不会进测试进程（真机实测：UIREG_HOME_WAIT 没传进去，按 Home 提前到 12s）。
-  # 真机上 test-without-building 启动被测 App 常报「process identifier could not be determined」，
-  # 同一份 xctestrun 换 test 就能起来（tools/ios/ui-regress.sh 2026-11-11 实测）：这里用 test。
-  TEST_RUNNER_UIREG_RUN="$RUN" TEST_RUNNER_UIREG_TARGET="$TARGET" TEST_RUNNER_UIREG_STAGE=1 \
-    xcodebuild test -project "$REPO_ROOT/apps/ios/PPass.xcodeproj" -scheme PPassUI -configuration Debug \
-    -destination "id=$IOS_HW_UDID" -only-testing:PPassUITests/FolderPickerDrive/testPickFolder \
-    -derivedDataPath "$REPO_ROOT/apps/ios/build/derived-device" \
-    >"$OUT/pick-test.log" 2>&1 || { tail -20 "$OUT/pick-test.log" >&2; return 1; }
-  ios_copy_from Documents/e2e/status.json "$OUT/status-picked.json" || { echo "状态没拉到（选择器没点成？）" >&2; return 1; }
+  # 1) 授权登记：启动 App（PPASS_BGTEST_FOLDER_PICK=1 弹选择器）→ 默认走 UI 测试点「我的 iPhone →
+  #    <target> → 打开」（默认 Blackmagic Cam/Media）。XCUITest 点不进真选择器时，设 PPASS_E3_PICK_MANUAL=1
+  #    走人工/外部驱动分支：直接 devicectl 弹真选择器，等 folder_picked 后接续原步骤 2–4 与原 judge
+  #    （分支合拢后两种模式共用 status-picked.json）。
+  if [ "${PPASS_E3_PICK_MANUAL:-0}" = 1 ]; then
+    # 启动参数与 FolderPickerDrive 写进 App 的逐项一致（DIR/RUN + PICK + STAGE，同一个 RUN）。
+    ios_launch "$OUT" pick "{\"PPASS_E2E_DIR\":\"container\",\"PPASS_E2E_RUN\":\"$RUN\",\"PPASS_BGTEST_FOLDER_PICK\":\"1\",\"PPASS_BGTEST_FOLDER_STAGE\":\"1\"}" \
+      || { echo "pick 启动失败" >&2; return 1; }
+    ios_wait_status "$OUT/pick" "$RUN" 900 true >/dev/null \
+      || { echo "等 folder_picked 超时或失败（真选择器点完了吗）：$(jq -r '.error // .step // ""' "$OUT/pick.status.json" 2>/dev/null)" >&2; return 1; }
+    cp "$OUT/pick.status.json" "$OUT/status-picked.json" || return 1
+  else
+    # TEST_RUNNER_* 必须作为 xcodebuild 的**环境变量**传入（去掉前缀后进测试进程）；写成命令末尾的参数
+    # 只是 build setting，不会进测试进程（真机实测：UIREG_HOME_WAIT 没传进去，按 Home 提前到 12s）。
+    # 真机上 test-without-building 启动被测 App 常报「process identifier could not be determined」，
+    # 同一份 xctestrun 换 test 就能起来（tools/ios/ui-regress.sh 2026-11-11 实测）：这里用 test。
+    TEST_RUNNER_UIREG_RUN="$RUN" TEST_RUNNER_UIREG_TARGET="$TARGET" TEST_RUNNER_UIREG_STAGE=1 \
+      xcodebuild test -project "$REPO_ROOT/apps/ios/PPass.xcodeproj" -scheme PPassUI -configuration Debug \
+      -destination "id=$IOS_HW_UDID" -only-testing:PPassUITests/FolderPickerDrive/testPickFolder \
+      -derivedDataPath "$REPO_ROOT/apps/ios/build/derived-device" \
+      >"$OUT/pick-test.log" 2>&1 || { tail -20 "$OUT/pick-test.log" >&2; return 1; }
+    ios_copy_from Documents/e2e/status.json "$OUT/status-picked.json" || { echo "状态没拉到（选择器没点成？）" >&2; return 1; }
+  fi
   jq -r '.step // ""' "$OUT/status-picked.json" | grep -q '^folder_picked$' \
     || { echo "App 侧登记没完成：$(jq -r '.error // .step' "$OUT/status-picked.json")" >&2; return 1; }
   # 同内容双来源的那份：pick 钩子暂存进 Documents/e2e/seed/ 的最小媒体拷贝（目录素材的字节相同拷贝）。

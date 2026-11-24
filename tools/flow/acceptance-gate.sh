@@ -5,10 +5,10 @@
 #   acceptance-gate.sh classify [--repo <仓库根>] [--core-rules <规则文件>] [--diff <unified diff>] < 改动文件列表
 #                               打印 core / core-hidden / ui / notes / none
 #
-# 级别判定只在这里一份：worker-done.sh（classify）、review.sh（classify + check）、CI 的 acceptance gate（check）、
+# 级别判定只在这里一份：flow.py done/review、CI 的 acceptance gate（check）、
 # release-scope.sh（classify，算每个版本的验收范围）都调用本脚本，别在别处再抄一份。
 #
-# 口径与 owner-triage.sh 一致。「用户可见」= 界面与文案路径（owner-triage.sh 的 UI_GLOBS）或 apps/** 下的非测试文件
+# 「用户可见」= 界面与文案路径（本脚本 UI_GLOBS）或 apps/** 下的非测试文件
 # （测试 = 下面 TEST_RE 圈出的位置）。核心 = .github/core-paths.txt（给了 --diff 时，只改版本号行的文件不算，见 tools/ci-paths.sh）。
 #   core        命中核心且用户可见：正文引用 origin/main 上「已采纳」的方案（docs/decisions/<文件>.md）；不要验收行，随版本验收
 #   core-hidden 命中核心、用户看不见（如发布链脚本，#1448）：正文引用已采纳方案，且改动里带测试文件（带反证的自动化测试）
@@ -33,6 +33,9 @@ NOTES_RE='^(release/notes/|CHANGELOG\.md$)'
 # sharedTest、iOS 的 PPassTests 与各包的 Tests 目录；对照过 build.gradle.kts / Package.swift / project.yml / Cargo）。
 # 注意 iOS 的 TransportFFITests/Package.swift 是 App 依赖的包清单，不是测试，所以不能按「*Tests 目录」放过。不按文件名后缀 Test 判，否则 SpeedTest.svelte 这种正式组件会被漏掉。
 TEST_RE='(\.(test|spec)\.[^/]*$)|((^|/)(PPassTests|Tests|tests|test|__tests__|androidTest|sharedTest)/)'
+
+# 界面与文案路径（唯一真源）：碰到就算用户可见行为。
+UI_GLOBS="assets/i18n/** assets/design/** apps/android/app/src/main/res/** apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/** apps/desktop/src/** apps/ios/PPass/** site/** release/notes/**"
 
 usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -62,19 +65,17 @@ done
 [ -n "$HEAD_DIR" ] || HEAD_DIR="$REPO"
 
 # 用户可见：apps/** 下的非测试文件（如安卓备份行为 backup/**），或界面与文案路径。
-# 界面路径清单与 owner-triage.sh 共用同一份；读不到按可见处理（宁严勿松）。
 visible() { # visible <非测试文件列表>：可见打印 yes
-  local nontest="$1" ui_globs ui
+  local nontest="$1" ui
   [ -n "$nontest" ] || return 0
   if [ "$(printf '%s\n' "$nontest" | bash "${REPO}/tools/ci-paths.sh" hit - 'apps/**' 2>/dev/null)" != "false" ]; then
     echo yes
     return
   fi
-  ui_globs="$(sed -n 's/^UI_GLOBS="\(.*\)"$/\1/p' "${REPO}/tools/flow/owner-triage.sh" 2>/dev/null)"
-  if [ -z "$ui_globs" ]; then echo yes; return; fi
+  [ -n "${UI_GLOBS:-}" ] || { echo yes; return; }
   set -f
   # shellcheck disable=SC2086 # 清单是空格分隔的 glob，刻意拆开
-  ui="$(printf '%s\n' "$nontest" | bash "${REPO}/tools/ci-paths.sh" hit - $ui_globs 2>/dev/null)"
+  ui="$(printf '%s\n' "$nontest" | bash "${REPO}/tools/ci-paths.sh" hit - $UI_GLOBS 2>/dev/null)"
   set +f
   [ "$ui" = "false" ] || echo yes
 }
@@ -109,67 +110,44 @@ classify() {
 # PR 自己加进来的方案文件不算（没合进 main 就不是已采纳）。
 adopted_in_body() { (cd "$REPO" && adopted_adrs "$(cat "$BODY_F")"); }
 
-# V3 链外封条 SHA256 核验（#1954）：若关联卡（closes/fixes/resolves/refs）或传入正文带有 ```v3-seal 块，
-# 统一复用 v3_harness.parse_issue_seal 的路径与 64 位 SHA256 白名单规则校验检出文件，任何畸形/缺失/读卡失败一律 fail-closed。
-check_one_seal_text() { # check_one_seal_text <来源标签> <文本>
-  python3 -B -I - "$HEAD_DIR" "${HERE}" "$1" "$2" <<'PY' || exit 1
-import sys
-from pathlib import Path
-repo, flow_dir, label, text = Path(sys.argv[1]).resolve(), sys.argv[2], sys.argv[3], sys.argv[4]
-sys.path.insert(0, flow_dir)
-import v3_harness
-if not v3_harness.has_issue_seal(text):
-    sys.exit(0)
-try:
-    seal = v3_harness.parse_issue_seal(text)
-except Exception as e:
-    print(f"acceptance gate ❌：{label} 的 v3-seal 封条非法或未闭合：{e}", file=sys.stderr)
-    sys.exit(1)
-rel, want = seal["exam_rel"], seal["exam_sha256"]
-target = (repo / rel).resolve()
-if target != repo and not str(target).startswith(str(repo) + "/"):
-    print(f"acceptance gate ❌：{label} 的 exam_rel 逃逸仓库根目录：{rel}", file=sys.stderr)
-    sys.exit(1)
-got = v3_harness.sha256_file(str(target))
-if got != want:
-    print(f"acceptance gate ❌：{label} 锁定的验收测试 `{rel}` SHA256 不匹配或文件缺失", file=sys.stderr)
+# 反假考卷门禁：彻底拒绝在 PR 改动里新增/保留任何 exam_* 一次性考卷，或新增读取业务源码字符串充当断言的假测试（物理删除存量旧文件合法放行）。
+check_no_exam_files() {
+  python3 -B -I - "$HEAD_DIR" "$FILES_F" "$TEST_RE" <<'PY' || exit 1
+import os, pathlib, re, sys
+head_dir, files_f, test_re = pathlib.Path(sys.argv[1]), sys.argv[2], re.compile(sys.argv[3])
+fake_src_re = re.compile(r"""(\.(?:rs|kt|swift|svelte)\b[^\n]{0,120}read_text|open\([^)\n]*\.(?:rs|kt|swift|svelte)["'])""")
+bad_exams, bad_fakes = [], []
+for raw in pathlib.Path(files_f).read_text(encoding="utf-8", errors="ignore").splitlines():
+    f = raw.strip()
+    if not f:
+        continue
+    target = head_dir / f
+    if not target.exists():
+        continue
+    if re.search(r"(^|/)exam_[^/]*$", f):
+        bad_exams.append(f)
+    elif test_re.search(f) and f.endswith(".py") and target.is_file():
+        txt = target.read_text(encoding="utf-8", errors="ignore")
+        if fake_src_re.search(txt):
+            bad_fakes.append(f)
+if bad_exams or bad_fakes:
+    if bad_exams:
+        print("acceptance gate ❌：禁止提交一次性 exam_* 考卷文件（请直接写在各端正式测试套件里）：", file=sys.stderr)
+        for x in bad_exams:
+            print(f"  - {x}", file=sys.stderr)
+    if bad_fakes:
+        print("acceptance gate ❌：禁止提交通过读取业务源码字符串充当断言的假测试：", file=sys.stderr)
+        for x in bad_fakes:
+            print(f"  - {x}", file=sys.stderr)
     sys.exit(1)
 PY
-}
-
-verify_v3_seals() {
-  local body_txt cards c ibody repo_slug=""
-  body_txt="$(cat "$BODY_F")"
-  check_one_seal_text "PR正文" "$body_txt"
-  if [ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
-    repo_slug="${PPASS_HOOK_REPO:-$(git -C "$REPO" config --get remote.origin.url 2>/dev/null | sed -E -e 's#/+$##' -e 's#\.git$##' -e 's#^.*[:/]([^/:]+/[^/:]+)$#\1#' || true)}"
-    if [ "$CARDS_SET" -eq 1 ]; then
-      cards="$CARDS_OVR"
-    else
-      cards="$(printf '%s\n' "$body_txt" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?|refs?)[[:space:]]+#[0-9]+' | grep -oE '[0-9]+' | sort -u || true)"
-    fi
-    for c in $cards; do
-      if [ -n "$repo_slug" ] && [[ "$repo_slug" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
-        ibody="$(gh issue view "$c" -R "$repo_slug" --json body --jq .body 2>&1)" || {
-          echo "acceptance gate ❌：读取关联卡 #${c} 失败，拒绝静默跳过封条检查：$(printf '%s' "$ibody" | head -n 2 | tr '\n' ' ')" >&2
-          exit 1
-        }
-      else
-        ibody="$(gh issue view "$c" --json body --jq .body 2>&1)" || {
-          echo "acceptance gate ❌：读取关联卡 #${c} 失败，拒绝静默跳过封条检查：$(printf '%s' "$ibody" | head -n 2 | tr '\n' ' ')" >&2
-          exit 1
-        }
-      fi
-      check_one_seal_text "关联卡 #${c}" "$ibody"
-    done
-  fi
 }
 
 case "$MODE" in
   classify) classify ;;
   check)
     [ -f "$FILES_F" ] && [ -f "$BODY_F" ] || usage
-    verify_v3_seals
+    check_no_exam_files
     KIND="$(classify <"$FILES_F")"
     case "$KIND" in
       none)

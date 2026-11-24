@@ -29,8 +29,7 @@ bash 能否真执行、本地提交拦截、gh 能否读 issue、提交身份、
   **时间性**＝停线（此刻卡住交付或卡着产品负责人）/ 截止日 / 线性 / 无。
 - 合成：停线 → P0（不可挽回且正在发生也算停线）；不可挽回的预防 → P1；面广有截止日 → P1；局部有截止日 → P2；
   拖慢交付但没卡死的流程问题（面广 + 线性）→ P2；其余 P3。产品负责人点名的一类卡视为停线。
-- `just triage` 的方案文件必填 `**影响**`、`**时间性**`，脚本算出并打标签；标题以 `[MAIN-RED]` 开头的卡自动 P0；
-  挂了带截止日的 milestone 的卡，到期前 3 天重跑 triage 升一级。产品负责人可直接改标签覆盖。
+- `just triage <号> [--priority P0..P3] [--mode fix|feature|verify] [--needs-product]` 直接完成极简立项（不再要求另写 18 字段方案文件）；标题以 `[MAIN-RED]` 开头的卡自动 P0。产品负责人可直接改标签覆盖。
 - P3 定期复看：owner 每次发版规划时列出 30 天未动的 P3，逐张升级或关闭（关闭写明「不做」与理由）。
 - triage 与复看时，先核实这张卡的实现状态（`git log` / `git grep` 看实物），已经做完的直接关掉，不按标题判。
 
@@ -81,8 +80,7 @@ bash 能否真执行、本地提交拦截、gh 能否读 issue、提交身份、
 - **独立评审**：由一个没参与写这个 PR 的 agent 只读评审（对照关联卡的范围与验收查漏），没有阻断项才合入（产品负责人 2026-11-06 定）。
   **CI 评审 job 即独立评审**（`.github/workflows/ci-review.yml`），结论写在 PR 评论和提交状态 `review/agent` 里，
   `review/agent` 是 main 的必需检查，只认 GitHub Actions 写的状态。
-  - **只评正式 PR，与 CI 并行**：草稿不评，转正式时评。推新提交自动重评，但只评
-    上次评到的提交之后的增量；改写历史（强推）就全量评一次。只改正文（如补方案引用）、只合进了 main 的，复用上次结论、不调模型。
+  - **只评正式 PR，全量审阅完整 diff**：草稿不评，转正式时评。每次推新提交只要整体 diff 变了就审阅完整 `origin/main...HEAD` diff（彻底废除增量盲区，防止漏看前序提交缺陷）；只改正文（如补方案引用）或只合进了 main 的，复用上次结论、不调模型。
   - **意见分三级**：阻断（只有误放行、安全、越界三类）、建议、风格。只有阻断让 `review/agent` 为 failure，按评论里的阻断项修，
     推新提交即重评；建议与风格不挡合入，由开 PR 的会话自己判断改不改，不改就回一句理由。评审没跑成（`error`）不算通过，在 Actions 里重跑即可。
   - **判不了的交 owner**：owner 复核后可在 PR 上评论 `/review-override <理由>` 放行，评审 job 只认对本仓有 admin 权限的账号，
@@ -156,10 +154,11 @@ just done                     交卡：过门禁与验收，全绿才推送、�
 just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去做下一张
 ```
 
-- **有人 / 无人双轨与本机远端分层（V3，[方案](docs/decisions/2026-11-21-v3-outcome-driven-collab-flow.md)）**：
-  - **有人在场**：集中拍板取向、批核心方案、真机结对看界面（迭代期跳过慢测试）。
-  - **无人模式（`--unattended`）**：100% 免打扰；开工先探设备在线与未锁屏，遇锁屏/离线立即 `0s` 标 `SUSPENDED_ENV` 跳下一张，连续 2 轮未过门禁即触发 `SUSPENDED_CIRCUIT_BREAK` 熔断跳过；合入前自动 `git rebase origin/main` 并重跑门禁防语义冲突（行冲突安全 `rebase --abort`）。
-  - **本机与远端各司其职**：本机专属安全白名单（`~/.git-allowed-identities`、个人/公司隔离钩子、`gitleaks`、`tools/hooks/dispatch.sh` 转发链、`.claude/settings.local.json`）永远留在本机不削弱；远端守 `.github/allowed-identities.txt`、`.github/core-paths.txt` 核心禁区、链外 `v3-seal` 哈希锁与 `review/agent` 独立评审。改流程规则先跑 `just flow-bench selftest`。
+- **有人 / 无人双轨与自适应资源调度（V3 统一引擎 `tools/flow/flow.py`）**：
+  - **有人在场（轨 A）**：集中拍板取向、批核心方案、真机结对看界面（迭代期跳过慢测试）；本机默认限 `1` 个后台重编译槽保障秒回响应，探测到空闲远端节点自动分流跨平台任务。
+  - **无人模式（轨 B，`--unattended`）**：100% 免打扰；开工先探设备在线与未锁屏，遇锁屏/离线立即 `0s` 标 `SUSPENDED_ENV` 跳下一张，连续 2 轮未过门禁即触发 `SUSPENDED_CIRCUIT_BREAK` 熔断跳过，单步超 15 分钟看门狗自动终止放锁；合入前自动 `git rebase origin/main` 并重跑门禁防语义冲突（行冲突安全 `rebase --abort`）。
+  - **单测与真机物理隔离 & 禁假考卷**：普通单测（`just ios-test` 等）100% 跑模拟器/宿主，绝不自动抢物理真机；严禁提交任何 `exam_*` 一次性考卷或读取源码字符串的假测试，回归测试直接写进各端正式测试套件并在 `fix` 模式下做基线反证；worktree 统一建在仓内 `.worktrees/`。
+  - **本机与远端各司其职**：本机守专属安全白名单（`~/.git-allowed-identities`、公私隔离、`gitleaks`、`tools/hooks/dispatch.sh`）、基线 `.github/core-paths.txt` 核心禁区、秒级架构/适应度底线（`arch-check`、`fitness-check`）与改动模块的精准单测（绝不因未知配置文件回退跑全仓 `just ci`）；远端守跨平台矩阵与全量 diff `review/agent` 独立评审。改流程规则先跑 `python3 tools/test-flow.py`。
 - `just start` 只领 open、`status:ready`、有「验收场景」的卡（单卡普通文件范围白名单已移除，允许自由修改关联普通业务与配套单测，#1953）；Bug 卡还必须有「复现路径」（稳定复现的步骤/命令），缺一样不领。核心卡（`core` 标签）正文引用了
   `origin/main` 上「已采纳」的方案就按方案实现，没有引用就只写复现、根因和两个修法，不改代码。
 - **核心禁区与 worktree 保护**：本地 hook（`tools/hooks/pre-commit`）与 `just done` 统一按不可变基线 `origin/main:.github/core-paths.txt` 拦截未带 `core` 标签的核心改动，并拒绝在主仓根目录直接提交卡分支，见 `tools/hooks/` 与
@@ -173,16 +172,12 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
   - **PR 上**：CI 只跑与改动相关的快检（Windows 不在 PR 上跑），是合入门禁。
   - **合入 main 后**：CI 全量（含 Windows）批量跑：同一时间一次、正在跑的不取消、排队只留最新；main 红了只修或回滚元凶 PR，main 不冻结。
   - **发版前**：Release 再验证一遍（桌面壳只跑 Windows；Linux 桌面检查已随 #1555 永久移除，见 [CI lane](docs/runbook/ci-lanes.md)），只从全绿提交切 tag。
-- `just done` 依次：基线核心禁区校验 → V3 四类任务封条门禁（`fix` 锁测试 `SHA256` + 基线反证变红 + 分支绿；`speculate_then_fix` 先固化变红单测；`feature` 锁哈希跳旧基线编译；`verify` 源码零改动如实报 `FAIL` 即合格交差，#1954）→ 机械漏改提示（不阻断）→ 门禁（按改动路径挑：安卓 `just android-test`、iOS `just ios-test`、文案/i18n `just mobile-static-check`、
-  桌面前端 `pnpm -C apps/desktop test`、Rust crate（含桌面 `apps/desktop/src-tauri`）对应 crate 的 `cargo nextest run -p`、纯文档 `just md-check`（AGENTS.md 与 `.github/**` 是流程文件，仍跑 `just ci-docs`）；
-  有一个文件挑不出来才退回全量 `just ci`）→ 推分支 → 在 issue 贴回执（分支、提交、门禁与验收输出末尾、证据等级、证据目录）。
+- `just done` 依次：基线核心禁区校验 → 正式单测反假考卷与 `fix` 零拷贝基线反证（基线红 → 当前绿）→ 按改动模块精准挑门禁（安卓 `just android-test`、iOS `just ios-test` 模拟器、文案/i18n `just mobile-static-check`、
+  桌面前端 `pnpm -C apps/desktop test`、Rust crate 对应 `cargo nextest run -p`、纯文档 `just md-check`、AGENTS.md 跑 `just ci-docs`、代码改动补秒级 `arch-check` + `fitness-check`；未知配置文件绝不回退跑全仓 `just ci`）→ 推分支 → 在 issue 贴回执。
   `just verify <号>` 不再默认跑：只有卡上写明 `**真机验证**：需要` 才跑（用户看得到的改动按「按版本验收」随版本验，#1471）。
-  核心违规等流程红线：不推送、issue 写明原因、打 `status:blocked`。本地门禁或 verify 红同样不推送，但不改卡状态、不刷 issue，修好直接重跑；无人模式连败 2 次自动熔断，有人模式同一处连红 3 次按 `just stuck` 处理。
-  - **作者自查**：推送前对照 `tools/flow/review-prompt.md` 看 diff，并用 `git grep` 核全仓同类写法；这是执行动作，不另写 `self-review.md`，也不进回执与 PR 正文。
-    `just done` 只打印机械漏改提示，不阻断；验收和同类写法由 PR 上的独立评审复核。
-  - **代码没变就复用验证**：门禁与 verify 通过后记下树哈希；重跑 `just done` 时树和门禁清单都没变就不重跑，回执写明复用了哪次的验证。
+  核心违规等流程红线：不推送、打 `status:blocked`。本地门禁或 verify 红同样不推送，但不改卡状态、不刷 issue，修好直接重跑；无人模式连败 2 次自动熔断，有人模式同一处连红 3 次按 `just stuck` 处理。
   - **变基重验与落后 main**：`--rebase` 或 `--unattended` 下自动 `git rebase origin/main` 并在新树上重跑门禁；有人模式默认落后无冲突照推，有冲突停下提示 `git rebase origin/main`。
-- 三级的 PR 都是 CI 全绿（含 acceptance gate：碰核心的要已采纳方案，含 `v3-seal` 的核验锁定测试 `SHA256`）且独立评审通过就合（squash），不等真机验收；
+- 三级的 PR 都是 CI 全绿（含 acceptance gate：碰核心的要已采纳方案，拒绝任何 `exam_*` 一次性考卷入库）且独立评审通过就合（squash），不等真机验收；
   用户看得到的改动随版本验收，发版前台账清零（见「按版本验收」）。开完 PR 立刻打开外壳的 PR 监控（见下两条）；CI 红了由干活的 agent 修到绿，不叫人。
 - 必须用 `just stuck` 停下的情况：命中核心且没有已采纳方案、没有可用的验收场景、同一处连红 3 次。
 - 用户看得到的行为按卡上的验收场景做真机验证（E3）：卡上写明 `**真机验证**：需要` 的，`just done` 才跑 `just verify`；

@@ -8,7 +8,7 @@
 驱动模式与 `tools/ios/e3-batch.sh` 一致：App 的 DEBUG 钩子（`apps/ios/PPass/Debug/BGTestDriver.swift` 的
 `PPASS_BGTEST_FOLDER_*`）经 devicectl 启动环境变量进来，状态写 App 容器 `Documents/e2e/status.json`，
 脚本拉回判定；目录登记走真实 `FolderRegistry.addFolder`（Blackmagic 走真系统目录选择器，由
-`PPassUITests/FolderPickerDrive` 点「我的 iPhone → 目标目录 → 打开」）。桌面端用测试沙盒
+`PPassUITests/FolderPickerDrive` 点「我的 iPhone → 目标目录路径 → 打开」，或设 `PPASS_E3_PICK_MANUAL=1` 走真选择器人工/外部驱动接续）。桌面端用测试沙盒
 （`tools/ios/sandbox-desk.sh`，daemon --ephemeral，假 HOME 临时库），不碰本机正式桌面。
 
 | 场景 | ADR E3 条款 |
@@ -28,5 +28,5 @@
 （Debug 包，dev 签名）；之后的场景传 `PPASS_SKIP_BUILD=1` 复用同一份安装。素材全部程序生成；
 测试目录只碰 `foldere3-*` 前缀，不动用户相册与素材。大视频大小 `PPASS_E3_FOLDER_BIG_MB`（默认 200）。
 
-环境变量：`PPASS_SKIP_BUILD`、`PPASS_E3_FOLDER_BIG_MB`、`PPASS_E3_FOLDER_TARGET`（Blackmagic 目录名）、
-`PPASS_E3_FOLDER_MAX_MB`（Blackmagic 沙盒护栏）。
+环境变量：`PPASS_SKIP_BUILD`、`PPASS_E3_FOLDER_BIG_MB`、`PPASS_E3_FOLDER_TARGET`（Blackmagic 目录路径，默认 `Blackmagic Cam/Media`）、
+`PPASS_E3_PICK_MANUAL`（=1 时弹真选择器等外部点选后接续）、`PPASS_E3_FOLDER_MAX_MB`（Blackmagic 沙盒护栏）。

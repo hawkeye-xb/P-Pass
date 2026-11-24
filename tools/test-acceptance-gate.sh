@@ -12,7 +12,7 @@ ok() { printf '  ✅ %s\n' "$1"; PASS=$((PASS + 1)); }
 bad() { printf '  ❌ %s\n' "$1"; FAIL=$((FAIL + 1)); }
 
 mkdir -p "${TMP}/repo/tools/flow" "${TMP}/repo/.github"
-cp "${SRC}/tools/flow/acceptance-gate.sh" "${SRC}/tools/flow/v3_harness.py" "${SRC}/tools/flow/owner-triage.sh" "${SRC}/tools/flow/decision-lib.sh" "${TMP}/repo/tools/flow/"
+cp "${SRC}/tools/flow/acceptance-gate.sh" "${SRC}/tools/flow/decision-lib.sh" "${TMP}/repo/tools/flow/"
 cp "${SRC}/tools/ci-paths.sh" "${TMP}/repo/tools/"
 # core/** 是用户看不见的核心（如发布链脚本）；apps/android/core/** 是用户看得见的核心（如配对界面背后的代码）。
 printf '+ core/**\n+ apps/android/core/**\n+ apps/desktop/src-tauri/tauri.conf.json\n' >"${TMP}/repo/.github/core-paths.txt"
@@ -128,44 +128,25 @@ sed 's/KIND="$(classify <"$FILES_F")"/KIND=weird/' "${TMP}/gate.bak" >"$G"
 printf '%s\n' "$UI" >"${TMP}/files"; printf 'closes #1\n' >"${TMP}/body"
 bash "$G" check --repo "${TMP}/repo" --files "${TMP}/files" --body "${TMP}/body" >/dev/null 2>&1 && bad "判不了级别却放行了" || ok "判不了级别 → 红（不放行）"
 cp "${TMP}/gate.bak" "$G"
-# 界面清单读不到 → 宁严勿松
-rm "${TMP}/repo/tools/flow/owner-triage.sh"
-printf '%s\n' docs/a.md | bash "$G" classify --repo "${TMP}/repo" | grep -qx ui && ok "界面清单读不到 → 按用户看得见处理（进验收范围）" || bad "清单缺失时放行了"
+# UI_GLOBS 清空时 → 宁严勿松（按用户看得见处理）
+cp "$G" "${TMP}/gate.uibak"
+sed 's/^UI_GLOBS=.*/UI_GLOBS=""/' "${TMP}/gate.uibak" >"$G"
+printf '%s\n' docs/a.md | bash "$G" classify --repo "${TMP}/repo" | grep -qx ui && ok "界面清单为空时 → 按用户看得见处理（进验收范围）" || bad "清单缺失时放行了"
+cp "${TMP}/gate.uibak" "$G"
 # 用法错误
 bash "$G" check >/dev/null 2>&1; [ $? = 2 ] && ok "缺参数 → 退出码 2" || bad "缺参数退出码不对"
 
-# V3 封条 SHA256 核验（#1954）：覆盖缩进围栏、缺失哈希拒绝、路径穿越拒绝、refs 关联卡校验与 gh 读卡失败 fail-closed
-mkdir -p "${TMP}/repo/tests" "${TMP}/ghbin"
-printf 'x = 1\n' >"${TMP}/repo/tests/locked_t.py"
-LOCKED_H="$(python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "${TMP}/repo/tests/locked_t.py")"
-SEAL_B="$(printf 'closes #1\n  ```v3-seal\n{"mode":"fix","exam_rel":"tests/locked_t.py","exam_sha256":"%s"}\n  ```' "$LOCKED_H")"
-gate 0 "V3 封条（含两空格缩进）：锁定测试 SHA256 一致 → 绿" "docs/a.md" "$SEAL_B"
-printf 'x = 2\n' >"${TMP}/repo/tests/locked_t.py"
-gate 1 "反证：V3 封条锁定测试被篡改 → acceptance gate 判红" "docs/a.md" "$SEAL_B"
-# 原始 CRLF 封条：不经过 tr -d '\r' 直接喂给 acceptance-gate，锁定测试被篡改时仍必须识别出封条并判红（防 CRLF fail-open 静默跳过）
-SEAL_CRLF="$(printf 'closes #1\r\n```v3-seal\r\n{"mode":"fix","exam_rel":"tests/locked_t.py","exam_sha256":"%s"}\r\n```\r\n' "$LOCKED_H")"
-gate 1 "反证：原始 CRLF 封条且锁定测试被篡改 → acceptance gate 识别封条并判红" "docs/a.md" "$SEAL_CRLF"
-printf 'x = 1\n' >"${TMP}/repo/tests/locked_t.py"
-gate 0 "原始 CRLF 封条且锁定测试 SHA256 一致 → 绿" "docs/a.md" "$SEAL_CRLF"
-gate 1 "V3 封条缺少 exam_sha256 → 拒绝放行" "docs/a.md" $'closes #1\n```v3-seal\n{"mode":"fix","exam_rel":"tests/locked_t.py"}\n```'
-gate 1 "V3 封条绝对路径 / 路径穿越 → 拒绝放行" "docs/a.md" "$(printf 'closes #1\n```v3-seal\n{"mode":"fix","exam_rel":"/etc/hosts","exam_sha256":"%s"}\n```' "$LOCKED_H")"
-
-cat >"${TMP}/ghbin/gh" <<'STUB'
-#!/usr/bin/env bash
-[ -e "$FAKE_AG_GH_FAIL" ] && { echo "network timeout" >&2; exit 1; }
-cat "$FAKE_AG_ISSUE_BODY"
-STUB
-chmod +x "${TMP}/ghbin/gh"
-printf '%s\n' "$SEAL_B" >"${TMP}/card201.md"
-printf 'x = 2\n' >"${TMP}/repo/tests/locked_t.py"
-(export PATH="${TMP}/ghbin:${PATH}" GH_TOKEN=stub FAKE_AG_ISSUE_BODY="${TMP}/card201.md"; printf 'docs/a.md\n' >"${TMP}/files"; printf 'refs #201\n' >"${TMP}/body"; bash "$G" check --repo "${TMP}/repo" --files "${TMP}/files" --body "${TMP}/body" >/dev/null 2>&1) &&
-  bad "refs #201 关联卡锁定测试被篡改仍放行" || ok "refs #201 关联卡封条哈希不匹配 → 判红拦截"
-printf '%s' "$SEAL_CRLF" >"${TMP}/card201_crlf.md"
-(export PATH="${TMP}/ghbin:${PATH}" GH_TOKEN=stub FAKE_AG_ISSUE_BODY="${TMP}/card201_crlf.md"; printf 'docs/a.md\n' >"${TMP}/files"; printf 'closes #201\n' >"${TMP}/body"; bash "$G" check --repo "${TMP}/repo" --files "${TMP}/files" --body "${TMP}/body" >/dev/null 2>&1) &&
-  bad "关联卡原始 CRLF 封条且测试被篡改仍放行" || ok "关联卡原始 CRLF 封条被篡改 → acceptance gate 判红"
-printf 'x = 1\n' >"${TMP}/repo/tests/locked_t.py"
-(export PATH="${TMP}/ghbin:${PATH}" GH_TOKEN=stub FAKE_AG_ISSUE_BODY="${TMP}/card201.md" FAKE_AG_GH_FAIL="${TMP}/card201.md"; printf 'docs/a.md\n' >"${TMP}/files"; printf 'closes #201\n' >"${TMP}/body"; bash "$G" check --repo "${TMP}/repo" --files "${TMP}/files" --body "${TMP}/body" >/dev/null 2>&1) &&
-  bad "gh 读取关联卡失败时静默放行" || ok "gh 读取关联卡失败 → fail-closed 判红"
+# 反假考卷门禁：彻底拒绝任何新增/留存的 exam_* 一次性考卷及读取源码字符串假测试；物理删除存量 exam_*（HEAD 中已不存在）放行
+mkdir -p "${TMP}/repo/crates/daemon/tests/v3" "${TMP}/repo/tests"
+printf 'x = 1\n' >"${TMP}/repo/crates/daemon/tests/v3/exam_1927.py"
+printf 'echo 1\n' >"${TMP}/repo/exam_foo.sh"
+printf 's = (ROOT / "crates/platform/src/lib.rs").read_text()\nassert "fn foo" in s\n' >"${TMP}/repo/tests/fake_check.py"
+gate 1 "反假考卷：PR 含新增/留存的 exam_1927.py 一次性考卷 → acceptance gate 判红拒绝" "crates/daemon/tests/v3/exam_1927.py" "closes #1"
+gate 1 "反假考卷：PR 含顶层 exam_foo.sh 考卷 → acceptance gate 判红拒绝" "exam_foo.sh" "closes #1"
+gate 1 "反假考卷：PR 含读取业务源码字符串充当断言的 tests/fake_check.py → acceptance gate 判红拒绝" "tests/fake_check.py" "closes #1"
+rm -f "${TMP}/repo/crates/daemon/tests/v3/exam_1927.py" "${TMP}/repo/exam_foo.sh" "${TMP}/repo/tests/fake_check.py"
+gate 0 "反证：物理 git rm 删除旧 exam_1927.py（工作区已不存在）→ 合法放行" "crates/daemon/tests/v3/exam_1927.py" "closes #1"
+gate 0 "反证：正式测试目录 crates/daemon/tests/reparse_test.rs → 绿" "crates/daemon/tests/reparse_test.rs" "closes #1"
 
 echo
 echo "通过 ${PASS}，失败 ${FAIL}"

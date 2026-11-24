@@ -97,6 +97,54 @@ replay "（非 macOS stat 下）"
 PATH="$OLD_PATH"
 rm -rf "$SHIM"
 
+# #1744 E3-4a 选择分支契约（静态，不碰设备）：Blackmagic 实拍素材位于 Blackmagic Cam/Media 子目录；
+# 设 PPASS_E3_PICK_MANUAL=1 时同一场景支持外部驱动/人工点一次真选择器接续——人工分支走 ios_launch（同一 RUN +
+# PICK/STAGE/DIR，与 FolderPickerDrive 写进 App 的逐项一致）+ ios_wait_status 等 folder_picked，
+# 不碰 UI 测试；默认分支原样保留 testPickFolder；分支合拢后的步骤 2–4 与原 judge 两种模式共用；
+# setup 人工模式仍构建安装当前 App 并记录 commit/installed（不拿旧包当当前包），只把
+# build-for-testing 挡进默认分支。
+(
+  scn="$E3/scenarios/ios/folder-blackmagic.sh"
+  grep -q 'Blackmagic Cam/Media' "$scn" || { echo "默认 TARGET 未指向 Blackmagic Cam/Media 子目录"; exit 1; }
+  body_of() { awk '/^'"$1"'\(\)/{f=1;next} f{print} f&&/^\}/{exit}' "$scn"; }
+  actbody="$(body_of act)" setupbody="$(body_of setup)"
+  [ -n "$actbody" ] && [ -n "$setupbody" ] || { echo "act/setup 函数体提不出来"; exit 1; }
+  manual="$(printf '%s\n' "$actbody" | awk '/PPASS_E3_PICK_MANUAL.*= 1 \]; then/{f=1} f&&/^[[:space:]]*else[[:space:]]*$/{exit} f')"
+  shared="$(printf '%s\n' "$actbody" | awk '/^[[:space:]]*fi[[:space:]]*$/{p=NR} {lines[NR]=$0} END{for(i=p+1;i<=NR;i++) print lines[i]}')"
+  [ -n "$manual" ] || { echo "act 没有 PPASS_E3_PICK_MANUAL 人工分支"; exit 1; }
+  [ -n "$shared" ] || { echo "act 人工分支合拢后没有共用段"; exit 1; }
+  # 人工分支：ios_launch 弹真选择器 + 轮询等 folder_picked，绝不碰 UI 测试
+  grep -q 'ios_launch' <<<"$manual" || { echo "人工分支没走 ios_launch"; exit 1; }
+  grep -q 'ios_wait_status' <<<"$manual" || { echo "人工分支没走 ios_wait_status 等 folder_picked"; exit 1; }
+  grep -q 'PPASS_BGTEST_FOLDER_PICK' <<<"$manual" || { echo "人工分支启动参数缺 PPASS_BGTEST_FOLDER_PICK"; exit 1; }
+  grep -q 'PPASS_BGTEST_FOLDER_STAGE' <<<"$manual" || { echo "人工分支启动参数缺 PPASS_BGTEST_FOLDER_STAGE"; exit 1; }
+  grep -q 'PPASS_E2E_DIR' <<<"$manual" || { echo "人工分支启动参数缺 PPASS_E2E_DIR（状态文件拉不回）"; exit 1; }
+  grep -q 'PPASS_E2E_RUN' <<<"$manual" || { echo "人工分支没带同一个 RUN"; exit 1; }
+  grep -q ' 900 ' <<<"$manual" || { echo "人工分支等待不是 900s"; exit 1; }
+  grep -q 'testPickFolder' <<<"$manual" && { echo "人工分支不该碰 UI 测试"; exit 1; }
+  grep -q 'xcodebuild' <<<"$manual" && { echo "人工分支不该跑 xcodebuild"; exit 1; }
+  # 默认路径不变：testPickFolder 全文件只在默认分支出现一次
+  grep -q 'testPickFolder' <<<"$actbody" || { echo "默认分支丢了 testPickFolder"; exit 1; }
+  [ "$(grep -c 'testPickFolder' "$scn")" = 1 ] || { echo "testPickFolder 应只在默认分支出现一次"; exit 1; }
+  # 分支合拢后原步骤照旧（两种模式共用）：folder_picked 复核、staged_name、seed、正式备份、证据收集
+  for m in 'folder_picked\$' 'staged_name' 'RUN-seed' 'PPASS_BGTEST_FOLDER_RUN' 'ios_collect_common'; do
+    grep -q "$m" <<<"$shared" || { echo "分支合拢后丢了共用步骤：$m"; exit 1; }
+  done
+  # setup：构建安装当前 App 并记录 commit/installed 必须在人工分支之外（两种模式都做）；
+  # build-for-testing 必须整体挡在人工分支 if 内
+  grep -q 'ios_ensure_installed' <<<"$setupbody" || { echo "setup 没构建安装并记录 commit/installed"; exit 1; }
+  s_ensure="$(grep -n 'ios_ensure_installed' <<<"$setupbody" | head -1 | cut -d: -f1)"
+  s_guard="$(grep -n 'PPASS_E3_PICK_MANUAL.*then' <<<"$setupbody" | head -1 | cut -d: -f1)"
+  s_build="$(grep -n 'xcodebuild build-for-testing' <<<"$setupbody" | head -1 | cut -d: -f1)"
+  sfi="$(printf '%s\n' "$setupbody" | awk '/PPASS_E3_PICK_MANUAL.*then/{f=1} f&&/^[[:space:]]*fi[[:space:]]*$/{print NR; exit}')"
+  [ -n "$s_guard" ] && [ -n "$s_build" ] && [ -n "$sfi" ] \
+    || { echo "setup 没有 PPASS_E3_PICK_MANUAL 分支或 build-for-testing 不在其中"; exit 1; }
+  [ "$s_ensure" -lt "$s_guard" ] || { echo "构建安装当前 App 必须在人工分支之外（两种模式都做）"; exit 1; }
+  [ "$s_guard" -lt "$s_build" ] && [ "$s_build" -lt "$sfi" ] \
+    || { echo "build-for-testing 必须整体在人工分支 if 内（人工模式跳过）"; exit 1; }
+  exit 0
+) || bad "folder-blackmagic 人工选择分支契约（#1744 E3-4a）"
+
 # #1759：子壳被 set -u 中止时，EXIT trap 仍须清理并保留原始错误；旧写法会再报 ev unbound、跳过 teardown。
 (
   d="$(mktemp -d)" || exit 1

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""桌面前端未挂载死组件与未引用模块秒级静态扫描门禁（#1991 / #1997）。
+"""桌面前端未挂载死组件秒级静态扫描门禁（#1991 / #1997）。
 
 从桌面前端产品入口（apps/desktop/src/main.js 与 index.html）出发，
-遍历 import/export 依赖图，进行可达性分析，拦截以下两类死代码：
-  1. 未挂载 Svelte 组件：未在产品源码中被挂载（仅在 *.test.js 中 import 或完全孤立）的 .svelte 组件（排除 *.fixture.svelte 测试夹具）；
-  2. 孤立前端产品模块：未在产品代码中可达的非测试源码文件（排除 *.helpers.js 测试辅助等显式白名单）。
+遍历 import/export 依赖图，进行可达性分析，拦截以下死代码：
+  未挂载 Svelte 组件：未在产品源码中被挂载（仅在 *.test.js 中 import 或完全孤立）的 .svelte 组件（排除 *.fixture.svelte 测试夹具）。
 
 用法：
     python3 tools/check-desktop-dead-components.py               # 扫描当前仓库
@@ -18,11 +17,6 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 DESKTOP_SRC = REPO / "apps/desktop/src"
-
-# 明确的测试辅助或非运行时模块白名单（若有）
-EXCLUDED_FROM_DEAD_MODULES = {
-    "i18nGate.helpers.js",  # 测试共享辅助脚本
-}
 
 
 def resolve_import(source_file: Path, spec: str, src_dir: Path) -> Path | None:

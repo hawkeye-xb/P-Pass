@@ -48,7 +48,7 @@ def load_json_keys(path: Path) -> set[str]:
     return set(json.loads(path.read_text(encoding="utf-8")).keys())
 
 
-COMMENT_RE = re.compile(r"//.*?$|/\*.*?\*/", re.MULTILINE | re.DOTALL)
+COMMENT_RE = re.compile(r"//.*?$|/\*.*?\*/|<!--.*?-->", re.MULTILINE | re.DOTALL)
 DOTTED_WORD = re.compile(r"[a-zA-Z0-9_.-]+")
 
 
@@ -73,13 +73,15 @@ def scan(root: Path) -> list[str]:
     strings_en = root / "apps/android/app/src/main/res/values/strings.xml"
     android_only_en = root / "apps/android/app/src/main/res/values/strings_android_only.xml"
     ios_strings_zh = root / "apps/ios/PPass/Resources/zh-Hans.lproj/IOS.strings"
+    ios_strings_en = root / "apps/ios/PPass/Resources/en.lproj/IOS.strings"
     desk_en_path = root / "apps/desktop/src/i18n/en.json"
     desk_zh_path = root / "apps/desktop/src/i18n/zh.json"
     shared_en_path = root / "assets/i18n/en.json"
 
     strings_keys = get_xml_keys(strings_en)
     android_only_keys = get_xml_keys(android_only_en)
-    ios_keys = get_ios_strings_keys(ios_strings_zh)
+    ios_keys_zh = get_ios_strings_keys(ios_strings_zh)
+    ios_keys_en = get_ios_strings_keys(ios_strings_en)
     desk_en_keys = load_json_keys(desk_en_path)
     desk_zh_keys = load_json_keys(desk_zh_path)
     shared_keys = load_json_keys(shared_en_path)
@@ -88,6 +90,13 @@ def scan(root: Path) -> list[str]:
     if desk_en_keys != desk_zh_keys:
         diff = sorted(desk_en_keys ^ desk_zh_keys)
         errors.append(f"桌面前端字典 en/zh 键集不一致：{diff[:10]}")
+
+    # 检查 iOS IOS.strings en/zh 键集严格一致
+    if ios_keys_zh != ios_keys_en:
+        diff = sorted(ios_keys_zh ^ ios_keys_en)
+        errors.append(f"apps/ios/.../IOS.strings en/zh 键集不一致：{diff[:10]}")
+
+    ios_keys = ios_keys_zh | ios_keys_en
 
     # 2. 收集移动端代码语料（排除测试与文案资源自身）
     android_files = [
@@ -186,6 +195,7 @@ def run_self_test() -> int:
         (tmppath / "apps/android/app/src/main/res/values").mkdir(parents=True)
         (tmppath / "apps/android/app/src/main/res/values-zh").mkdir(parents=True)
         (tmppath / "apps/ios/PPass/Resources/zh-Hans.lproj").mkdir(parents=True)
+        (tmppath / "apps/ios/PPass/Resources/en.lproj").mkdir(parents=True)
         (tmppath / "apps/desktop/src/i18n").mkdir(parents=True)
         (tmppath / "assets/i18n").mkdir(parents=True)
 
@@ -197,6 +207,9 @@ def run_self_test() -> int:
             '<resources><string name="test_android_only">Android</string></resources>', encoding="utf-8"
         )
         (tmppath / "apps/ios/PPass/Resources/zh-Hans.lproj/IOS.strings").write_text(
+            '"test_ios_only" = "iOS";\n', encoding="utf-8"
+        )
+        (tmppath / "apps/ios/PPass/Resources/en.lproj/IOS.strings").write_text(
             '"test_ios_only" = "iOS";\n', encoding="utf-8"
         )
         (tmppath / "apps/desktop/src/i18n/en.json").write_text('{"ui.test_desk": "Desk"}', encoding="utf-8")
@@ -244,8 +257,11 @@ def run_self_test() -> int:
             '<resources><string name="test_android_only">Android</string></resources>', encoding="utf-8"
         )
 
-        # 4. 注入 IOS.strings 死词条 -> 必须红
+        # 4. 注入 IOS.strings 死词条（分别测试 zh-Hans 与 en） -> 必须红
         (tmppath / "apps/ios/PPass/Resources/zh-Hans.lproj/IOS.strings").write_text(
+            '"test_ios_only" = "iOS";\n"dead_ios_key" = "Dead";\n', encoding="utf-8"
+        )
+        (tmppath / "apps/ios/PPass/Resources/en.lproj/IOS.strings").write_text(
             '"test_ios_only" = "iOS";\n"dead_ios_key" = "Dead";\n', encoding="utf-8"
         )
         errs = scan(tmppath)
@@ -255,6 +271,23 @@ def run_self_test() -> int:
 
         # 还原
         (tmppath / "apps/ios/PPass/Resources/zh-Hans.lproj/IOS.strings").write_text(
+            '"test_ios_only" = "iOS";\n', encoding="utf-8"
+        )
+        (tmppath / "apps/ios/PPass/Resources/en.lproj/IOS.strings").write_text(
+            '"test_ios_only" = "iOS";\n', encoding="utf-8"
+        )
+
+        # 4b. 注入 IOS.strings en/zh 键集不一致 -> 必须红
+        (tmppath / "apps/ios/PPass/Resources/en.lproj/IOS.strings").write_text(
+            '"test_ios_only" = "iOS";\n"extra_en_key" = "Extra";\n', encoding="utf-8"
+        )
+        errs = scan(tmppath)
+        if not any("IOS.strings en/zh 键集不一致" in e for e in errs):
+            print("Self-test failed: did not catch IOS.strings en/zh mismatch", file=sys.stderr)
+            return 1
+
+        # 还原
+        (tmppath / "apps/ios/PPass/Resources/en.lproj/IOS.strings").write_text(
             '"test_ios_only" = "iOS";\n', encoding="utf-8"
         )
 

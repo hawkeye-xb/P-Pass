@@ -32,8 +32,8 @@
 
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck source=worker-lib.sh
-. "${HERE}/worker-lib.sh"
+# shellcheck source=repo-lib.sh
+. "${HERE}/repo-lib.sh"
 
 usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 

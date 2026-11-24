@@ -30,25 +30,26 @@ ios_lane_real_udid() {
 
 ios_lane_select() {
   local udid rc
-  # CI 与显式模拟器选择优先，不能继承上一次本机分轨。
+  # 物理隔离铁律：普通单测（just ios-test）默认 100% 跑模拟器，绝不因 USB 连着真机自动抢物理 iPhone。
+  # 只有显式传 PPASS_IOS_LANE=device（且非 CI、未设 PPASS_IOS_FORCE_SIMULATOR=1）时才走真机。
   if [ "${CI:-}" = true ] || [ "${PPASS_IOS_FORCE_SIMULATOR:-0}" = 1 ]; then
     PPASS_IOS_LANE=simulator
     PPASS_IOS_HARDWARE_UDID=""
-  elif [ -n "${PPASS_IOS_LANE:-}" ]; then
-    :
-  else
+  elif [ "${PPASS_IOS_LANE:-}" = device ]; then
     if udid="$(ios_lane_real_udid)" && [ -n "$udid" ]; then
-      PPASS_IOS_LANE=device
       PPASS_IOS_HARDWARE_UDID="$udid"
     else
       rc=$?
       if [ "$rc" -eq 2 ]; then
-        echo "error: 检测到多台已配对 iOS 设备；用 PPASS_IOS_TEST_DEVICE 显式指定，不能回退模拟器。" >&2
+        echo "error: 检测到多台已配对 iOS 设备；用 PPASS_IOS_TEST_DEVICE 显式指定，不能装错目标。" >&2
         return 2
       fi
-      PPASS_IOS_LANE=simulator
-      PPASS_IOS_HARDWARE_UDID=""
+      echo "error: PPASS_IOS_LANE=device 但未检测到可用 iOS 真机。" >&2
+      return 1
     fi
+  else
+    PPASS_IOS_LANE=simulator
+    PPASS_IOS_HARDWARE_UDID=""
   fi
   export PPASS_IOS_LANE PPASS_IOS_HARDWARE_UDID
 }
