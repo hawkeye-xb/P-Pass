@@ -48,10 +48,20 @@ def load_json_keys(path: Path) -> set[str]:
     return set(json.loads(path.read_text(encoding="utf-8")).keys())
 
 
+COMMENT_RE = re.compile(r"//.*?$|/\*.*?\*/", re.MULTILINE | re.DOTALL)
+DOTTED_WORD = re.compile(r"[a-zA-Z0-9_.-]+")
+
+
+def strip_comments(text: str) -> str:
+    return COMMENT_RE.sub("", text)
+
+
 def extract_tokens(files: list[Path]) -> set[str]:
     tokens = set()
     for f in files:
         txt = f.read_text(encoding="utf-8", errors="ignore")
+        if f.suffix in (".kt", ".java", ".swift", ".m", ".h", ".rs", ".js", ".svelte", ".ts"):
+            txt = strip_comments(txt)
         tokens.update(WORD.findall(txt))
     return tokens
 
@@ -86,16 +96,20 @@ def scan(root: Path) -> list[str]:
     ]
     ios_files = [
         p for p in (root / "apps/ios").rglob("*")
-        if p.is_file() and "Test" not in p.parts and p.suffix in (".swift", ".m", ".h", ".plist")
-        and not p.name.endswith(".strings") and not p.name.endswith(".stringsdict")
+        if p.is_file()
+        and not any(part in ("Tests", "PPassTests", "PPassCoreTests") for part in p.parts)
+        and not p.name.endswith("Tests.swift")
+        and p.suffix in (".swift", ".m", ".h", ".plist")
+        and not p.name.endswith(".strings")
+        and not p.name.endswith(".stringsdict")
     ]
 
     android_tokens = extract_tokens(android_files)
     ios_tokens = extract_tokens(ios_files)
     mobile_tokens = android_tokens | ios_tokens
 
-    android_text = "\n".join(p.read_text(encoding="utf-8", errors="ignore") for p in android_files)
-    ios_text = "\n".join(p.read_text(encoding="utf-8", errors="ignore") for p in ios_files)
+    android_text = "\n".join(strip_comments(p.read_text(encoding="utf-8", errors="ignore")) if p.suffix in (".kt", ".java") else p.read_text(encoding="utf-8", errors="ignore") for p in android_files)
+    ios_text = "\n".join(strip_comments(p.read_text(encoding="utf-8", errors="ignore")) if p.suffix in (".swift", ".m", ".h") else p.read_text(encoding="utf-8", errors="ignore") for p in ios_files)
     mobile_corpus = android_text + "\n" + ios_text
 
     # 3. 收集桌面端源码与 Rust crates 语料（快速匹配）
@@ -103,7 +117,7 @@ def scan(root: Path) -> list[str]:
         p for p in (root / "apps/desktop/src").rglob("*")
         if p.is_file() and not p.name.endswith(".test.js") and "i18n" not in p.parts
     ]
-    desk_text = "\n".join(p.read_text(encoding="utf-8", errors="ignore") for p in desk_files)
+    desk_text = "\n".join(strip_comments(p.read_text(encoding="utf-8", errors="ignore")) for p in desk_files)
     desk_html = ""
     index_html = root / "apps/desktop/index.html"
     if index_html.is_file():
@@ -111,10 +125,14 @@ def scan(root: Path) -> list[str]:
 
     rust_files = [
         p for p in list((root / "crates").rglob("*.rs")) + list((root / "apps/desktop/src-tauri").rglob("*.rs"))
-        if p.is_file() and "test" not in p.name
+        if p.is_file()
+        and not any(part == "tests" for part in p.parts)
+        and not p.name.endswith("_test.rs")
+        and not p.name.endswith("test.rs")
     ]
-    rust_text = "\n".join(p.read_text(encoding="utf-8", errors="ignore") for p in rust_files)
+    rust_text = "\n".join(strip_comments(p.read_text(encoding="utf-8", errors="ignore")) for p in rust_files)
     desk_corpus = desk_text + "\n" + desk_html + "\n" + rust_text
+    dotted_tokens = set(DOTTED_WORD.findall(desk_corpus)) | set(DOTTED_WORD.findall(mobile_corpus))
 
     # 4. 判定死词条
     # (a) strings.xml：在 Android src/main 或 iOS 产品源码中出现即存活
@@ -132,13 +150,13 @@ def scan(root: Path) -> list[str]:
     if dead_ios:
         errors.append(f"apps/ios/.../IOS.strings 存在零引用死词条（{len(dead_ios)} 个）：{dead_ios[:10]}")
 
-    # (d) apps/desktop/src/i18n/*.json：必须在桌面前端产品源码或 Rust 中出现
-    dead_desk = [k for k in sorted(desk_en_keys) if k not in desk_corpus]
+    # (d) apps/desktop/src/i18n/*.json：必须在桌面前端产品源码或 Rust 中出现（按完整键匹配）
+    dead_desk = [k for k in sorted(desk_en_keys) if k not in dotted_tokens]
     if dead_desk:
         errors.append(f"apps/desktop/src/i18n/*.json 存在零引用死词条（{len(dead_desk)} 个）：{dead_desk[:10]}")
 
     # (e) assets/i18n/*.json：跨端词条，必须在全仓产品代码中出现
-    dead_shared = [k for k in sorted(shared_keys) if k not in desk_corpus and k not in mobile_corpus]
+    dead_shared = [k for k in sorted(shared_keys) if k not in dotted_tokens]
     if dead_shared:
         errors.append(f"assets/i18n/*.json 存在零引用死词条（{len(dead_shared)} 个）：{dead_shared[:10]}")
 
@@ -242,6 +260,35 @@ def run_self_test() -> int:
         errs = scan(tmppath)
         if not any("en/zh 键集不一致" in e for e in errs):
             print("Self-test failed: did not catch desk en/zh mismatch", file=sys.stderr)
+            return 1
+
+        # 还原
+        (tmppath / "apps/desktop/src/i18n/zh.json").write_text('{"ui.test_desk": "桌面"}', encoding="utf-8")
+
+        # 7. 反例：注释中的引用不能保活词条 -> 必须红
+        (tmppath / "apps/android/app/src/main/res/values/strings.xml").write_text(
+            '<resources><string name="test_shared">Hello</string><string name="comment_only_key">Dead</string></resources>', encoding="utf-8"
+        )
+        (tmppath / "apps/android/app/src/main/CommentTest.kt").write_text(
+            '// R.string.comment_only_key\n/* R.string.comment_only_key */\n', encoding="utf-8"
+        )
+        errs = scan(tmppath)
+        if not any("comment_only_key" in e for e in errs):
+            print("Self-test failed: comment reference wrongly kept key alive", file=sys.stderr)
+            return 1
+
+        # 还原
+        (tmppath / "apps/android/app/src/main/res/values/strings.xml").write_text(
+            '<resources><string name="test_shared">Hello</string></resources>', encoding="utf-8"
+        )
+        (tmppath / "apps/android/app/src/main/CommentTest.kt").unlink()
+
+        # 8. 反例：前缀子串不能保活词条（如 ui.test 不能因 ui.test_desk 存活） -> 必须红
+        (tmppath / "apps/desktop/src/i18n/en.json").write_text('{"ui.test_desk": "Desk", "ui.test": "Dead"}', encoding="utf-8")
+        (tmppath / "apps/desktop/src/i18n/zh.json").write_text('{"ui.test_desk": "桌面", "ui.test": "死"}', encoding="utf-8")
+        errs = scan(tmppath)
+        if not any("ui.test" in e for e in errs):
+            print("Self-test failed: prefix substring wrongly kept key alive", file=sys.stderr)
             return 1
 
     print("ok: check-dead-i18n self-test passed (all counter-proof cases red, clean pass)")

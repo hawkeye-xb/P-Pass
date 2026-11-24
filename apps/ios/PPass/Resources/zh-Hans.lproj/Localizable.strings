@@ -177,7 +177,6 @@
 "auto_backup_rule_label" = "自动备份";
 "auto_backup_off_hero" = "还没开自动备份。也可以先挑几张传。";
 "auto_backup_rule_denied_hint" = "没有照片权限，自动备份没开。可以在系统设置里允许，或先挑几张传。";
-"photos_first_run_enable" = "开启自动备份";
 "photos_guide_scope" = "自动备份未开启";
 "photos_guide_background" = "App 关闭也能备份";
 "photos_guide_enable" = "开启";

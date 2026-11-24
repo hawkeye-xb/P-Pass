@@ -67,7 +67,7 @@ def build_dependency_graph(src_dir: Path) -> tuple[dict[Path, set[Path]], list[P
     for f in files:
         content = f.read_text(encoding="utf-8", errors="ignore")
         raw_imports = re.findall(
-            r"""(?:from\s+["']([^"']+)["']|import\s+["']([^"']+)["']|import\(["']([^"']+)["']\))""",
+            r"""(?:from\s+["']([^"']+)["']|import\s+["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\))""",
             content,
         )
         resolved = set()
@@ -80,6 +80,22 @@ def build_dependency_graph(src_dir: Path) -> tuple[dict[Path, set[Path]], list[P
     return imports, [f.resolve() for f in files]
 
 
+def find_html_entries(root: Path, src_dir: Path) -> set[Path]:
+    entries = set()
+    index_html = root / "apps/desktop/index.html"
+    if index_html.is_file():
+        content = index_html.read_text(encoding="utf-8", errors="ignore")
+        for src in re.findall(r"""<script\s+[^>]*type=["']module["'][^>]*src=["']([^"']+)["']""", content):
+            # 如 src="/src/main.js" -> src_dir / "main.js"
+            cleaned = src.lstrip("/")
+            if cleaned.startswith("src/"):
+                cleaned = cleaned[4:]
+            cand = (src_dir / cleaned).resolve()
+            if cand.is_file():
+                entries.add(cand)
+    return entries
+
+
 def scan(root: Path) -> list[str]:
     root = root.resolve()
     src_dir = (root / "apps/desktop/src").resolve()
@@ -89,11 +105,14 @@ def scan(root: Path) -> list[str]:
     imports, all_files = build_dependency_graph(src_dir)
 
     entry = (src_dir / "main.js").resolve()
-    if not entry.is_file():
-        return [f"入口文件不存在：{entry}"]
+    html_entries = find_html_entries(root, src_dir)
+    initial_entries = set([entry]) | html_entries
 
-    visited: set[Path] = set([entry])
-    queue = [entry]
+    if not any(e.is_file() for e in initial_entries):
+        return [f"未找到有效的前端入口文件（main.js 或 index.html module script）"]
+
+    visited: set[Path] = set(e for e in initial_entries if e.is_file())
+    queue = list(visited)
 
     while queue:
         curr = queue.pop(0)
@@ -168,6 +187,36 @@ def run_self_test() -> int:
         if clean_errs:
             print(f"Self-test failed after cleanup: {clean_errs}", file=sys.stderr)
             return 1
+
+        # 4. 验证带空白的动态 import(  "./lib/Dynamic.svelte"  )
+        (src_dir / "lib/Dynamic.svelte").write_text('<p>Dynamic</p>\n', encoding="utf-8")
+        (src_dir / "App.svelte").write_text(
+            '<script>\nimport Photo from "./lib/Photo.svelte";\nconst load = () => import(  "./lib/Dynamic.svelte"  );\n</script>\n',
+            encoding="utf-8"
+        )
+        dynamic_errs = scan(tmppath)
+        if dynamic_errs:
+            print(f"Self-test failed on dynamic import with whitespace: {dynamic_errs}", file=sys.stderr)
+            return 1
+
+        # 5. 验证 index.html 模块入口作为可达性根
+        (tmppath / "apps/desktop/index.html").write_text(
+            '<!doctype html><html><body><script type="module" src="/src/secondary.js"></script></body></html>',
+            encoding="utf-8"
+        )
+        (src_dir / "secondary.js").write_text('import HtmlComp from "./lib/HtmlComp.svelte";\n', encoding="utf-8")
+        (src_dir / "lib/HtmlComp.svelte").write_text('<p>HtmlComp</p>\n', encoding="utf-8")
+        html_entry_errs = scan(tmppath)
+        if html_entry_errs:
+            print(f"Self-test failed on index.html entry module: {html_entry_errs}", file=sys.stderr)
+            return 1
+
+        # 清理动态与 index.html 额外文件
+        (src_dir / "lib/Dynamic.svelte").unlink()
+        (src_dir / "secondary.js").unlink()
+        (src_dir / "lib/HtmlComp.svelte").unlink()
+        (src_dir / "App.svelte").write_text('<script>\nimport Photo from "./lib/Photo.svelte";\n</script>\n', encoding="utf-8")
+        (tmppath / "apps/desktop/index.html").unlink()
 
     print("ok: check-desktop-dead-components self-test passed (counter-proof verified)")
     return 0

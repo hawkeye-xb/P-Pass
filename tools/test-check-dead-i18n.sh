@@ -21,6 +21,13 @@ out=$(python3 "$ROOT/tools/check-dead-i18n.py" --self-test 2>&1) || {
 }
 pass "check-dead-i18n.py --self-test 通过"
 
+# 2. 扫描真实仓库（全仓死词条清零）
+out=$(python3 "$ROOT/tools/check-dead-i18n.py" 2>&1) || {
+    fail "check-dead-i18n.py 扫描失败：$out"
+    exit 1
+}
+pass "当前仓库扫描全绿通过"
+
 if [ "$fails" -eq 0 ]; then
     echo "ok: 四端死词条扫描门禁自测通过"
     exit 0

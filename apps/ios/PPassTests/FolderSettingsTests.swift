@@ -76,7 +76,7 @@ final class FolderSettingsTests: XCTestCase {
 
     // 文案：两语言齐全（缺失时 L.s 会 assertionFailure，这里显式把新键都核一遍）。
     func testFolderStringsPresentInBothLanguages() throws {
-        let keys = ["folder_sources_add", "folder_sources_status_ok", "folder_sources_status_wait",
+        let keys = ["folder_sources_add", "folder_sources_status_wait",
                     "folder_sources_reauth", "folder_sources_remove", "folder_sources_remove_confirm_title",
                     "folder_sources_remove_confirm_body", "folder_sources_add_failed",
                     "folder_sources_reauth_failed", "folder_sources_remove_failed"]
