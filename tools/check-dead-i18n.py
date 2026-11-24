@@ -56,13 +56,49 @@ def strip_comments(text: str) -> str:
     return COMMENT_RE.sub("", text)
 
 
-def extract_tokens(files: list[Path]) -> set[str]:
+KT_REF_RE = re.compile(r"""\bR\.(?:string|plurals)\.([a-zA-Z0-9_]+)\b|["']([a-zA-Z0-9_]+)["']""")
+XML_REF_RE = re.compile(r"""@(?:string|plurals)/([a-zA-Z0-9_]+)""")
+SWIFT_REF_RE = re.compile(r"""["']([a-zA-Z0-9_]+)["']""")
+
+
+def strip_cfg_test(src: str) -> str:
+    """剔除 Rust 源码中的 #[cfg(test)] 及其所修饰的代码块，防止单测断言被当成生产引用。"""
+    i = 0
+    n = len(src)
+    out: list[str] = []
+    while i < n:
+        if src.startswith("#[cfg(test)]", i):
+            brace_start = src.find("{", i)
+            if brace_start != -1:
+                depth = 1
+                curr = brace_start + 1
+                while curr < n and depth > 0:
+                    if src[curr] == "{":
+                        depth += 1
+                    elif src[curr] == "}":
+                        depth -= 1
+                    curr += 1
+                i = curr
+                continue
+        out.append(src[i])
+        i += 1
+    return "".join(out)
+
+
+def extract_mobile_tokens(files: list[Path]) -> set[str]:
+    """精确提取 Android / iOS 产品源码中的文案资源引用，排除文件名碰撞与无关字符串子串。"""
     tokens = set()
     for f in files:
-        txt = f.read_text(encoding="utf-8", errors="ignore")
-        if f.suffix in (".kt", ".java", ".swift", ".m", ".h", ".rs", ".js", ".svelte", ".ts"):
-            txt = strip_comments(txt)
-        tokens.update(WORD.findall(txt))
+        txt = strip_comments(f.read_text(encoding="utf-8", errors="ignore"))
+        if f.suffix in (".kt", ".java"):
+            for m in KT_REF_RE.finditer(txt):
+                tokens.add(m.group(1) or m.group(2))
+        elif f.suffix == ".xml":
+            for m in XML_REF_RE.finditer(txt):
+                tokens.add(m.group(1))
+        elif f.suffix in (".swift", ".m", ".h", ".plist"):
+            for m in SWIFT_REF_RE.finditer(txt):
+                tokens.add(m.group(1))
     return tokens
 
 
@@ -113,24 +149,28 @@ def scan(root: Path) -> list[str]:
         and not p.name.endswith(".stringsdict")
     ]
 
-    android_tokens = extract_tokens(android_files)
-    ios_tokens = extract_tokens(ios_files)
+    android_tokens = extract_mobile_tokens(android_files)
+    ios_tokens = extract_mobile_tokens(ios_files)
     mobile_tokens = android_tokens | ios_tokens
 
-    android_text = "\n".join(strip_comments(p.read_text(encoding="utf-8", errors="ignore")) if p.suffix in (".kt", ".java") else p.read_text(encoding="utf-8", errors="ignore") for p in android_files)
-    ios_text = "\n".join(strip_comments(p.read_text(encoding="utf-8", errors="ignore")) if p.suffix in (".swift", ".m", ".h") else p.read_text(encoding="utf-8", errors="ignore") for p in ios_files)
+    android_text = "\n".join(strip_comments(p.read_text(encoding="utf-8", errors="ignore")) for p in android_files)
+    ios_text = "\n".join(strip_comments(p.read_text(encoding="utf-8", errors="ignore")) for p in ios_files)
     mobile_corpus = android_text + "\n" + ios_text
 
-    # 3. 收集桌面端源码与 Rust crates 语料（快速匹配）
+    # 3. 收集桌面端源码与 Rust crates 语料（快速匹配，排除测试辅助文件与内联测试块）
     desk_files = [
         p for p in (root / "apps/desktop/src").rglob("*")
-        if p.is_file() and not p.name.endswith(".test.js") and "i18n" not in p.parts
+        if p.is_file()
+        and not p.name.endswith(".test.js")
+        and not p.name.endswith(".helpers.js")
+        and not p.name.endswith(".fixture.svelte")
+        and "i18n" not in p.parts
     ]
     desk_text = "\n".join(strip_comments(p.read_text(encoding="utf-8", errors="ignore")) for p in desk_files)
     desk_html = ""
     index_html = root / "apps/desktop/index.html"
     if index_html.is_file():
-        desk_html = index_html.read_text(encoding="utf-8", errors="ignore")
+        desk_html = strip_comments(index_html.read_text(encoding="utf-8", errors="ignore"))
 
     keys_rs = (root / "crates/diag/src/keys.rs").resolve()
     const_to_key: dict[str, str] = {}
@@ -143,10 +183,9 @@ def scan(root: Path) -> list[str]:
         if p.is_file()
         and not any(part == "tests" for part in p.parts)
         and not p.name.endswith("_test.rs")
-        and not p.name.endswith("test.rs")
         and p.resolve() != keys_rs
     ]
-    rust_text = "\n".join(strip_comments(p.read_text(encoding="utf-8", errors="ignore")) for p in rust_files)
+    rust_text = "\n".join(strip_comments(strip_cfg_test(p.read_text(encoding="utf-8", errors="ignore"))) for p in rust_files)
     desk_corpus = desk_text + "\n" + desk_html + "\n" + rust_text
     desktop_dotted_tokens = set(DOTTED_WORD.findall(desk_corpus))
 
@@ -313,12 +352,15 @@ def run_self_test() -> int:
         # 还原
         (tmppath / "apps/desktop/src/i18n/zh.json").write_text('{"ui.test_desk": "桌面"}', encoding="utf-8")
 
-        # 7. 反例：注释中的引用不能保活词条 -> 必须红
+        # 7. 反例：注释中的引用不能保活词条（包含 HTML 注释 <!-- -->） -> 必须红
         (tmppath / "apps/android/app/src/main/res/values/strings.xml").write_text(
             '<resources><string name="test_shared">Hello</string><string name="comment_only_key">Dead</string></resources>', encoding="utf-8"
         )
         (tmppath / "apps/android/app/src/main/CommentTest.kt").write_text(
             '// R.string.comment_only_key\n/* R.string.comment_only_key */\n', encoding="utf-8"
+        )
+        (tmppath / "apps/desktop/src/CommentTest.svelte").write_text(
+            '<!-- t("comment_only_key") -->\n', encoding="utf-8"
         )
         errs = scan(tmppath)
         if not any("comment_only_key" in e for e in errs):
@@ -330,6 +372,25 @@ def run_self_test() -> int:
             '<resources><string name="test_shared">Hello</string></resources>', encoding="utf-8"
         )
         (tmppath / "apps/android/app/src/main/CommentTest.kt").unlink()
+        (tmppath / "apps/desktop/src/CommentTest.svelte").unlink()
+
+        # 7b. 反例：词条名恰为其他文件名或无关标识符字面量的一部分（如 background_backup_offer.json），不能虚构存活 -> 必须红
+        (tmppath / "apps/android/app/src/main/res/values/strings_android_only.xml").write_text(
+            '<resources><string name="test_android_only">Android</string><string name="background_backup_offer">Offer</string></resources>', encoding="utf-8"
+        )
+        (tmppath / "apps/android/app/src/main/CollisionTest.kt").write_text(
+            'val filename = "background_backup_offer.json"\n', encoding="utf-8"
+        )
+        errs = scan(tmppath)
+        if not any("strings_android_only.xml" in e and "background_backup_offer" in e for e in errs):
+            print("Self-test failed: filename collision wrongly kept key alive", file=sys.stderr)
+            return 1
+
+        # 还原
+        (tmppath / "apps/android/app/src/main/res/values/strings_android_only.xml").write_text(
+            '<resources><string name="test_android_only">Android</string></resources>', encoding="utf-8"
+        )
+        (tmppath / "apps/android/app/src/main/CollisionTest.kt").unlink()
 
         # 8. 反例：前缀子串不能保活词条（如 ui.test 不能因 ui.test_desk 存活） -> 必须红
         (tmppath / "apps/desktop/src/i18n/en.json").write_text('{"ui.test_desk": "Desk", "ui.test": "Dead"}', encoding="utf-8")
