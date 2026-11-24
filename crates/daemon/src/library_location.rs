@@ -404,25 +404,28 @@ pub fn check_library_path(
     platform_dir: &Path,
     peer: Option<&platform::PeerUser>,
 ) -> Result<(), String> {
-    // 生产入口：重解析点 / 网络卷探测器用平台的真实判据。
+    // 生产入口：映射网络盘（零 I/O） / 重解析点（不跟随） / 网络卷探测器用平台的真实判据。
     check_library_path_with(
         target,
         platform_dir,
         peer,
+        &|p| platform::is_mapped_network_drive(p),
         &|p| platform::contains_remote_reparse_point(p),
         &|p| platform::is_network_volume_or_ancestor(p),
     )
 }
 
-/// [`check_library_path`] 的可测版本：两个探测器可注入，单测能在不依赖真实远端卷 /
-/// 重解析点的前提下反证「任一前置检查去掉都变红」。生产入口传平台的真实判据。
+/// [`check_library_path`] 的可测版本：三个探测器可注入，单测能在不依赖真实远端卷 /
+/// 重解析点的前提下反证「任一前置检查去掉或顺序颠倒都变红」。生产入口传平台的真实判据。
 ///
 /// 顺序（都在任何 `canonicalize()` 之前）：连接方事实 → 字面 UNC/设备命名空间 →
-/// 网络卷/映射盘（Windows 盘符根零外连短路） → 远端重解析点 → 解析真实路径 → 再核一次解析后的卷 → 敏感目录。
+/// 映射网络盘符根（`GetDriveTypeW` 零文件系统 I/O） → 远端重解析点（逐段不跟随扫描） →
+/// 完整网络卷（`is_network_volume_or_ancestor`） → 解析真实路径 → 再核一次解析后的卷 → 敏感目录。
 fn check_library_path_with(
     target: &Path,
     platform_dir: &Path,
     peer: Option<&platform::PeerUser>,
+    mapped_drive: &dyn Fn(&Path) -> bool,
     remote_reparse: &dyn Fn(&Path) -> bool,
     network_volume: &dyn Fn(&Path) -> bool,
 ) -> Result<(), String> {
@@ -445,18 +448,19 @@ fn check_library_path_with(
             &[("dir", &target.display())],
         ));
     }
-    // #1927 / #1993：首次建库与搬迁对齐——直接选网络卷 / 映射网络盘（`Z:\new_lib`，子目录尚不
-    // 存在也能由 `GetDriveTypeW` 零外连识破）必须排在 `remote_reparse` 之前拒绝，避免先对映射盘
-    // 发起 `symlink_metadata("Z:\\")` SMB 外连，也保证稳定返回 `ui.err_relocate_network_volume`。
-    if network_volume(target) {
+    // #1993：盘符根已是映射网络盘（`Z:\new_lib`，由 `GetDriveTypeW` 零文件系统 I/O 识破）：
+    // 排在 `remote_reparse` 之前直接返回 `ui.err_relocate_network_volume`，既避免对 `Z:\`
+    // 发起 `symlink_metadata` SMB 外连，也避免 `remote_reparse` 将映射盘报成 `err_library_target_missing`。
+    if mapped_drive(target) {
         tracing::warn!(
-            "#1927: 拒绝网络卷 / 映射网络盘作为照片库位置：{}",
+            "#1993: 拒绝映射网络盘作为照片库位置（零外连）：{}",
             target.display()
         );
         return Err(config::ui_err("ui.err_relocate_network_volume", &[]));
     }
-    // #1927：在 `canonicalize()` 之前拒绝指向远端 / 设备命名空间的本地重解析点（junction / symlink），
-    // 防止服务端以 `NT SERVICE\P-Pass` 身份跟随重解析点向网络位置发起 SMB/NTLM 连接。
+    // #1927：在任何会对完整路径 `symlink_metadata` / `canonicalize` 的检查（包括 `network_volume`）
+    // 之前，逐段不跟随地拒绝指向远端 / 设备命名空间的本地重解析点（如 `C:\entry\photos`，其中
+    // `C:\entry` → `\\attacker\share`），防止服务端穿过中间 junction 发起 SMB/NTLM 外连。
     if remote_reparse(target) {
         tracing::warn!(
             "#1927: 拒绝指向远端或设备命名空间的重解析点作为照片库位置：{}",
@@ -466,6 +470,11 @@ fn check_library_path_with(
             "ui.err_library_target_missing",
             &[("dir", &target.display())],
         ));
+    }
+    // #1927：确认不含远端重解析点后，再做完整的网络卷 / 祖先卷检查（覆盖非盘符网络挂载点等）。
+    if network_volume(target) {
+        tracing::warn!("#1927: 拒绝网络卷作为照片库位置：{}", target.display());
+        return Err(config::ui_err("ui.err_relocate_network_volume", &[]));
     }
     let Some(real) = resolve_components(target) else {
         tracing::info!("#1826: 选择的位置解析不出真实路径：{}", target.display());
@@ -1450,21 +1459,75 @@ mod tests {
         }
     }
 
-    /// #1927：目标带指向远端 / 设备命名空间的重解析点时，必须在 `resolve_components`
-    /// 之前以 `ui.err_library_target_missing` 拒绝（注入探测器恒真，等价于平台判据命中）。
-    /// 反证：去掉 `check_library_path_with` 里的 `remote_reparse(target)` 早退 ⇒ 探测器
-    /// 恒真也放行，本用例红。
+    /// #1927 / #1993：目标带指向远端 / 设备命名空间的重解析点时，必须在 `network_volume`
+    /// 与 `resolve_components` 之前以 `ui.err_library_target_missing` 拒绝，且 `network_volume`
+    /// 调用次数必须为 0（防 `is_network_volume_or_ancestor` 穿过中间 junction 发起 SMB 外连）。
     #[test]
     fn remote_reparse_library_target_is_refused_before_resolve() {
         let tmp = tempfile::tempdir().unwrap();
         let platform_dir = tmp.path().join("platform");
         let target = tmp.path().join("library");
-        let err = check_library_path_with(&target, &platform_dir, None, &|_| true, &|_| false)
-            .expect_err("远端重解析点必须在 resolve_components 之前被拒");
+        let net_calls = std::cell::Cell::new(0usize);
+        let network_volume = |_: &Path| {
+            net_calls.set(net_calls.get() + 1);
+            true
+        };
+        let err = check_library_path_with(
+            &target,
+            &platform_dir,
+            None,
+            &|_| false,
+            &|_| true,
+            &network_volume,
+        )
+        .expect_err("远端重解析点必须在 network_volume 和 resolve_components 之前被拒");
         assert!(err.contains("ui.err_library_target_missing"), "{err}");
+        assert_eq!(
+            net_calls.get(),
+            0,
+            "命中远端重解析点时不得调用 network_volume 探针，避免穿过中间链接触发 SMB 外连"
+        );
     }
 
-    /// #1927：目标直接落在网络卷 / 映射网络盘上时，必须在 `canonicalize()` 之前以
+    /// #1993：目标是映射网络盘符根（`mapped_drive` 零 I/O 命中）时，必须在 `remote_reparse`
+    /// 与 `network_volume` 之前直接以 `ui.err_relocate_network_volume` 拒绝，且 `remote_reparse`
+    /// 与 `network_volume` 探针调用次数均严格为 0（避免 `symlink_metadata("Z:\\")` 外连与错报错误码）。
+    #[test]
+    fn mapped_network_drive_target_short_circuits_before_reparse_and_stat() {
+        let tmp = tempfile::tempdir().unwrap();
+        let platform_dir = tmp.path().join("platform");
+        let target = Path::new(r"Z:\ppass-new-lib");
+        let reparse_calls = std::cell::Cell::new(0usize);
+        let net_calls = std::cell::Cell::new(0usize);
+        let err = check_library_path_with(
+            target,
+            &platform_dir,
+            None,
+            &|p| p == target,
+            &|_| {
+                reparse_calls.set(reparse_calls.get() + 1);
+                true
+            },
+            &|_| {
+                net_calls.set(net_calls.get() + 1);
+                false
+            },
+        )
+        .expect_err("映射网络盘必须在 remote_reparse 之前零外连拒绝");
+        assert!(err.contains("ui.err_relocate_network_volume"), "{err}");
+        assert_eq!(
+            reparse_calls.get(),
+            0,
+            "目标为映射网络盘时 remote_reparse 探针调用次数必须为 0，避免外连"
+        );
+        assert_eq!(
+            net_calls.get(),
+            0,
+            "目标为映射网络盘时完整 network_volume 探针调用次数也必须为 0"
+        );
+    }
+
+    /// #1927：目标直接落在非盘符网络卷上时，通过 `remote_reparse` 检查后必须在 `canonicalize()` 之前以
     /// `ui.err_relocate_network_volume` 拒绝，与搬迁口径一致。
     ///
     /// 只让**未解析的字面路径** `link` 命中「网络卷」探测器：真实目标是本地目录，放开
@@ -1483,25 +1546,17 @@ mod tests {
             assert!(kind.may_need_privilege, "{} 建不出来：{e}", kind.name);
             return;
         }
-        // 只有未 canonicalize 的链接路径算「在网络卷上」；解析后的真实目录不算，
-        // 于是拦截只能来自 resolve_components 之前那道前置检查。
-        // #1993：当目标已是映射网络盘时，remote_reparse 探针调用次数必须为 0（避免先发起
-        // symlink_metadata("Z:\\") SMB 外连，也避免 fail-closed 把错误码变成 err_library_target_missing）。
-        let reparse_calls = std::cell::Cell::new(0usize);
-        let remote_reparse = |_: &Path| {
-            reparse_calls.set(reparse_calls.get() + 1);
-            true
-        };
         let network_volume = |p: &Path| p == link.as_path();
-        let err =
-            check_library_path_with(&link, &platform_dir, None, &remote_reparse, &network_volume)
-                .expect_err("网络卷 / 映射盘必须在 canonicalize 之前被拒");
+        let err = check_library_path_with(
+            &link,
+            &platform_dir,
+            None,
+            &|_| false,
+            &|_| false,
+            &network_volume,
+        )
+        .expect_err("网络卷必须在 canonicalize 之前被拒");
         assert!(err.contains("ui.err_relocate_network_volume"), "{err}");
-        assert_eq!(
-            reparse_calls.get(),
-            0,
-            "目标为映射网络盘时 remote_reparse 探针调用次数必须为 0，避免外连"
-        );
     }
 
     /// #1927：本地符号链接跳往已挂载网络卷时，字面路径看不出来——解析出真实路径后
@@ -1523,8 +1578,15 @@ mod tests {
         // 只有解析后的真实路径算「在网络卷上」；字面链接路径不算，用来证明拦截发生在
         // resolve_components 之后的那道检查，而不是前置的 network_volume(target)。
         let network_volume = |p: &Path| p == real_canon.as_path();
-        let err = check_library_path_with(&link, &platform_dir, None, &|_| false, &network_volume)
-            .expect_err("本地链接跳往网络卷必须在解析真实路径后拒绝");
+        let err = check_library_path_with(
+            &link,
+            &platform_dir,
+            None,
+            &|_| false,
+            &|_| false,
+            &network_volume,
+        )
+        .expect_err("本地链接跳往网络卷必须在解析真实路径后拒绝");
         assert!(err.contains("ui.err_relocate_network_volume"), "{err}");
     }
 
