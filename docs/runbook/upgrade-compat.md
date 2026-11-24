@@ -32,9 +32,9 @@
 | 桌面数据目录搬迁 | `crates/platform/src/data_migration.rs`（DESK-24 [#173](https://github.com/hawkeye-xb/P-Pass/issues/173)） | 失败时退化为「保持原样」，不切到空目录 | E3（#432 Windows） |
 | Android 账本 | `apps/android/.../backup/order/SqliteOrderStore.kt`，`SCHEMA_VERSION = 3` | `onUpgrade` 与 `onDowngrade` 都是**删表重建**，不做数据迁移（注释依据：#413 契约 §0「测试设备上都是测试数据」） | 读码；升级路径从未实跑（#432 A 格 `user_version` 3 → 3） |
 | Android 一次性迁移 | `AndroidFlowRuntime.kt` `migrateLegacyFlowState`，marker `files/flow-migrated-arch13` | #413 起删除旧账本 `flow-state/` 与旧保护状态文件，只做一次 | 读码 |
-| Android 私有状态清单 | `backup/DisconnectStateManifest.kt`（MOB-95 [#282](https://github.com/hawkeye-xb/P-Pass/issues/282) / [#528](https://github.com/hawkeye-xb/P-Pass/pull/528)） | 列全手机每一样持久状态及断开时的处置；升级数据承诺按它逐项对账 | E2 |
+| Android 私有状态清单 | `apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/DisconnectStateManifest.kt`（MOB-95 [#282](https://github.com/hawkeye-xb/P-Pass/issues/282) / [#528](https://github.com/hawkeye-xb/P-Pass/pull/528)） | 列全手机每一样持久状态及断开时的处置；升级数据承诺按它逐项对账 | E2 |
 | 版本号规则 | `tools/bump-version.sh`、`docs/RELEASING.md` §1/§5 | 新版本必须高于当前；tag 不复用；Android versionCode 单调 +1 | E2 |
-| 更新判定 | Android `update/UpdateChecker.kt` `isNewer`；桌面端由 tauri updater 插件判定（daemon 里没有接线的 `update.rs` 已在 #1041 删除） | 候选版本**严格更新**才提示；正式版 > 同核心预发布 | E2 |
+| 更新判定 | Android `apps/android/app/src/main/java/com/hawkeyexb/ppass/update/UpdateChecker.kt` `isNewer`；桌面端由 tauri updater 插件判定（daemon 里没有接线的 `update.rs` 已在 #1041 删除） | 候选版本**严格更新**才提示；正式版 > 同核心预发布 | E2 |
 
 盘点出的缺口（只登记，另开卡处理）：
 

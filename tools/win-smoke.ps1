@@ -41,7 +41,7 @@ $script:Bin = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DAEMON = Join-Path $Bin "daemon.exe"
 $TC = Join-Path $Bin "testclient.exe"
 
-if (-not (Test-Path $DAEMON)) { Write-Error "daemon.exe 不在 $Bin —— 先 gh release download dogfood --pattern '*.exe' --pattern 'win-smoke.ps1'（见 docs/windows-smoke.md §1）"; exit 1 }
+if (-not (Test-Path $DAEMON)) { Write-Error "daemon.exe 不在 $Bin —— 先 gh release download dogfood --pattern '*.exe' --pattern 'win-smoke.ps1'"; exit 1 }
 if (-not (Test-Path $TC)) { Write-Error "testclient.exe 不在 $Bin"; exit 1 }
 
 New-Item -ItemType Directory -Force -Path $Work | Out-Null

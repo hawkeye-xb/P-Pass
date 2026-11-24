@@ -67,6 +67,9 @@ jobs:
       - name: Assert icons match design source
         run: npm run icons:check
 
+      - name: Assert site markdown doc anchors are valid (#1991)
+        run: python3 ../tools/check-doc-anchors.py --tier 3 --root ..
+
       - name: Build (regenerates tokens + icons, then astro build)
         run: npm run build
 

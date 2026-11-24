@@ -44,8 +44,8 @@ fi
 
 # check <仓库根>：有问题逐条打印到 stdout，退出码 1；全过退出 0、不打印。
 check() {
-  python3 - "$1" <<'PY'
-import os, re, sys, yaml
+  python3 - "$1" "$ROOT/tools/ci-paths.sh" <<'PY'
+import os, re, subprocess, sys, yaml
 
 root = sys.argv[1]
 wf = os.path.join(root, ".github", "workflows")
@@ -107,6 +107,17 @@ for lane in LANES:
         cond = job.get("if")
         if not isinstance(cond, str) or not WIN_IF_RE.match(cond.strip()) or "||" in cond:
             bad.append(f"{lane}: Windows job「{name}」的 if 没有以 github.event_name != 'pull_request' 为顶层合取项（PR 上会跑），实为 {cond!r}")
+
+    if lane == "ci-docs.yml":
+        steps = jobs.get("changes", {}).get("steps", [])
+        paths = next((step.get("with", {}).get("paths", "") for step in steps if step.get("id") == "c"), "")
+        globs = [line.strip() for line in paths.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+        for name in ("AGENTS.md", "CLAUDE.md"):
+            if not globs or subprocess.run(
+                ["bash", sys.argv[2], "hit", "-", *globs], input=name + "\n",
+                capture_output=True, text=True, check=True,
+            ).stdout.strip() != "true":
+                bad.append(f"ci-docs.yml: only changing {name} must run the docs check")
 
     # #1555：Linux 桌面 job 必须没有；桌面检查只剩 Windows。
     if lane == "ci-desktop.yml":
@@ -261,6 +272,8 @@ mutant "desktop (windows-latest) 整个 job 删掉" .github/workflows/ci-desktop
   "/^  desktop-windows:/,/^  [a-z][a-z0-9-]*:\$/{/^  desktop-windows:/d;/^  [a-z][a-z0-9-]*:\$/!d;}"
 mutant "desktop (windows-latest) 改名字" .github/workflows/ci-desktop.yml \
   "s/^    name: desktop \\(windows-latest\)\$/    name: desktop (windows)/"
+mutant "ci-docs misses changes to CLAUDE.md" .github/workflows/ci-docs.yml \
+  '/^            CLAUDE\.md$/d'
 mutant "ci-docs 的 cancel-in-progress 改 true" .github/workflows/ci-docs.yml \
   "s/^  cancel-in-progress: .*/  cancel-in-progress: true/"
 mutant "ci-ios 的 cancel-in-progress 去掉 push 那一项" .github/workflows/ci-ios.yml \

@@ -202,6 +202,10 @@ toolchain-check:
 #
 # 用 shebang 配方是刻意的——它绕开 just 的 shell 设置，将来若为 Windows 配上
 # `set windows-shell`（QA-08）这两条不会跟着坏。
+doc-anchors-check:
+  @python3 tools/check-doc-anchors.py --tier 1
+  @python3 tools/check-doc-anchors.py --tier 2
+
 md-check:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -275,7 +279,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check supply-chain-check mobile-static-check build-stamp-check i18n-split-check lockfile-check flow-tests heavy-lock-test
+ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check doc-anchors-check token-check shell-vars-check identity-check supply-chain-check mobile-static-check build-stamp-check i18n-split-check lockfile-check flow-tests heavy-lock-test
   @echo "==> CI pipeline: all green ✅"
 
 # 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
@@ -584,7 +588,10 @@ desktop-dead-components-test:
   @bash tools/test-check-desktop-dead-components.sh
 
 # 流程与发版闸门禁的自测：本地 ci / ci-docs 与 CI（ci-docs.yml 的 flow-tests job）共用这一份清单。
-flow-tests: hooks-test flow-engine-test flow-ci-review-test flow-gate-status-test macos-runner-test main-red-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test dead-i18n-test desktop-dead-components-test
+doc-anchors-test:
+  @bash tools/test-check-doc-anchors.sh
+
+flow-tests: doc-anchors-test hooks-test flow-engine-test flow-ci-review-test flow-gate-status-test macos-runner-test main-red-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test dead-i18n-test desktop-dead-components-test
   @echo "==> flow-tests: green ✅"
 
 flow-engine-test:
@@ -620,7 +627,7 @@ e3-test:
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: md-check token-check shell-vars-check identity-check supply-chain-check build-stamp-check flow-tests heavy-lock-test
+ci-docs: md-check doc-anchors-check token-check shell-vars-check identity-check supply-chain-check build-stamp-check flow-tests heavy-lock-test
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
