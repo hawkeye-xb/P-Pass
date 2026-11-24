@@ -58,10 +58,12 @@ def resolve_import(source_file: Path, spec: str, src_dir: Path) -> Path | None:
 
 
 def extract_valid_imports(src: str, is_svelte: bool = False) -> set[str]:
-    """词法状态机：精确提取真实 import 与动态 import(...)，跳过注释与普通字符串字面量。"""
+    """词法状态机：精确提取真实 import 与动态 import(...)，跳过注释与普通字符串字面量，支持模板表达式。"""
     imports = set()
     i = 0
     n = len(src)
+    tpl_stack: list[int] = []
+
     while i < n:
         # Svelte HTML 注释
         if is_svelte and src.startswith("<!--", i):
@@ -90,8 +92,8 @@ def extract_valid_imports(src: str, is_svelte: bool = False) -> set[str]:
             i = j + 2
             continue
 
-        # 普通字符串字面量（跳过字符串内部，不产生依赖边）
-        if c in ('"', "'", "`"):
+        # 普通单双引号字符串（跳过其内部，不产生依赖边）
+        if c in ('"', "'"):
             quote = c
             i += 1
             while i < n:
@@ -104,6 +106,47 @@ def extract_valid_imports(src: str, is_svelte: bool = False) -> set[str]:
                 i += 1
             continue
 
+        # 模板字面量：扫描文本，遇到 ${ 则压栈进入表达式模式
+        if c == "`":
+            i += 1
+            while i < n:
+                if src[i] == "\\":
+                    i += 2
+                    continue
+                if src[i] == "$" and i + 1 < n and src[i + 1] == "{":
+                    tpl_stack.append(1)
+                    i += 2
+                    break
+                if src[i] == "`":
+                    i += 1
+                    break
+                i += 1
+            continue
+
+        # 模板表达式花括号深度追踪
+        if tpl_stack:
+            if c == "{":
+                tpl_stack[-1] += 1
+            elif c == "}":
+                tpl_stack[-1] -= 1
+                if tpl_stack[-1] == 0:
+                    tpl_stack.pop()
+                    # 重新恢复扫描模板字面量剩余文本
+                    i += 1
+                    while i < n:
+                        if src[i] == "\\":
+                            i += 2
+                            continue
+                        if src[i] == "$" and i + 1 < n and src[i + 1] == "{":
+                            tpl_stack.append(1)
+                            i += 2
+                            break
+                        if src[i] == "`":
+                            i += 1
+                            break
+                        i += 1
+                    continue
+
         # 匹配语句层 import
         if src.startswith("import", i) and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] in "_$")):
             rem = src[i + 6 :]
@@ -114,16 +157,16 @@ def extract_valid_imports(src: str, is_svelte: bool = False) -> set[str]:
                 i += 6 + m_dyn.end()
                 continue
             # 2. 静态 import ... from "..." 或 import "..."（支持跨行绑定列表）
-            m_stat = re.match(r"""^(?:\s+[\s\S]*?\s+from\s+|\s+)["']([^"']+)["']""", rem)
+            m_stat = re.match(r"""^(?:\s+(?:(?:\*\s+as\s+[\w$]+|\{[^}]*\}|[\w$]+(?:,\s*\{[^}]*\})?)\s+from\s+)?|\s+)["']([^"']+)["']""", rem)
             if m_stat:
                 imports.add(m_stat.group(1))
                 i += 6 + m_stat.end()
                 continue
 
-        # 匹配 export ... from "..." 重新导出（支持跨行绑定列表）
+        # 匹配 export ... from "..." 重新导出（必须为真实声明语句）
         if src.startswith("export", i) and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] in "_$")):
             rem = src[i + 6 :]
-            m_exp = re.match(r"""^(?:\s+[\s\S]*?\s+from\s+|\s+from\s+)["']([^"']+)["']""", rem)
+            m_exp = re.match(r"""^(?:\s+(?:(?:\*\s+as\s+[\w$]+|\{[^}]*\}|[\w$]+)\s+from\s+)|\s+from\s+)["']([^"']+)["']""", rem)
             if m_exp:
                 imports.add(m_exp.group(1))
                 i += 6 + m_exp.end()
@@ -156,18 +199,28 @@ def find_html_entries(root: Path, src_dir: Path) -> set[Path]:
     entries = set()
     index_html = root / "apps/desktop/index.html"
     if index_html.is_file():
-        content = index_html.read_text(encoding="utf-8", errors="ignore")
-        # 匹配 <script ...> 标签，并按标签属性字典提取 type="module" 与 src
-        for tag in re.findall(r"""<script\s+[^>]*>""", content):
-            attrs = dict(re.findall(r"""(?:\b([a-zA-Z0-9_-]+)\s*=\s*["']([^"']+)["'])""", tag))
-            if attrs.get("type") == "module" and "src" in attrs:
-                raw_src = attrs["src"].strip()
-                cleaned = raw_src.lstrip("./").lstrip("/")
-                if cleaned.startswith("src/"):
-                    cleaned = cleaned[4:]
-                cand = (src_dir / cleaned).resolve()
-                if cand.is_file():
-                    entries.add(cand)
+        from html.parser import HTMLParser
+
+        class ScriptModuleParser(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.srcs = []
+
+            def handle_starttag(self, tag, attrs):
+                if tag == "script":
+                    d = dict(attrs)
+                    if d.get("type") == "module" and "src" in d:
+                        self.srcs.append(d["src"].strip())
+
+        parser = ScriptModuleParser()
+        parser.feed(index_html.read_text(encoding="utf-8", errors="ignore"))
+        for raw_src in parser.srcs:
+            cleaned = raw_src.lstrip("./").lstrip("/")
+            if cleaned.startswith("src/"):
+                cleaned = cleaned[4:]
+            cand = (src_dir / cleaned).resolve()
+            if cand.is_file():
+                entries.add(cand)
     return entries
 
 
@@ -275,6 +328,11 @@ def run_self_test() -> int:
             print(f"Self-test failed on dynamic import with whitespace/newline: {dynamic_errs}", file=sys.stderr)
             return 1
 
+        # 清理动态组件
+        (src_dir / "lib/Dynamic.svelte").unlink()
+        (src_dir / "lib/Dynamic2.svelte").unlink()
+        (src_dir / "App.svelte").write_text('<script>\nimport Photo from "./lib/Photo.svelte";\n</script>\n', encoding="utf-8")
+
         # 5. 验证 index.html 模块入口作为可达性根（含 src 在前 type = "module" 带空格与 ./src 路径）
         (tmppath / "apps/desktop/index.html").write_text(
             '<!doctype html><html><body><script data-src="ignored.js" src = "./src/secondary.js"  type = "module" ></script></body></html>',
@@ -287,19 +345,38 @@ def run_self_test() -> int:
             print(f"Self-test failed on index.html entry module: {html_entry_errs}", file=sys.stderr)
             return 1
 
-        # 6. 反例：普通字符串里的 import(...) 不能产生依赖边 -> 孤立组件必须判红
+        # 清理 index.html 额外文件
+        (src_dir / "secondary.js").unlink()
+        (src_dir / "lib/HtmlComp.svelte").unlink()
+        (tmppath / "apps/desktop/index.html").unlink()
+
+        # 6. 反例：普通字符串里的 import(...) 与 export from 不能产生依赖边 -> 孤立组件必须判红（同时阳性验证 Photo.svelte 仍存活）
         (src_dir / "lib/FakeString.svelte").write_text('<p>Fake</p>\n', encoding="utf-8")
         (src_dir / "App.svelte").write_text(
-            '<script>\nimport Photo from "./lib/Photo.svelte";\nconst tip = \'import("./lib/FakeString.svelte")\';\nconst tip2 = "https://example.com//not-a-comment";\n</script>\n',
+            '<script>\nimport Photo from "./lib/Photo.svelte";\nconst tip = \'import("./lib/FakeString.svelte")\';\nexport const label = \' from "./lib/FakeString.svelte"\';\nconst tip2 = "https://example.com//not-a-comment";\n</script>\n',
             encoding="utf-8"
         )
         str_errs = scan(tmppath)
-        if not any("FakeString.svelte" in e for e in str_errs):
-            print("Self-test failed: import inside normal string literal wrongly kept component alive", file=sys.stderr)
+        if not any("FakeString.svelte" in e for e in str_errs) or any("Photo.svelte" in e for e in str_errs):
+            print("Self-test failed: import inside normal string literal wrongly kept component alive or killed real import", file=sys.stderr)
             return 1
 
-        # 7. 反例：注释中的 import 不能产生依赖边 -> 孤立组件必须判红
         (src_dir / "lib/FakeString.svelte").unlink()
+
+        # 7. 模板字符串中的动态 import 仍可被识别
+        (src_dir / "lib/InsideTpl.svelte").write_text('<p>InsideTpl</p>\n', encoding="utf-8")
+        (src_dir / "App.svelte").write_text(
+            '<script>\nimport Photo from "./lib/Photo.svelte";\nconst loadTpl = `${import("./lib/InsideTpl.svelte")}`;\n</script>\n',
+            encoding="utf-8"
+        )
+        tpl_errs = scan(tmppath)
+        if tpl_errs:
+            print(f"Self-test failed: import inside template expression failed to be recognized: {tpl_errs}", file=sys.stderr)
+            return 1
+
+        (src_dir / "lib/InsideTpl.svelte").unlink()
+
+        # 8. 反例：注释中的 import 不能产生依赖边 -> 孤立组件必须判红
         (src_dir / "App.svelte").write_text(
             '<script>\n// import Photo from "./lib/Photo.svelte";\n/* import Photo from "./lib/Photo.svelte"; */\n</script>\n',
             encoding="utf-8"
@@ -309,13 +386,8 @@ def run_self_test() -> int:
             print("Self-test failed: comment import wrongly kept component alive", file=sys.stderr)
             return 1
 
-        # 清理动态与 index.html 额外文件
-        (src_dir / "lib/Dynamic.svelte").unlink()
-        (src_dir / "lib/Dynamic2.svelte").unlink()
-        (src_dir / "secondary.js").unlink()
-        (src_dir / "lib/HtmlComp.svelte").unlink()
+        # 还原干净 App.svelte
         (src_dir / "App.svelte").write_text('<script>\nimport Photo from "./lib/Photo.svelte";\n</script>\n', encoding="utf-8")
-        (tmppath / "apps/desktop/index.html").unlink()
 
     print("ok: check-desktop-dead-components self-test passed (counter-proof verified)")
     return 0
