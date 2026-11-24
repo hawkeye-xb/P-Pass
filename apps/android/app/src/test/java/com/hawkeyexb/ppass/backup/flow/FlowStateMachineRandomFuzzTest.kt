@@ -73,9 +73,12 @@ class FlowStateMachineRandomFuzzTest {
     @Test
     fun `random state machine interleaving preserves core invariants`() = runTest {
         val baseSeeds = listOf(199201L, 199202L, 199203L, 199204L, 199205L)
+        val startNs = System.nanoTime()
         for (seed in baseSeeds) {
             runFuzzIteration(seed)
         }
+        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+        assertTrue("Fuzz test took too long: ${elapsedMs}ms > 5000ms", elapsedMs <= 5000L)
     }
 
     private fun kotlinx.coroutines.test.TestScope.runFuzzIteration(seed: Long) {
@@ -211,21 +214,21 @@ class FlowStateMachineRandomFuzzTest {
         rig.trigger(TriggerReason.SCOPE_ADDED)
         rig.trigger(TriggerReason.PERIODIC)
 
-        // 验证不变量 ②：范围内所有存在且未删除的有效媒体，最终 100% 收敛到 CONFIRMED，且无重复
-        val currentOrders = rig.store.readCurrentOrders { it.toList() }
-        val seenMedia = mutableSetOf<Long>()
-        val duplicates = mutableListOf<Long>()
+        // 验证不变量 ②：范围内所有存在且未删除的有效媒体，最终 100% 收敛到 CONFIRMED，且无重复传输请求
+        val deliveredMediaIds = rig.delivery.deliveredMediaIds
+        val seenDelivered = mutableSetOf<Long>()
+        val duplicateDeliveries = mutableListOf<Long>()
 
-        for (order in currentOrders) {
-            if (order.mediaId in seenMedia) {
-                duplicates += order.mediaId
+        for (mediaId in deliveredMediaIds) {
+            if (mediaId in seenDelivered) {
+                duplicateDeliveries += mediaId
             }
-            seenMedia += order.mediaId
+            seenDelivered += mediaId
         }
 
         assertTrue(
-            "Invariant 2 violated: duplicate current orders found! Seed: $seed, duplicates: $duplicates\nTrace:\n${trace.joinToString("\n")}",
-            duplicates.isEmpty()
+            "Invariant 2 violated: duplicate delivery requests found for same media! Seed: $seed, duplicates: $duplicateDeliveries\nTrace:\n${trace.joinToString("\n")}",
+            duplicateDeliveries.isEmpty()
         )
 
         val expectedPhotos = rig.media.photos.filter { rig.media.inScope(it.bucketId, it.dateAdded) }

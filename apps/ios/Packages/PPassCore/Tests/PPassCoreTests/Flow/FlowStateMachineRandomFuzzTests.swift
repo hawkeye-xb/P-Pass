@@ -67,12 +67,16 @@ final class FlowStateMachineRandomFuzzTests: XCTestCase {
     }
 
     func testRandomStateMachineInterleavingInvariants() async throws {
-        // 固定运行 5 个独立 seed，每轮执行 40 步事件交错，总时长严格控制在 3 秒以内
+        // 固定运行 5 个独立 seed，每轮执行 40 步事件交错，总时长严格控制在 5 秒以内
         let baseSeeds: [UInt64] = [199201, 199202, 199203, 199204, 199205]
+        let startTime = Date()
 
         for seed in baseSeeds {
             try await runFuzzIteration(seed: seed, steps: 40)
         }
+
+        let elapsed = Date().timeIntervalSince(startTime)
+        XCTAssertLessThanOrEqual(elapsed, 5.0, "Fuzz test took too long: \(elapsed)s > 5.0s")
     }
 
     private func runFuzzIteration(seed: UInt64, steps: Int) async throws {
@@ -149,6 +153,7 @@ final class FlowStateMachineRandomFuzzTests: XCTestCase {
             case 7: // 权限 Full (10%)
                 rig.media.scope = ["B7", "B8"]
                 rig.media.lookupThrows.set(nil)
+                rig.media.scanThrows.set(nil)
                 event = .setPermissionFull
                 trace.append("Step \(step): \(event)")
                 await rig.trigger(.scopeAdded)
@@ -156,12 +161,15 @@ final class FlowStateMachineRandomFuzzTests: XCTestCase {
             case 8: // 权限 Partial / 范围受限 (10%)
                 rig.media.scope = ["B7"]
                 rig.media.lookupThrows.set(nil)
+                rig.media.scanThrows.set(nil)
                 event = .setPermissionPartial
                 trace.append("Step \(step): \(event)")
                 await rig.trigger(.foregroundMediaChange)
 
             case 9: // 权限失效 / 目录不可用 (10%)
-                rig.media.lookupThrows.set(SourceUnavailable(reason: "fuzz permission revoked"))
+                let err = SourceUnavailable(reason: "fuzz permission revoked")
+                rig.media.lookupThrows.set(err)
+                rig.media.scanThrows.set(err)
                 event = .setPermissionRevoked
                 trace.append("Step \(step): \(event)")
                 await rig.trigger(.userContinue)
@@ -195,27 +203,29 @@ final class FlowStateMachineRandomFuzzTests: XCTestCase {
         rig.presence.unreachable.set(false)
         rig.media.scope = ["B7", "B8"]
         rig.media.lookupThrows.set(nil)
+        rig.media.scanThrows.set(nil)
         rig.fakeControl?.pausedFlag = false
 
         // 范围变更恢复：触发 scopeAdded 会让扫描置脏并跑对账，确保此前因不在范围内而跳过或未扫描的照片被完整扫回
         await rig.trigger(.scopeAdded)
         await rig.trigger(.periodic)
 
-        // 验证不变量 ②：范围内所有存在且未删除的有效媒体，最终 100% 收敛到 CONFIRMED，且无重复
-        let currentOrders = try rig.store.currentOrders().collect()
-        var seenMedia = Set<String>()
-        var duplicates: [String] = []
+        // 验证不变量 ②：范围内所有存在且未删除的有效媒体，最终 100% 收敛到 CONFIRMED，且无重复传输请求
+        let deliveredRequests = rig.delivery.requests.get()
+        var seenDeliveredMedia = Set<String>()
+        var duplicateDeliveries: [String] = []
 
-        for order in currentOrders {
-            if seenMedia.contains(order.mediaId) {
-                duplicates.append(order.mediaId)
+        for req in deliveredRequests {
+            let mid = req.details.snapshot.mediaId
+            if seenDeliveredMedia.contains(mid) {
+                duplicateDeliveries.append(mid)
             }
-            seenMedia.insert(order.mediaId)
+            seenDeliveredMedia.insert(mid)
         }
 
         XCTAssertTrue(
-            duplicates.isEmpty,
-            "Invariant 2 violated: duplicate current orders found! Seed: \(seed), duplicates: \(duplicates)\nTrace:\n\(trace.joined(separator: "\n"))"
+            duplicateDeliveries.isEmpty,
+            "Invariant 2 violated: duplicate delivery requests found for same media! Seed: \(seed), duplicates: \(duplicateDeliveries)\nTrace:\n\(trace.joined(separator: "\n"))"
         )
 
         // 检查所有当前还在 FakeMedia 且在 scope 内的照片
