@@ -510,24 +510,32 @@ def run_self_test() -> int:
 
         (src_dir / "lib/FakeString.svelte").unlink()
 
-        # 7. 验证 export * from 与模板字符串中动态 import 均可被识别
+        # 7. 验证 export * from、模板字符串中动态 import，以及模板 URL 后的真实导入均可被识别
         (src_dir / "lib/InsideTpl.svelte").write_text('<p>InsideTpl</p>\n', encoding="utf-8")
         (src_dir / "lib/ExportStar.svelte").write_text('<p>ExportStar</p>\n', encoding="utf-8")
         (src_dir / "lib/ExportStarAs.svelte").write_text('<p>ExportStarAs</p>\n', encoding="utf-8")
+        (src_dir / "lib/TplUrlTarget.svelte").write_text('<p>TplUrlTarget</p>\n', encoding="utf-8")
         (src_dir / "App.svelte").write_text(
-            '<script>\nimport Photo from "./lib/Photo.svelte";\nexport * from "./lib/ExportStar.svelte";\nexport * as MyStar from "./lib/ExportStarAs.svelte";\nconst loadTpl = `${import("./lib/InsideTpl.svelte")}`;\n</script>\n',
-            encoding="utf-8"
+            '<script>\n'
+            'import Photo from "./lib/Photo.svelte";\n'
+            'export * from "./lib/ExportStar.svelte";\n'
+            'export * as MyStar from "./lib/ExportStarAs.svelte";\n'
+            'const loadTpl = `${import("./lib/InsideTpl.svelte")}`;\n'
+            'const url = `https://example.com`; import TplUrlTarget from "./lib/TplUrlTarget.svelte";\n'
+            '</script>\n',
+            encoding="utf-8",
         )
         tpl_errs = scan(tmppath)
         if tpl_errs:
-            print(f"Self-test failed: export * from or import inside template failed to be recognized: {tpl_errs}", file=sys.stderr)
+            print(f"Self-test failed: export * from or import inside/after template failed to be recognized: {tpl_errs}", file=sys.stderr)
             return 1
 
         (src_dir / "lib/InsideTpl.svelte").unlink()
         (src_dir / "lib/ExportStar.svelte").unlink()
         (src_dir / "lib/ExportStarAs.svelte").unlink()
+        (src_dir / "lib/TplUrlTarget.svelte").unlink()
 
-        # 8. 反例：注释中的 export/import 与混淆长注释不能产生依赖边 -> 孤立组件必须判红（分别验证重导出与静态导入）
+        # 8. 反例：注释中的 export/import 与混淆长注释不能产生依赖边 -> 孤立组件必须判红（分别验证重导出与静态导入，以及模板单引号后的注释）
         (src_dir / "lib/LiveExport.svelte").write_text('<p>LiveExport</p>\n', encoding="utf-8")
         (src_dir / "lib/LiveImport.svelte").write_text('<p>LiveImport</p>\n', encoding="utf-8")
         (src_dir / "App.svelte").write_text(
@@ -537,6 +545,8 @@ def run_self_test() -> int:
             'import { /* } from "./lib/Photo.svelte" */ } from "./lib/LiveImport.svelte";\n'
             'import"./lib/LiveImport.svelte";\n'
             'logger.import("./lib/Photo.svelte");\n'
+            'const label = `It\'s fine`;\n'
+            '// import("./lib/Photo.svelte");\n'
             '</script>\n',
             encoding="utf-8",
         )
