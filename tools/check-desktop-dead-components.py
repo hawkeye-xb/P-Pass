@@ -57,40 +57,74 @@ def resolve_import(source_file: Path, spec: str, src_dir: Path) -> Path | None:
     return None
 
 
-def extract_valid_imports(src: str, is_svelte: bool = False) -> set[str]:
+BLANK_PAT = re.compile(r"[^\n]")
+
+
+def blank_preserve_newlines(s: str) -> str:
+    return BLANK_PAT.sub(" ", s)
+
+
+def blank_comments_1to1(code: str, is_svelte: bool = False) -> str:
+    """词法状态机：将 // 与 /* */ 注释替换为等长空格，保持 1:1 字符偏移并避免截断代码。"""
+    out: list[str] = []
+    i = 0
+    n = len(code)
+    while i < n:
+        if is_svelte and code.startswith("<!--", i):
+            j = code.find("-->", i + 4)
+            end = n if j == -1 else j + 3
+            out.append(blank_preserve_newlines(code[i:end]))
+            i = end
+            continue
+        c = code[i]
+        nxt = code[i + 1] if i + 1 < n else ""
+        if c == "/" and nxt == "/":
+            j = code.find("\n", i)
+            end = n if j == -1 else j
+            out.append(" " * (end - i))
+            i = end
+            continue
+        if c == "/" and nxt == "*":
+            j = code.find("*/", i + 2)
+            end = n if j == -1 else j + 2
+            out.append(blank_preserve_newlines(code[i:end]))
+            i = end
+            continue
+        if c in ('"', "'"):
+            q = c
+            out.append(q)
+            i += 1
+            while i < n:
+                ch = code[i]
+                out.append(ch)
+                if ch == "\\":
+                    if i + 1 < n:
+                        out.append(code[i + 1])
+                        i += 2
+                    else:
+                        i += 1
+                    continue
+                if ch == q:
+                    i += 1
+                    break
+                i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def extract_valid_imports(raw_src: str, is_svelte: bool = False) -> set[str]:
     """词法状态机：精确提取真实 import 与动态 import(...)，跳过注释与普通字符串字面量，支持模板表达式。"""
+    # 先做 1:1 字符等长注释替换，彻底消灭所有注释（含 /* ... */ 内可能混杂的伪声明与换行）且偏移量严格保持 1:1
+    src = blank_comments_1to1(raw_src, is_svelte=is_svelte)
     imports = set()
     i = 0
     n = len(src)
     tpl_stack: list[int] = []
 
     while i < n:
-        # Svelte HTML 注释
-        if is_svelte and src.startswith("<!--", i):
-            j = src.find("-->", i + 4)
-            if j == -1:
-                break
-            i = j + 3
-            continue
-
         c = src[i]
-        nxt = src[i + 1] if i + 1 < n else ""
-
-        # JS 单行注释 //
-        if c == "/" and nxt == "/":
-            j = src.find("\n", i)
-            if j == -1:
-                break
-            i = j + 1
-            continue
-
-        # JS 块注释 /* ... */
-        if c == "/" and nxt == "*":
-            j = src.find("*/", i + 2)
-            if j == -1:
-                break
-            i = j + 2
-            continue
 
         # 普通单双引号字符串（跳过其内部，不产生依赖边）
         if c in ('"', "'"):
@@ -166,9 +200,7 @@ def extract_valid_imports(src: str, is_svelte: bool = False) -> set[str]:
         # 匹配 export ... from "..." 重新导出（支持 export * from、export * as X from、export { X } from）
         if src.startswith("export", i) and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] in "_$")):
             rem = src[i + 6 :]
-            # 在匹配子句前剔除内部可能混杂的行内注释，防止 export { /* } from "..." */ } 误匹配
-            cleaned_rem = re.sub(r"/\*.*?\*/|//.*?$", " ", rem, flags=re.MULTILINE)
-            m_exp = re.match(r"""^(?:\s+(?:(?:\*\s*(?:as\s+[\w$]+)?|\{[^}]*\})\s+from\s+)|\s+from\s+)["']([^"']+)["']""", cleaned_rem)
+            m_exp = re.match(r"""^(?:\s+(?:(?:\*\s*(?:as\s+[\w$]+)?|\{[^}]*\})\s+from\s+)|\s+from\s+)["']([^"']+)["']""", rem)
             if m_exp:
                 imports.add(m_exp.group(1))
                 i += 6 + m_exp.end()
@@ -382,15 +414,18 @@ def run_self_test() -> int:
         (src_dir / "lib/ExportStar.svelte").unlink()
         (src_dir / "lib/ExportStarAs.svelte").unlink()
 
-        # 8. 反例：注释中的 export/import 不能产生依赖边 -> 孤立组件必须判红
+        # 8. 反例：注释中的 export/import 与混淆长注释不能产生依赖边 -> 孤立组件必须判红（同时验证长注释后真实 import 仍存活）
+        (src_dir / "lib/LiveTarget.svelte").write_text('<p>LiveTarget</p>\n', encoding="utf-8")
         (src_dir / "App.svelte").write_text(
-            '<script>\n// import Photo from "./lib/Photo.svelte";\n/* import Photo from "./lib/Photo.svelte"; */\nexport { /* } from "./lib/Photo.svelte" */ };\n</script>\n',
+            '<script>\n// import Photo from "./lib/Photo.svelte";\n/* import Photo from "./lib/Photo.svelte"; */\nexport { /* \n } from "./lib/Photo.svelte"\n */ };\nexport { /* xxxxxxxxxxxxxxxxxxxxxxxx import("./lib/Photo.svelte") */ } from "./lib/LiveTarget.svelte";\nimport { /* } from "./lib/Photo.svelte" */ } from "./lib/LiveTarget.svelte";\n</script>\n',
             encoding="utf-8"
         )
         comment_errs = scan(tmppath)
-        if not any("Photo.svelte" in e for e in comment_errs):
-            print("Self-test failed: comment import wrongly kept component alive", file=sys.stderr)
+        if not any("Photo.svelte" in e for e in comment_errs) or any("LiveTarget.svelte" in e for e in comment_errs):
+            print("Self-test failed: comment import wrongly kept component alive or killed real import after comment", file=sys.stderr)
             return 1
+
+        (src_dir / "lib/LiveTarget.svelte").unlink()
 
         # 还原干净 App.svelte
         (src_dir / "App.svelte").write_text('<script>\nimport Photo from "./lib/Photo.svelte";\n</script>\n', encoding="utf-8")
