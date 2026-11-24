@@ -13,7 +13,7 @@ import socket, json, sys, platform
 p, token = sys.argv[1].strip(), sys.argv[2].strip()
 req = json.dumps({"id": "x", "method": sys.argv[3], "params": json.loads(sys.argv[4])})
 if platform.system() == "Windows":
-    # Windows: 命名管道 \\.\pipe\<名>（H-09 实证，见 docs/windows-smoke.md §5）。
+    # Windows: 命名管道 \\.\pipe\<名>（H-09 实证）。
     # 字节模式双工管道，按文件打开即可；回包按 \n 切行。
     # 所有管道实例都在服务别人时 open 失败（ERROR_PIPE_BUSY；Python 3.9 实测报成
     # errno 22 EINVAL、winerror 为空）。标准做法是稍等重试（等价于 WaitNamedPipe）。

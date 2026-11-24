@@ -73,3 +73,4 @@ __pycache__/
 
 # E3 真机验证证据（tools/e3，不进 git）
 /evidence/
+/docs/evidence/

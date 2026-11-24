@@ -202,6 +202,15 @@ toolchain-check:
 #
 # 用 shebang 配方是刻意的——它绕开 just 的 shell 设置，将来若为 Windows 配上
 # `set windows-shell`（QA-08）这两条不会跟着坏。
+# 文档分层活物锚点校验（#1991 / #1996）：
+# 第 1 层校验现行 AI/工程规范相对链接 + 代码路径 + just recipe；
+# 第 2 层校验历史决策/记录相对链接（不扫代码路径）。
+# 官网 Blog 独立在第 3 层校验（site.yml），不卡日常代码迭代。
+doc-anchors-check:
+  @python3 tools/check-doc-anchors.py --tier 1
+  @python3 tools/check-doc-anchors.py --tier 2
+
+# 解释器探测同 md-check（理由见上方 QA-07 注释）。
 md-check:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -275,7 +284,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check supply-chain-check mobile-static-check build-stamp-check i18n-split-check lockfile-check flow-tests heavy-lock-test
+ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check doc-anchors-check token-check shell-vars-check identity-check supply-chain-check mobile-static-check build-stamp-check i18n-split-check lockfile-check flow-tests heavy-lock-test
   @echo "==> CI pipeline: all green ✅"
 
 # 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
@@ -571,12 +580,16 @@ version-bump-i18n-test:
 bump-version-test:
   @bash tools/test-bump-version.sh
 
+# 文档分层活物锚点自测与反证（#1991 / #1996；进 flow-tests / ci-docs）
+doc-anchors-test:
+  @bash tools/test-check-doc-anchors.sh
+
 # 流程门禁脚本的自测（#1493）：本地 ci / ci-docs 与 CI（ci-docs.yml 的 flow-tests job）共用这一份清单。
 # 只收别的 lane 都没跑的流程自测；md-check / token-check / shell-vars-check / identity-check / supply-chain-check
 # 已在 ci-docs.yml、ci-identity.yml 的其它 job 里跑，留在 ci-docs 的直接依赖里。
 # justfile 里每个 *-test recipe 要么在这里，要么登记在 tools/test-flow-tests-wired.sh 的例外表里（flow-tests-wired-test 会挡）。
 # heavy-lock-test 依赖 macOS 才有的 lockf，ubuntu 上会 SKIP 假绿，不进这里；登记为例外（#1502），本地 ci / ci-docs 直接依赖它。
-flow-tests: hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test flow-v3-harness-test macos-runner-test main-red-test flow-tests-wired-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test
+flow-tests: doc-anchors-test hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test flow-v3-harness-test macos-runner-test main-red-test flow-tests-wired-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test
   @echo "==> flow-tests: green ✅"
 
 # #1468 的 lane 不变量（#1489）：三个 Windows job 在 PR 上跳过、五条 lane 有 push: branches [main]、
@@ -617,7 +630,7 @@ e3-test:
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: md-check token-check shell-vars-check identity-check supply-chain-check build-stamp-check flow-tests heavy-lock-test
+ci-docs: md-check doc-anchors-check token-check shell-vars-check identity-check supply-chain-check build-stamp-check flow-tests heavy-lock-test
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）

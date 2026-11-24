@@ -23,7 +23,7 @@ Apple 对「收集」的定义：数据离开设备，并且开发者或其第�
 | 数据 | 去向 | 项目方能否访问 | 证据 |
 |---|---|---|---|
 | 照片和视频 | 用户自己配对的电脑，经 iroh 端到端加密传输 | 不能 | `apps/ios/PPass/Live/LiveTransport.swift`、`crates/transport/src/provider.rs` |
-| 设备名 | 随配对请求发给用户自己的电脑 | 不能 | `apps/ios/PPass/Live/LivePairing.swift:314`。没有 user-assigned-device-name entitlement，iOS 16 起返回的是「iPhone」这类通用名 |
+| 设备名 | 随配对请求发给用户自己的电脑 | 不能 | `apps/ios/PPass/Live/LivePairing.swift`。没有 user-assigned-device-name entitlement，iOS 16 起返回的是「iPhone」这类通用名 |
 | 配对身份密钥 | 钥匙串，仅本机，不同步 iCloud | 不能 | `LiveTransport.swift`：`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`、`kSecAttrSynchronizable = false` |
 | 诊断日志 | 只写本机容器，落盘前脱敏；只能由用户复制导出 | 不能（除非用户自己发来） | `apps/ios/PPass/Diagnostics/AppLog.swift`、`DiagnosticsScreen.swift` |
 | 电量 | 只在本机用于电量策略 | 不能 | `LiveBackend.swift` 的 `batteryLevel` / `batteryState` |

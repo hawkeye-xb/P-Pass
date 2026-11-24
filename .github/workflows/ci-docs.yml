@@ -71,6 +71,8 @@ jobs:
             .github/workflows/**
             justfile
             tools/check-shell-vars.py
+            tools/check-doc-anchors.py
+            tools/test-check-doc-anchors.sh
             docs/**
             assets/design/tokens.json
             tools/check-markdown-tables.py
@@ -174,6 +176,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: md-check（docs/ 的 Markdown 表格不许被空行截断）
         run: python3 tools/check-markdown-tables.py
+      - name: doc-anchors-check（#1991：现行规范与历史决策文档分层锚点校验）
+        run: |
+          python3 tools/check-doc-anchors.py --tier 1
+          python3 tools/check-doc-anchors.py --tier 2
       - name: token-check（DESK-15：tokens.css 不许与 tokens.json 漂移）
         run: python3 tools/check-token-drift.py
       - name: shell-vars-check（变量紧挨非 ASCII 字符必须写 ${name}：macOS bash 3.2 会读错变量名）
