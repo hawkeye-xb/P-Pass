@@ -5,10 +5,10 @@
 #   acceptance-gate.sh classify [--repo <仓库根>] [--core-rules <规则文件>] [--diff <unified diff>] < 改动文件列表
 #                               打印 core / core-hidden / ui / notes / none
 #
-# 级别判定只在这里一份：worker-done.sh（classify）、review.sh（classify + check）、CI 的 acceptance gate（check）、
+# 级别判定只在这里一份：flow.py done/review、CI 的 acceptance gate（check）、
 # release-scope.sh（classify，算每个版本的验收范围）都调用本脚本，别在别处再抄一份。
 #
-# 口径与 owner-triage.sh 一致。「用户可见」= 界面与文案路径（owner-triage.sh 的 UI_GLOBS）或 apps/** 下的非测试文件
+# 「用户可见」= 界面与文案路径（本脚本 UI_GLOBS）或 apps/** 下的非测试文件
 # （测试 = 下面 TEST_RE 圈出的位置）。核心 = .github/core-paths.txt（给了 --diff 时，只改版本号行的文件不算，见 tools/ci-paths.sh）。
 #   core        命中核心且用户可见：正文引用 origin/main 上「已采纳」的方案（docs/decisions/<文件>.md）；不要验收行，随版本验收
 #   core-hidden 命中核心、用户看不见（如发布链脚本，#1448）：正文引用已采纳方案，且改动里带测试文件（带反证的自动化测试）

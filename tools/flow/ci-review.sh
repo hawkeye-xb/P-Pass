@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 # CI 上的独立评审（.github/workflows/ci-review.yml 调用），分三步，token 只给需要它的步骤：
 #
-#   ci-review.sh prepare <PR号>   要 GH_TOKEN：头提交上写 review/agent=pending；review.sh 取 PR、建只读检出、写提示词
+#   ci-review.sh prepare <PR号>   要 GH_TOKEN：头提交上写 review/agent=pending；flow.py review 取 PR、建只读检出、写提示词
 #   ci-review.sh agent            不给任何 GitHub token：只跑评审 agent，结论写进状态目录（agent.out / agent.err / agent.rc）
-#   ci-review.sh publish <PR号>   要 GH_TOKEN：review.sh 判定、贴评论、写 review/agent（success / failure / error）
+#   ci-review.sh publish <PR号>   要 GH_TOKEN：flow.py review 判定、贴评论、写 review/agent（success / failure / error）
 #   ci-review.sh <PR号>           三步连着跑（本机自测用；agent 那步同样去掉 GH_TOKEN / GITHUB_TOKEN）
 #   ci-review.sh override <PR号> <评论ID>   要 GH_TOKEN：owner 复核放行（#1470），见 do_override
 #
 # 只评正式 PR（#1470）：草稿 PR 不评（prepare 读到 isDraft=true 就整次跳过，不写状态、不调模型）；
-# 转正式（ready_for_review）再评。复用、增量、三级结论在 review.sh 里判（见它的头注释）：
+# 转正式（ready_for_review）再评。全量审阅、复用与三级结论在 flow.py review 里判：
 # 复用时 agent 那步不调模型。
 #
 # review/agent 是 main 的必需检查，即合入门禁（#1435）：
 #   - PPASS_REVIEW_NO_MERGE=1：CI 不开、不撤销自动合入（自动合入由开 PR 的会话开，靠必需检查把关；
 #     用 GITHUB_TOKEN 开的自动合入不会触发 main 上的 push 流水线）；
 #   - 本脚本永远退出 0，结论只看状态和 PR 评论；
-#   - agent 非 0 退出、超时、没有 VERDICT 行都算基础设施失败（key、网络、超时），自动重试一次，仍失败由 review.sh
+#   - agent 非 0 退出、超时、没有 VERDICT 行都算基础设施失败（key、网络、超时），自动重试一次，仍失败由 flow.py review
 #     写 error +「评审没跑成」：error 不算通过、挡合入，但不当作代码有问题；VERDICT: FAIL 才是「评审不通过」（failure）。
 #   - agent 那步：环境里不许有 GH_TOKEN / GITHUB_TOKEN，磁盘上的 git 配置里不许有凭据（extraheader），有就不跑、判没跑成；
 #     claude 加 --setting-sources user --strict-mcp-config，不读 PR 检出里的 .claude/ 配置、hooks、MCP。
@@ -23,7 +23,7 @@
 # 环境变量：
 #   PPASS_CI_STATE         状态目录（默认 ${RUNNER_TEMP:-/tmp}/ppass-ci-review）；三步共用
 #   ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL  agent 那步用
-#   PPASS_REVIEW_MODEL     模型（prepare 那步交给 review.sh）
+#   PPASS_REVIEW_MODEL     模型（prepare 那步交给 flow.py review）
 #   PPASS_CI_CLAUDE        真正的评审命令（默认 claude；测试用桩）
 #   PPASS_CI_TIMEOUT       单次 agent 调用的超时秒数（默认 600；系统没有 timeout 命令则不限）
 #   PPASS_CI_RETRY_SLEEP   重试前等几秒（默认 10）

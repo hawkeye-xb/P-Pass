@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""P-Pass V3 流程引擎确定性自测（替代旧 3000 行慢速 bash 套娃测试，秒级跑完，每条含反证）。"""
+"""P-Pass V3 流程引擎确定性自测（秒级跑完，每条均配正反双侧判据）。"""
 from __future__ import annotations
-import os, shutil, subprocess, sys, tempfile, time, unittest
+import json, os, shutil, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,23 +11,19 @@ import flow  # noqa: E402
 
 class CleanFlowEngineTests(unittest.TestCase):
     def test_1_pick_gates_never_falls_back_to_full_just_ci(self) -> None:
-        # 未知配置文件（.gitignore / assets/contracts/*.json）绝不回退全仓 just ci
         g_misc = flow.pick_gates([".gitignore", "assets/contracts/truth.json"], str(ROOT))
         self.assertNotIn("just ci", g_misc)
         self.assertIn("just arch-check", g_misc)
         self.assertIn("just fitness-check", g_misc)
-        # Rust 单包精准挑选
         g_crate = flow.pick_gates(["crates/platform/src/lib.rs"], str(ROOT))
         self.assertNotIn("just ci", g_crate)
         self.assertIn("cargo nextest run -p platform", g_crate)
-        # 纯文档秒级快检
         g_doc = flow.pick_gates(["docs/a.md"], str(ROOT))
         self.assertEqual(g_doc, ["just md-check"])
 
     def test_2_blocks_exam_files_and_source_string_fake_tests(self) -> None:
         tmp = tempfile.mkdtemp(prefix="v3_ft_")
         try:
-            # 1) 拦截新增/留存的 exam_* 假考卷；而物理删除旧 exam_*（工作区已不存在）允许放行
             os.makedirs(os.path.join(tmp, "crates/daemon/tests/v3"), exist_ok=True)
             Path(tmp, "crates/daemon/tests/v3/exam_1927.py").write_text("x = 1\n", encoding="utf-8")
             ok1, msg1 = flow.verify_real_tests_and_counterproof(tmp, tmp, "HEAD", ["crates/daemon/tests/v3/exam_1927.py"], "fix")
@@ -36,7 +32,6 @@ class CleanFlowEngineTests(unittest.TestCase):
             os.unlink(os.path.join(tmp, "crates/daemon/tests/v3/exam_1927.py"))
             ok_del, _ = flow.verify_real_tests_and_counterproof(tmp, tmp, "HEAD", ["crates/daemon/tests/v3/exam_1927.py"], "feature")
             self.assertTrue(ok_del, "物理删除存量 exam_* 文件应当合法放行")
-            # 2) 拦截读取业务源码字符串的假单测
             os.makedirs(os.path.join(tmp, "tests"), exist_ok=True)
             fake_t = Path(tmp) / "tests" / "fake_check.py"
             fake_t.write_text('s = (ROOT / "crates/platform/src/lib.rs").read_text()\nassert "fn foo" in s\n', encoding="utf-8")
@@ -70,10 +65,8 @@ class CleanFlowEngineTests(unittest.TestCase):
             old_cmd = os.environ.get("PPASS_COUNTERPROOF_CMD")
             os.environ["PPASS_COUNTERPROOF_CMD"] = f"{sys.executable} -m unittest discover -s tests"
             try:
-                # 正例：基线红（2-3 != 5）、当前绿 → 通过
                 ok, msg = flow.verify_real_tests_and_counterproof(wt, tmp, base_sha, ["pkg/__init__.py", "tests/test_add.py"], "fix")
                 self.assertTrue(ok, msg)
-                # 反证：若测试恒真（在基线也绿），必须判 COUNTERPROOF_FAIL
                 Path(wt, "tests", "test_add.py").write_text(
                     "import unittest\nclass T(unittest.TestCase):\n    def test_a(self): self.assertEqual(1, 1)\n",
                     encoding="utf-8",
@@ -82,49 +75,159 @@ class CleanFlowEngineTests(unittest.TestCase):
                 self.assertFalse(ok_bad)
                 self.assertIn("COUNTERPROOF_FAIL", msg_bad)
             finally:
-                if old_cmd is None: os.environ.pop("PPASS_COUNTERPROOF_CMD", None)
-                else: os.environ["PPASS_COUNTERPROOF_CMD"] = old_cmd
+                if old_cmd is None:
+                    os.environ.pop("PPASS_COUNTERPROOF_CMD", None)
+                else:
+                    os.environ["PPASS_COUNTERPROOF_CMD"] = old_cmd
                 subprocess.run(["git", "-C", tmp, "worktree", "remove", "--force", wt], capture_output=True)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_4_adaptive_slots_and_watchdog_kills_runaway_process_and_readonly_gh(self) -> None:
-        old_rem = os.environ.get("PPASS_REMOTE_WORKER")
-        os.environ["PPASS_REMOTE_WORKER"] = "none"
+    def test_4_real_ssh_remote_routing_and_local_single_slot_cap_and_watchdog(self) -> None:
+        tmp = tempfile.mkdtemp(prefix="v3_sched_")
         try:
-            day_slots = flow.probe_slots(unattended=False)
-            night_slots = flow.probe_slots(unattended=True)
-            self.assertEqual(day_slots[0]["slots"], 1, "白天本机必须硬限 1 个后台重编译槽保主会话秒回")
-            self.assertEqual(night_slots[0]["slots"], 2, "夜间无人模式允许 2 个槽")
-        finally:
-            if old_rem is None: os.environ.pop("PPASS_REMOTE_WORKER", None)
-            else: os.environ["PPASS_REMOTE_WORKER"] = old_rem
+            ssh_log = Path(tmp) / "ssh_calls.log"
+            fake_ssh = Path(tmp) / "fake-ssh"
+            fake_ssh.write_text(
+                "#!/usr/bin/env bash\n"
+                f"echo \"$*\" >> '{ssh_log}'\n"
+                "echo REMOTE_EXEC_OK\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            fake_ssh.chmod(0o755)
+            dev_dir = Path(tmp) / "dev"
+            dev_dir.mkdir()
+            (dev_dir / "ios.state").write_text("SCREEN_LOCKED\n", encoding="utf-8")
 
-        dev_dir = tempfile.mkdtemp(prefix="v3_dev_")
-        try:
-            Path(dev_dir, "ios.state").write_text("SCREEN_LOCKED\n", encoding="utf-8")
-            old_dev = os.environ.get("PPASS_V3_DEV_DIR")
-            os.environ["PPASS_V3_DEV_DIR"] = dev_dir
+            saved = {k: os.environ.get(k) for k in ("PPASS_REMOTE_WORKER", "PPASS_SSH_BIN", "PPASS_V3_DEV_DIR")}
+            os.environ["PPASS_REMOTE_WORKER"] = "fake-win-box"
+            os.environ["PPASS_SSH_BIN"] = str(fake_ssh)
+            os.environ["PPASS_V3_DEV_DIR"] = str(dev_dir)
             try:
+                slots = flow.probe_slots(unattended=False)
+                self.assertEqual([s["kind"] for s in slots], ["remote", "local"])
+                local_slot = next(s for s in slots if s["kind"] == "local")
+                self.assertEqual(local_slot["slots"], 1, "即使有远端节点，白天本机槽位依然必须硬限为 1")
+
                 t0 = time.time()
                 res = flow.run_watchdog_tasks([
+                    {"id": "cross_plat", "cmd": ["cargo", "nextest", "run"], "cwd": str(ROOT), "timeout": 5},
+                    {"id": "mac_only", "local_only": True, "cmd": ["echo", "on-mac"], "cwd": str(ROOT), "timeout": 5},
                     {"id": "locked_ios", "device": "ios", "cmd": ["sleep", "10"], "cwd": str(ROOT), "timeout": 5},
-                    {"id": "hung_job", "cmd": ["sleep", "30"], "cwd": str(ROOT), "timeout": 1},
-                    {"id": "mut_gh", "cmd": ["gh", "issue", "edit", "1"], "cwd": str(ROOT), "timeout": 5},
-                ], unattended=True)
+                    {"id": "hung_job", "local_only": True, "cmd": ["sleep", "30"], "cwd": str(ROOT), "timeout": 1},
+                    {"id": "mut_gh", "local_only": True, "cmd": ["gh", "issue", "edit", "1"], "cwd": str(ROOT), "timeout": 5},
+                ], unattended=False)
                 elapsed = time.time() - t0
                 by_id = {x["id"]: x for x in res}
+                self.assertEqual(by_id["cross_plat"]["target"], "remote:fake-win-box", "跨平台任务必须真正路由到远端节点")
+                self.assertEqual(by_id["cross_plat"]["status"], "OK")
+                self.assertIn("fake-win-box cargo nextest run", ssh_log.read_text(encoding="utf-8"))
+                self.assertEqual(by_id["mac_only"]["target"], "local", "mac 专属任务保留在本机单槽运行")
                 self.assertEqual(by_id["locked_ios"]["status"], "SUSPENDED_ENV")
                 self.assertEqual(by_id["hung_job"]["status"], "SUSPENDED_TIMEOUT")
-                self.assertEqual(by_id["mut_gh"]["status"], "FAILED", "worker 调 gh issue edit 必须被只读垫片拒绝")
-                self.assertLess(elapsed, 6.0, "看门狗必须秒级强杀超时子进程组，不能傻等 30 秒")
+                self.assertEqual(by_id["mut_gh"]["status"], "FAILED")
+                self.assertLess(elapsed, 6.0)
             finally:
-                if old_dev is None: os.environ.pop("PPASS_V3_DEV_DIR", None)
-                else: os.environ["PPASS_V3_DEV_DIR"] = old_dev
+                for k, v in saved.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
         finally:
-            shutil.rmtree(dev_dir, ignore_errors=True)
+            shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_5_doctor_auto_cleans_disk_below_threshold(self) -> None:
+    def test_5_start_validates_all_cards_acceptance_bug_repro_and_triage_and_owner_stuck(self) -> None:
+        tmp = tempfile.mkdtemp(prefix="v3_cards_")
+        try:
+            bin_dir = Path(tmp) / "bin"
+            issues_dir = Path(tmp) / "issues"
+            gh_log = Path(tmp) / "gh.log"
+            bin_dir.mkdir()
+            issues_dir.mkdir()
+
+            def write_issue(num: int, state: str, labels: str, itype: str, body: str, title: str = "fix something") -> None:
+                (issues_dir / f"{num}.json").write_text(
+                    json.dumps({"state": state, "labels": labels, "type": itype, "body": body, "title": title}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+
+            fake_gh = bin_dir / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, pathlib, sys\n"
+                f"log = pathlib.Path({str(gh_log)!r})\n"
+                f"idir = pathlib.Path({str(issues_dir)!r})\n"
+                "args = sys.argv[1:]\n"
+                "log.open('a', encoding='utf-8').write(' '.join(args) + '\\n')\n"
+                "if args[:2] == ['issue', 'view']:\n"
+                "    d = json.loads((idir / f'{args[2]}.json').read_text(encoding='utf-8'))\n"
+                "    print(f\"state:{d['state']}\\ntitle:{d['title']}\\nlabels:{d['labels']}\\nbody:\\n{d['body']}\")\n"
+                "elif args[0] == 'api' and '/issues/' in args[1]:\n"
+                "    num = args[1].rstrip('/').split('/')[-1]\n"
+                "    d = json.loads((idir / f'{num}.json').read_text(encoding='utf-8'))\n"
+                "    print(d['type'])\n"
+                "elif args[:2] == ['issue', 'create']:\n"
+                "    print('https://github.com/o/r/issues/999')\n"
+                "sys.exit(0)\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o755)
+
+            old_path, old_repo = os.environ.get("PATH", ""), os.environ.get("PPASS_HOOK_REPO")
+            os.environ["PATH"] = f"{bin_dir}:{old_path}"
+            os.environ["PPASS_HOOK_REPO"] = "o/r"
+            try:
+                # 1) 缺验收场景的 ready 卡 → 拒绝领卡
+                write_issue(11, "OPEN", "status:ready", "Task", "**现象**：a\n")
+                rc1, msg1, _ = flow.validate_cards_for_start(["11"], "o/r", str(ROOT), False)
+                self.assertEqual(rc1, 1)
+                self.assertIn("验收场景", msg1)
+
+                # 2) Bug 卡缺复现路径（或写“无”）→ 拒绝领卡
+                write_issue(12, "OPEN", "status:ready,bug", "Bug", "**复现路径**：无\n\n**验收场景**：跑通单测\n")
+                rc2, msg2, _ = flow.validate_cards_for_start(["12"], "o/r", str(ROOT), False)
+                self.assertEqual(rc2, 1)
+                self.assertIn("复现路径", msg2)
+
+                # 3) 多卡启动：第 1 张合格、第 2 张非 OPEN 或缺验收场景 → 整批拒绝，不漏查第二张
+                write_issue(13, "OPEN", "status:ready,bug", "Bug", "**复现路径**：cargo test\n\n**验收场景**：绿\n")
+                write_issue(14, "CLOSED", "status:ready", "Task", "**验收场景**：绿\n")
+                rc3, msg3, _ = flow.validate_cards_for_start(["13", "14"], "o/r", str(ROOT), False)
+                self.assertEqual(rc3, 1)
+                self.assertIn("#14", msg3)
+
+                # 4) 正例：两张卡均合规 → 通过校验
+                write_issue(15, "OPEN", "status:ready", "Task", "**验收场景**：绿\n")
+                rc4, _, infos = flow.validate_cards_for_start(["13", "15"], "o/r", str(ROOT), False)
+                self.assertEqual(rc4, 0)
+                self.assertEqual(len(infos), 2)
+
+                # 5) triage 读取方案文件里的 **影响** × **时间性** 合成优先级，缺字段拒绝
+                bad_plan = Path(tmp) / "bad_plan.md"
+                bad_plan.write_text("**做法**：x\n", encoding="utf-8")
+                self.assertNotEqual(flow.cmd_triage(["15", str(bad_plan)], str(ROOT)), 0)
+                good_plan = Path(tmp) / "good_plan.md"
+                good_plan.write_text("**影响**：不可挽回\n**时间性**：截止日\n", encoding="utf-8")
+                write_issue(16, "OPEN", "status:inbox", "Task", "")
+                self.assertEqual(flow.cmd_triage(["16", str(good_plan)], str(ROOT)), 0)
+                self.assertIn("P1", gh_log.read_text(encoding="utf-8"))
+
+                # 6) owner-stuck 真实建 blocked issue / 评论指定卡
+                gh_log.write_text("", encoding="utf-8")
+                self.assertEqual(flow.cmd_owner_stuck(["构建环境故障"], str(ROOT)), 0)
+                self.assertIn("issue create", gh_log.read_text(encoding="utf-8"))
+                self.assertIn("status:blocked", gh_log.read_text(encoding="utf-8"))
+            finally:
+                os.environ["PATH"] = old_path
+                if old_repo is None:
+                    os.environ.pop("PPASS_HOOK_REPO", None)
+                else:
+                    os.environ["PPASS_HOOK_REPO"] = old_repo
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_6_doctor_auto_cleans_disk_below_threshold(self) -> None:
         tmp = tempfile.mkdtemp(prefix="v3_doc_")
         marker = os.path.join(tmp, "cleaned.ok")
         repo = os.path.join(tmp, "repo")

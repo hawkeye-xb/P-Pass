@@ -170,6 +170,24 @@ CI 7 >/dev/null 2>&1 && tail -n 1 "$FAKE/statuses" | grep -qF "state=failure" &&
   ok "碰核心缺已采纳方案 → 即使 agent PASS 仍判 failure" || bad "核心缺方案漏放"
 printf 'tools/x.sh\n' >"$FAKE/pr.files"
 
+# PR 头检出中新增 exam_* 文件时（main 上不存在），review 传 --head-dir 必须被 acceptance-gate 判红拦截！
+(
+  cd "${TMP}/main" && git checkout -q pr7 &&
+    mkdir -p tests/v3 && printf 'x = 1\n' >tests/v3/exam_777.py &&
+    git add tests/v3/exam_777.py && git commit -q -m "add exam" &&
+    git push -q origin HEAD:refs/pull/7/head && git rev-parse HEAD >"${FAKE}/pr.sha" && git checkout -q main
+)
+reset pass
+printf 'tools/x.sh\ntests/v3/exam_777.py\n' >"$FAKE/pr.files"
+CI 7 >/dev/null 2>&1 && tail -n 1 "$FAKE/statuses" | grep -qF "state=failure" &&
+  ok "PR 头提交新增 exam_* 文件（main 上无）→ review/agent 检出校验判 failure 拦截" || bad "PR 新增 exam_* 漏放了：$(cat "$FAKE/statuses")"
+(
+  cd "${TMP}/main" && git checkout -q pr7 &&
+    git rm -q tests/v3/exam_777.py && git commit -q -m "drop exam" &&
+    git push -q origin HEAD:refs/pull/7/head && git rev-parse HEAD >"${FAKE}/pr.sha" && git checkout -q main
+)
+printf 'tools/x.sh\n' >"$FAKE/pr.files"
+
 # 关键防漏审硬判据：推第 2 个提交时，必须审阅完整全量 diff（包含第 1 个提交的 ROUND1-BUG），绝不走增量盲区！
 reset pass
 printf -- '--- a/tools/x.sh\n+++ b/tools/x.sh\n+echo ROUND1-UTF8-SLICE-BUG\n' >"$FAKE/pr.diff"

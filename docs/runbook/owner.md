@@ -2,14 +2,14 @@
 
 这些命令由 agent 在需要时跑（分拣新诉求、出 test 包、记想法、停下交人）。命令自带判定：红了或判定不了，就写 issue（`status:blocked`）
 或评论到对应的卡、PR，然后非 0 退出。不补做、不绕过、不改判定，接着做别的。
-脚本在 `tools/flow/owner-*.sh`，测试是 `tools/test-flow-owner.sh`（`just ci` 与 `just ci-docs` 都会跑）。
+日常协作引擎统一在 `tools/flow/flow.py`（配合 `owner-idea.sh` / `owner-release-test.sh`），自测为 `tools/test-flow.py`（`just ci` 与 `just ci-docs` 都会跑）。
 
 owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合入的必经之路。合入由 CI 与独立评审把关、自动完成
 （角色分工见 [AGENTS.md](../../AGENTS.md)「角色」「通知」「机器与模型」）。
 
 ## 开工自检（doctor）
 
-`just idea` / `just triage` / `just release-test` 这类 owner 命令会先自动跑 `just doctor`（`tools/flow/doctor.sh`）；只是查问题、读文档、跟人对话或汇报进度时不必手动跑——doctor 检查的是开发环境，不是所有任务的入口。它在你自己的外壳里检查：
+`just start` / `just idea` / `just release-test` 等命令会先自动跑 `just doctor`（`tools/flow/flow.py doctor`）；只是查问题、读文档、跟人对话或汇报进度时不必手动跑——doctor 检查的是开发环境，并在磁盘剩余 `< 25G` 时自动调用 `cleanup-local` 清理缓存。它在你自己的外壳里检查：
 当前目录是主副本或它的 worktree、bash 能否真执行（Windows 上必须是 Git Bash，不能是 WSL 桩）、
 本地提交拦截已装、gh 能读本仓库 issue、提交身份在 `.github/allowed-identities.txt` 里、磁盘 ≥ 15G。
 私仓模式与在线设备只报不判。任一必需项不满足就非 0 退出并打印怎么修，修好再重跑。
@@ -52,7 +52,7 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 - 本机跑时，评审通过后对 PR 执行 `gh pr merge --auto --squash`（CI 上不开，自动合入由 `just done` 开 PR 时开）。碰核心路径的 PR
   多一个条件：与 CI 的 acceptance gate 同一判定（正文引用已采纳方案，看不见的核心还要带测试，见 `acceptance-gate.sh` 头注释），不满足就判未通过、不开自动合入，
   评论里写明缺什么。用户看得到的改动（`UI_GLOBS`、`apps/**` 下的非测试文件）合入不要验收行，随版本验收（AGENTS.md「按版本验收」）。
-  级别判定与 `just done`、`just release-scope`、CI 的 acceptance gate 共用 `acceptance-gate.sh classify`；界面路径清单与 `owner-triage.sh` 的 `UI_GLOBS` 共用，核心路径规则取 `origin/main` 上的 `.github/core-paths.txt`。
+  级别判定与 `just done`、`just release-scope`、CI 的 acceptance gate 共用 `acceptance-gate.sh classify`（内含 `UI_GLOBS` 唯一真源），核心路径规则取 `origin/main` 上的 `.github/core-paths.txt`。
 - `review/agent` 进 main 的必需检查由产品负责人在仓库设置里做（命令见 #1435 的 PR 正文），脚本不改仓库设置。
   没进之前它只是评论与提交状态，不拦合入，`just done` 也不会开自动合入。
 
@@ -118,14 +118,13 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 - **P3 复看**：owner 每次发版规划时列出 30 天未动的 P3，逐张决定升级或关闭；关闭写明「不做」与理由。
 - **先核实实现状态**：triage 与复看时，先用 `git log`、`git grep` 查这张卡要做的事是不是已经做完，做完的直接关掉，不按标题判。
 
-范围、验收场景、是否核心写进任务卡的对应字段（其中范围仅供 triage 分流核心/界面与分支类型推断参考，普通业务与测试文件不再做本地硬拦截，领卡阶段的重复门禁预检也已退役，见 #1953 / #1955；核心禁区由基线 `.github/core-paths.txt` 黑名单焊死，带自动判据的卡用 `v3-seal` 锁死测试 `SHA256`），其余内容写进正文末尾的
-「实施方案」段。写回之后，脚本再核对一遍范围字段可读，读不出来就不写。
+核心禁区由基线 `.github/core-paths.txt` 黑名单焊死，回归单测直接写进各端正式测试套件并在 `fix` 模式下做零拷贝基线反证（禁止一次性 `exam_*` 考卷文件）。
 
-### 有人 / 无人双轨与队列规则（V3）
+### 有人 / 无人双轨与自适应资源调度（V3）
 
-- **有人在场**：owner 汇总产品取向二选一与核心方案给产品负责人集中拍板，真机界面结对迭代不跑慢测试。
-- **无人模式（`--unattended`）**：`just start <号> --unattended` 开工先查设备锁（`~/.cache/ppass-e3/lock-<dev>` / `owner-<dev>`）与屏幕/在线状态，锁屏、被占或离线立即 `0s` 打印 `SUSPENDED_ENV`（退出码 3）跳过切下一张，零弹窗；`just done --unattended` 连续 2 轮未过门禁即触发 `SUSPENDED_CIRCUIT_BREAK`（退出码 4）熔断挂起，并自动 `git rebase origin/main` + 重跑全套门禁重验（撞行冲突自动 `git rebase --abort` 报 `SUSPENDED_CONFLICT`）。
-- **流程规则改动先演练**：修改流程或门禁规则前先跑 `just flow-bench selftest`（或 `live`），不在真仓直接试错。
+- **有人在场**：owner 汇总产品取向二选一与核心方案给产品负责人集中拍板，真机界面结对迭代不跑慢测试；`just dispatch` 白天本机硬限 `1` 个后台槽保障秒回，探测到空闲远端节点自动经 SSH 分流跨平台任务。
+- **无人模式（`--unattended`）**：`just start <号> --unattended` 逐台查所需设备锁与在线未锁屏状态，锁屏/被占立即 `0s` 打印 `SUSPENDED_ENV`（退出码 3）跳过；`just done --unattended` 连续 2 轮未过门禁即触发 `SUSPENDED_CIRCUIT_BREAK`（退出码 4）熔断挂起，并自动 `git rebase origin/main` + 重跑门禁重验。
+- **流程规则自测**：修改流程或门禁规则后运行 `python3 -B -I tools/test-flow.py` 与 `just ci-docs`。
 
 **release-test** 的判定：
 

@@ -23,10 +23,9 @@ job 名必须写死**。理由和细节在这里。
     #1555 的移除事实（`ci-desktop.yml` 没有 `desktop-linux` job、gate 不再要它、共享 action 里
     cargo-deny / advisory / vite build 四步不带任何 `if:`、`System deps` 不再回来，以及两条必需检查名与
     `if: always()` 不变）也由同一脚本判红，带「加回去必须变红」的反证。
-- **推分支不触发 CI**：`push` 限定 `branches: [main]`，只有合入才算。本地快验（按改动路径挑，清单在
-  `tools/flow/worker-lib.sh` 的 `flow_pick_gates`）：纯文档 `just md-check`（#1750：文档检查与工具自测分层），
-  流程文件 `just ci-docs`（justfile / issue 与 PR 模板 / AGENTS.md；workflow 另加 actionlint），
-  tools 下的脚本改动跑引用到它的 `tools/test-*.sh`，动了代码 `just ci`。
+- **推分支不触发 CI**：`push` 限定 `branches: [main]`，只有合入才算。本地快验（按改动路径精准挑选，清单在
+  `tools/flow/flow.py` 的 `pick_gates`）：纯文档 `just md-check`，`AGENTS.md` 跑 `just ci-docs`，
+  各端/crate 只跑对应单测与秒级 `arch-check` + `fitness-check`，绝不因未知配置文件罚跑全仓 `just ci`。
 - **PR 上按路径判跑哪些 job**，分两档：
   - `ci-rust` / `ci-desktop`：workflow 层**不设** `pull_request.paths`（CI-07 #189）。
     它们的检查在 `main` 的必需列表里，而被 paths 跳过的 workflow **根本不汇报状态**，
@@ -122,7 +121,7 @@ stub `gh` 真跑两个脚本，再从 `release.yml` 抽收敛步骤的 run 块�
 
 ## acceptance gate（#1422）
 
-`ci-docs.yml` 里名字写死的 job `acceptance gate`：PR 碰界面文案路径（`owner-triage.sh` 的 `UI_GLOBS`）、核心路径，或 `apps/**` 下的非测试文件（测试位置见 `acceptance-gate.sh` 的 `TEST_RE`）时，
+`ci-docs.yml` 里名字写死的 job `acceptance gate`：PR 碰界面文案路径（`acceptance-gate.sh` 的 `UI_GLOBS`）、核心路径，或 `apps/**` 下的非测试文件（测试位置见 `acceptance-gate.sh` 的 `TEST_RE`）时，
 按级别判（#1471 按版本验收）：用户看得到的改动（含只改更新说明）合入不要验收行，直接绿，发版前由 `just release-scope` 的台账兜住；
 碰核心的要正文引用 origin/main 上已采纳的方案，看不见的核心（如发布链脚本）还要改动带测试，否则红；只改版本号行的核心文件不算核心
 （`ci-paths.sh core --diff`）；自动级直接绿。改正文补方案引用后 `edited` 事件会重跑它。
@@ -135,12 +134,7 @@ stub `gh` 真跑两个脚本，再从 `release.yml` 抽收敛步骤的 run 块�
 在 `CI Docs gate` 的 needs 里；PR 上按自己的路径判（`tools/**`、`justfile`、`.github/**`、`AGENTS.md`），push 到 main 与发版调用时全跑。
 已在别的 job 里跑的（md-check、token-check、shell-vars-check、identity-check、supply-chain-check）不进这份清单，免得重复。
 
-新加 `*-test` recipe 时：能在 ubuntu 上跑的进 `flow-tests`；只能在别的 lane 跑的（要 Android SDK、Xcode 模拟器等），
-登记进 `tools/test-flow-tests-wired.sh` 头部的例外表，写明 workflow 文件、该 workflow 非注释行里必须出现的字符串和原因。
-在 ubuntu 上会 SKIP 的（如 `heavy-lock-test` 依赖 macOS 的 `lockf`）不许进 `flow-tests` 假绿：登记为「CI 上没有 lane」、带跟进卡号，
-并留在 `ci-docs` 的直接依赖里，至少本地照跑。
-元测试 `just flow-tests-wired-test` 核对每个 `*-test` 都接上了、例外登记的字符串真在那个 workflow 里、
-gate 的 needs 里有 `flow-tests`、触发接线（`changes` 的 `flow` 输出与路径）没被改成恒跳过，并带变异反证；它本身也在 `flow-tests` 里。
+新加流程/门禁测试时：能在 ubuntu 上跑的进 `flow-tests`（核心流程引擎自测统一在 `tools/test-flow.py`）；在 ubuntu 上会 SKIP 的（如 `heavy-lock-test` 依赖 macOS 的 `lockf`）留在 `ci-docs` 的直接依赖里。
 
 ## 核心路径
 
@@ -157,14 +151,13 @@ gate 的 needs 里有 `flow-tests`、触发接线（`changes` 的 `flow` 输出�
 job 永远成功，结论只看状态。它用 `pull_request_target`：评审工具取 main 上的版本，PR 头提交只当数据读，
 别往里加执行 PR 代码的步骤（理由见该 workflow 头注释）。fork 的 PR 不跑、不出状态，合不进。
 只评正式 PR（#1470）：草稿不评，`ready_for_review` 转正式时评，与 CI 并行；job 第一步（检出之前）就把头提交的 `review/agent` 写成 pending，
-改正文（如删掉方案引用）后、新结论出来前不会挂着旧的 success。`review.sh` 写成状态后才打 `REVIEW_STATUS_WRITTEN=` 标记，
+改正文（如删掉方案引用）后、新结论出来前不会挂着旧的 success。`flow.py review` 写成状态后才打 `REVIEW_STATUS_WRITTEN=` 标记，
 `ci-review.sh publish` 没看到标记就兜底写 error。
 每次评审在评论末尾留隐藏标记（头提交、PR 整体 diff 的指纹、agent 结论），只认 `github-actions[bot]` 写的：头提交评过、或 PR 整体 diff
-没变（只合进了 main）就复用结论、不调模型，用当前正文重判方案引用（acceptance gate）；上次评到的提交是头提交的祖先就只评增量（只看 PR 上次与现在改动的文件），
-附上次的评审意见与已关闭线程的裁决；不是祖先或判不了就全量。意见分「阻断 / 建议 / 风格」，只看阻断行：有阻断行写 failure（模型写 PASS 也算），只有建议、风格写 success（模型写 FAIL 也算）。
+没变（只合进了 main）就复用结论、不调模型，用当前正文重判方案引用（acceptance gate）；只要 PR 整体 diff 变化一律全量审阅 `origin/main...HEAD` 完整 diff（废除增量盲区）。意见分「阻断 / 建议 / 风格」，阻断行写 failure。
 owner 复核放行：PR 上评论 `/review-override <理由>` 触发 `issue_comment` 的 `review override (owner 复核放行)` job，
 用 gh api 现查作者对本仓的权限（admin 才认，`author_association` 在组织仓库是 MEMBER，不作依据），通过后留 `agent=OVERRIDE` 标记，
-只对当时的头提交有效。判据测试：`tools/test-ci-review.sh`、`tools/test-flow-review.sh`。
+只对当时的头提交有效。判据测试：`tools/test-ci-review.sh`。
 
 ## main 红了自动开卡（#1469）
 
