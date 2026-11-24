@@ -61,7 +61,7 @@ HOST_SKIPPED=""
 # 宿主系统：uname -s（Darwin / Linux / MINGW64_NT-* / MSYS_NT-* / CYGWIN_NT-*）。
 # 单独抽成函数，test-e3.sh 才能按宿主类型桩替（#1728 三类宿主断言）。
 host_os() { uname -s; }
-# Windows 宿主判定：Git Bash 的 uname -s 是 MINGW* / MSYS* / CYGWIN*（口径同 tools/test-flow-worker.sh）。
+# Windows 宿主判定：Git Bash 的 uname -s 是 MINGW* / MSYS* / CYGWIN*。
 is_windows_host() { case "$(host_os)" in MINGW* | MSYS* | CYGWIN*) return 0 ;; *) return 1 ;; esac; }
 host_ends() { # host_ends <空格分隔的端>
   local e

@@ -171,10 +171,31 @@ else
     pass "场景 9: Tier 3 断链变红（反证成功）"
 fi
 
+# 场景 10: 干净检出不需要本机专用配置。
+cat > "$FIXTURE/AGENTS.md" <<'EOF'
+Local configuration: `.claude/settings.local.json`.
+EOF
+if python3 "$CHECKER" --tier 1 --root "$FIXTURE" >"$TMP/local-config.log" 2>&1; then
+    pass "场景 10: 本机配置不要求出现在干净检出"
+else
+    cat "$TMP/local-config.log"
+    fail "场景 10: 本机配置被误判为仓库文件"
+fi
+
+# 场景 11: Windows 非 UTF-8 输出编码不能改变检查的退出状态。
+cat > "$FIXTURE/AGENTS.md" <<'EOF'
+Run `tools/real_tool.sh`.
+EOF
+if PYTHONIOENCODING=gbk:strict python3 "$CHECKER" --tier 1 --root "$FIXTURE" >"$TMP/gbk.log" 2>&1; then
+    pass "场景 11: GBK 输出下有效文档仍为绿"
+else
+    cat "$TMP/gbk.log"
+    fail "场景 11: GBK 输出下有效文档应绿但红"
+fi
+
 if [ "$fail_count" -gt 0 ]; then
     echo "❌ $fail_count 个场景失败"
     exit 1
 fi
 
-echo "✅ 全部 9 个反证与自测场景全绿！"
-
+echo "✅ 全部 11 个反证与自测场景全绿！"

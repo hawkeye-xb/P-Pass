@@ -1,9 +1,9 @@
 # 独立评审（#1410 落地，#1435 起即合入门禁，#1470 改为只评正式 PR、只评增量、三级结论）：CI 上的评审 job 就是
 # AGENTS.md「独立评审」。
 #
-# 什么时候评（#1470）：草稿 PR 不评；正式 PR（opened 非草稿、ready_for_review、synchronize、reopened）评，与 CI 并行。
-# 推新提交只评增量（上次评到的提交是头提交的祖先时）；edited（只改正文）与只合进 main 的推送复用上次结论、不调模型；
-# 只有阻断级（误放行 / 安全 / 越界）意见让 review/agent 为 failure。判定都在 tools/flow/review.sh。
+# 什么时候评：草稿 PR 不评；正式 PR（opened 非草稿、ready_for_review、synchronize、reopened）全量审阅完整 diff，与 CI 并行。
+# edited（只改正文）与只合进 main 的推送复用上次结论、不调模型；
+# 只有阻断级（误放行 / 安全 / 越界）意见让 review/agent 为 failure。判定都在 tools/flow/flow.py review。
 # owner 复核放行：仓库 owner 在 PR 上评论「/review-override <理由>」，override job 核对作者后把该头提交的
 # review/agent 改为 success（tools/flow/ci-review.sh override）。
 #
@@ -13,9 +13,9 @@
 # 自动合入不在这里开：用 GITHUB_TOKEN 开的自动合入，合入由 github-actions 完成，不触发 main 上的 push 流水线；
 # 改由开 PR 的会话用自己的身份开（just done），靠必需检查把关。
 #
-# ⚠️ 为什么是 pull_request_target：评审结论是门禁，评审工具（本文件、tools/flow/*.sh、review-prompt.md、
+# ⚠️ 为什么是 pull_request_target：评审结论是门禁，评审工具（本文件、tools/flow/*、review-prompt.md、
 # 界面路径清单、核心名单）必须取 main 上的版本，否则 PR 改一下评审脚本就能让自己恒判通过。PR 头提交只当
-# 被读的数据：review.sh 从 refs/pull/N/head 建临时只读检出，评审 agent 只有 Read / Grep / Glob，且不读检出里的
+# 被读的数据：flow.py review 从 refs/pull/N/head 建临时只读检出，评审 agent 只有 Read / Grep / Glob，且不读检出里的
 # .claude/ 配置、hooks、MCP（ci-review.sh 的 agent 那步加 --setting-sources user --strict-mcp-config；那步也不给任何 GitHub token）。
 # 别往这里加执行 PR 代码的步骤（构建、测试、npm install PR 里的依赖）。
 # 代价：改评审工具本身的 PR 按 main 上的旧工具评审。
@@ -47,7 +47,7 @@ jobs:
     name: review (独立评审)
     # edited 只认人改正文（如补方案引用）：CodeRabbit 等 bot 会改 PR 正文写摘要，不能每次都让同一提交重评一遍
     # （LLM 结论有波动，同一提交的 success 可能被重评成 failure），也不能把正在跑的评审取消掉。
-    # 草稿不评（#1470）；edited 头提交已评过时 review.sh 复用结论、不调模型。
+    # 草稿不评（#1470）；edited 头提交已评过时 flow.py review 复用结论、不调模型。
     if: >-
       ${{ github.event_name == 'pull_request_target'
       && github.event.pull_request.head.repo.full_name == github.repository
@@ -76,7 +76,7 @@ jobs:
         run: |
           gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" -f state=pending -f context="review/agent" \
             -f description="独立评审进行中" >/dev/null
-      # 检出 main（pull_request_target 的默认 ref），不检出 PR 头提交；PR 内容由 review.sh 只读取用。
+      # 检出 main（pull_request_target 的默认 ref），不检出 PR 头提交；PR 内容由 flow.py review 只读取用。
       # persist-credentials: false：不把 GITHUB_TOKEN 写进磁盘上的 git 配置，评审 agent 用 Read 读不到。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

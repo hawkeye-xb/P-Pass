@@ -11,6 +11,15 @@
 // FakeReader 顶替；四条路的「读本机 / 回退」判定全在 JVM 上可判。
 package com.hawkeyexb.ppass.ui
 
+import com.hawkeyexb.ppass.backup.LOCAL_INDEX_EMPTY_RETRY_MS
+import com.hawkeyexb.ppass.backup.LOCAL_INDEX_REFRESH_MS
+import com.hawkeyexb.ppass.backup.LocalFirstLoader
+import com.hawkeyexb.ppass.backup.LocalFirstOriginals
+import com.hawkeyexb.ppass.backup.LocalOriginal
+import com.hawkeyexb.ppass.backup.LocalSourceIndex
+import com.hawkeyexb.ppass.backup.OriginalReader
+import com.hawkeyexb.ppass.backup.localIndexReloadDue
+import com.hawkeyexb.ppass.backup.sampleSizeFor
 import com.hawkeyexb.ppass.backup.order.Order
 import com.hawkeyexb.ppass.backup.order.OrderState
 import com.hawkeyexb.ppass.proto.AssetMeta
@@ -247,9 +256,7 @@ class LocalSourceFirstTest {
 
     @Test
     fun newFileHasNoUplinkOfItsOwn() {
-        // 源码守卫：新增的本机读取实现里不许出现任何上行出口（上传/协议编码）。
-        // 出网只可能在 PhotosScreen 传进来的远端 lambda 里，而它只收 hash 与目标文件。
-        val source = File("src/main/java/com/hawkeyexb/ppass/ui/LocalSourceIndex.kt").readText()
+        val source = File("src/main/java/com/hawkeyexb/ppass/backup/LocalSourceIndex.kt").readText()
         for (banned in listOf("DaemonClient", "ProtoJson", "Methods.", "downloadAsset", "subscribeTimeline")) {
             assertFalse("LocalSourceIndex.kt 不应出现 $banned", source.contains(banned))
         }

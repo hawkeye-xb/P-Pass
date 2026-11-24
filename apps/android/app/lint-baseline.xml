@@ -569,37 +569,4 @@
             column="46"/>
     </issue>
 
-    <issue
-        id="UnusedResources"
-        message="The resource `R.drawable.ic_notification` appears to be unused"
-        errorLine1="&lt;vector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
-        errorLine2="^">
-        <location
-            file="src/main/res/drawable/ic_notification.xml"
-            line="2"
-            column="1"/>
-    </issue>
-
-    <issue
-        id="UnusedResources"
-        message="The resource `R.string.notif_backup_failed_title` appears to be unused"
-        errorLine1="    &lt;string name=&quot;notif_backup_failed_title&quot;>Backup didn\&apos;t finish&lt;/string>"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/values/strings.xml"
-            line="90"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="UnusedResources"
-        message="The resource `R.string.notif_backup_failed_body` appears to be unused"
-        errorLine1="    &lt;string name=&quot;notif_backup_failed_body&quot;>%1$d photos didn\&apos;t make it home — open to see&lt;/string>"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/values/strings.xml"
-            line="91"
-            column="13"/>
-    </issue>
-
 </issues>

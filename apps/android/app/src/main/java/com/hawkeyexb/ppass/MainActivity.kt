@@ -288,7 +288,7 @@ internal fun scopeSinceOptionLabel(context: Context, sinceSec: Long?, nowMs: Lon
 /** 设置行「备份哪些照片」的值：[sinceSec] 为空 = 含以前的照片；否则「10月29日起的照片」（英文比选项短）。 */
 internal fun scopeValueLabel(context: Context, sinceSec: Long?, nowMs: Long = System.currentTimeMillis()): String =
     if (sinceSec == null) {
-        context.getString(R.string.scope_value_all)
+        ""
     } else {
         context.getString(R.string.scope_value_since, scopeSinceDate(sinceSec, nowMs))
     }

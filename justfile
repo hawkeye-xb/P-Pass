@@ -81,7 +81,7 @@ setup:
 # bash 能否真执行、本地提交拦截、gh 读 issue、提交身份白名单、磁盘 ≥ 15G；私仓模式与在线设备只报不判。
 # 任一必需项不满足就非 0 退出并打印怎么修。just start 与 owner 各命令开头都会先跑它。
 doctor:
-  @bash tools/flow/doctor.sh
+  @python3 -B -I tools/flow/flow.py doctor
 
 # ── Format & Lint ───────────────────────────────────
 
@@ -202,15 +202,10 @@ toolchain-check:
 #
 # 用 shebang 配方是刻意的——它绕开 just 的 shell 设置，将来若为 Windows 配上
 # `set windows-shell`（QA-08）这两条不会跟着坏。
-# 文档分层活物锚点校验（#1991 / #1996）：
-# 第 1 层校验现行 AI/工程规范相对链接 + 代码路径 + just recipe；
-# 第 2 层校验历史决策/记录相对链接（不扫代码路径）。
-# 官网 Blog 独立在第 3 层校验（site.yml），不卡日常代码迭代。
 doc-anchors-check:
   @python3 tools/check-doc-anchors.py --tier 1
   @python3 tools/check-doc-anchors.py --tier 2
 
-# 解释器探测同 md-check（理由见上方 QA-07 注释）。
 md-check:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -303,8 +298,14 @@ mobile-static-check:
   tools/ios/check-testflight-signing.sh --self-test > /dev/null
   tools/ios/check-testflight-signing.sh
   python3 tools/ios/gen-strings.py --check
+  python3 tools/check-dead-i18n.py --self-test > /dev/null
+  python3 tools/check-dead-i18n.py
+  python3 tools/check-desktop-dead-components.py --self-test > /dev/null
+  python3 tools/check-desktop-dead-components.py
   tools/ios/check-no-color-literals.sh --self-test > /dev/null
   tools/ios/check-no-color-literals.sh
+  tools/check-ui-truth-table.sh --self-test > /dev/null
+  tools/check-ui-truth-table.sh
   @for l in en zh; do cmp -s assets/i18n/$l.json apps/android/app/src/main/assets/i18n/$l.json || { echo "✗ apps/android/app/src/main/assets/i18n/$l.json 与 assets/i18n 不一致——从 assets/i18n 复制过去"; exit 1; }; done
   @echo "ok: Android i18n 副本与 assets/i18n 逐字节一致"
 
@@ -580,17 +581,21 @@ version-bump-i18n-test:
 bump-version-test:
   @bash tools/test-bump-version.sh
 
-# 文档分层活物锚点自测与反证（#1991 / #1996；进 flow-tests / ci-docs）
+dead-i18n-test:
+  @bash tools/test-check-dead-i18n.sh
+
+desktop-dead-components-test:
+  @bash tools/test-check-desktop-dead-components.sh
+
+# 流程与发版闸门禁的自测：本地 ci / ci-docs 与 CI（ci-docs.yml 的 flow-tests job）共用这一份清单。
 doc-anchors-test:
   @bash tools/test-check-doc-anchors.sh
 
-# 流程门禁脚本的自测（#1493）：本地 ci / ci-docs 与 CI（ci-docs.yml 的 flow-tests job）共用这一份清单。
-# 只收别的 lane 都没跑的流程自测；md-check / token-check / shell-vars-check / identity-check / supply-chain-check
-# 已在 ci-docs.yml、ci-identity.yml 的其它 job 里跑，留在 ci-docs 的直接依赖里。
-# justfile 里每个 *-test recipe 要么在这里，要么登记在 tools/test-flow-tests-wired.sh 的例外表里（flow-tests-wired-test 会挡）。
-# heavy-lock-test 依赖 macOS 才有的 lockf，ubuntu 上会 SKIP 假绿，不进这里；登记为例外（#1502），本地 ci / ci-docs 直接依赖它。
-flow-tests: doc-anchors-test hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test flow-v3-harness-test macos-runner-test main-red-test flow-tests-wired-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test
+flow-tests: doc-anchors-test hooks-test flow-engine-test flow-ci-review-test flow-gate-status-test macos-runner-test main-red-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test dead-i18n-test desktop-dead-components-test
   @echo "==> flow-tests: green ✅"
+
+flow-engine-test:
+  @python3 -B -I tools/test-flow.py
 
 # #1468 的 lane 不变量（#1489）：三个 Windows job 在 PR 上跳过、五条 lane 有 push: branches [main]、
 # push 上 cancel-in-progress 为 false；读 workflow YAML（缺 PyYAML 判红，不 SKIP），带变异反证。
@@ -601,12 +606,6 @@ ci-lane-invariants-test:
 # fetch-ffmpeg.sh 的下载带重试且 sha256 校验还在；读实际文件，带变异反证。
 ci-download-resilience-test:
   @bash tools/test-ci-download-resilience.sh
-
-# 元测试：每个 *-test recipe、tools 下每个 test-*.sh 都接进了 flow-tests / CI lane 或登记的例外，
-# ci / ci-docs 都依赖 flow-tests，ci-docs.yml 有写死名字的 flow-tests job 且进了 CI Docs gate；
-# 带变异反证（#1493、#1709）。
-flow-tests-wired-test:
-  @bash tools/test-flow-tests-wired.sh
 
 # iOS 界面回归的判定自测（#1458/#1701）：只认本例日志、通过行按顺序出现；几秒、不要设备。
 ui-regress-judge-test:
@@ -623,10 +622,8 @@ e3-test:
 # 而改一个字的卡也要跑一遍——远端 CI 反倒早就按 paths 分好了 lane
 # （纯文档提交只点起 ci-docs）。本地缺的就是同一件事。
 #
-# 门禁挑选（tools/flow/worker-lib.sh 的 flow_pick_gates，#1750）把纯文本改动分到了秒级的
-# `just md-check`；本条是流程文件（justfile / issue 与 PR 模板 / AGENTS.md；tools 下的脚本
-# 改动跑引用到它的 tools/test-*.sh，workflow 另加 actionlint）的聚合入口
-# ——整套流程自测在 tools/test-flow-worker.sh 变异反证下保持全量，一个测试都没删。
+# 门禁挑选（tools/flow/flow.py 的 pick_gates，#1750）把纯文本改动分到了秒级的
+# `just md-check`；本条是流程文件（justfile / issue 与 PR 模板 / AGENTS.md；workflow 另加 actionlint）的聚合入口。
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
@@ -888,54 +885,41 @@ test-dogfood-assets:
     bash tools/test-dogfood-assets.sh --self-test
     bash tools/test-dogfood-assets.sh
 
-# ── worker 流程 ─────────────────────────────────────────────────────────
-# worker 只需这三条：start → 改代码、git commit -s → done；卡住用 stuck。
-# 标签流转、worktree、推送、回执全由命令完成。说明见 AGENTS.md「交付流程」。
+# ── 统一协作流程（tools/flow/flow.py）──────────────────────────────────
 
-# 领卡：校验 ready + 验收场景（无人模式 --unattended 先查设备在线/未锁屏，遇阻 0s SUSPENDED_ENV 跳过）→ 建 worktree → ready→doing。
-# 同一个功能的几张卡领到一条分支：just start <号> <号>… [--name <功能名>] [--unattended]。
 start n *args:
-    bash tools/flow/worker-start.sh {{n}} {{args}}
+    python3 -B -I tools/flow/flow.py start {{n}} {{args}}
 
-# 交卡（在卡 worktree 里跑）：基线核心禁区校验 + V3 四类任务门禁（v3-seal）+ 改动路径门禁（--rebase 或 --unattended 自动变基重验 + 两轮熔断）。
-# 全绿才推送、每张卡贴回执，doing→review，单独一行打印开 PR 命令（gh pr create …，closes 全部卡），由执行者自己运行；
-# 核心违规打 blocked；本地门禁或 verify 红不推送、不改卡状态、不刷 issue（无人模式连续 2 轮未过自动熔断跳过）。
 done *args:
-    bash tools/flow/worker-done.sh {{args}}
+    python3 -B -I tools/flow/flow.py done {{args}}
 
-# V3 模拟演练场入口：改流程/门禁规则前先做本地 2 秒对抗自测（selftest）或真模型预演（live [model]），不直接拿真仓试错。
-flow-bench *args:
-    python3 tools/flow/bench/bench.py {{args}}
+[positional-arguments]
+dispatch *args:
+    python3 -B -I tools/flow/flow.py dispatch "$@"
+
+probe-slots *args:
+    python3 -B -I tools/flow/flow.py probe-slots {{args}}
 
 # 按版本验收（#1471）：从 git 算候选版相对上一个正式版、用户看得见的改动（PR + 级别 + 卡上的验收场景）。
-#   just release-scope [--since <tag>] [--to <ref>]                列范围（--since 给上个 test 包 = 数自上个包以来的用户可见 PR）
-#   just release-scope --ledger <台账号> --pkg <test 包 tag>        出新 test 包后更新台账：只新增待验与待重验，其余沿用
 release-scope *args:
     bash tools/flow/release-scope.sh {{args}}
 
-# 发版前验收门禁（#1471）：台账里候选版的用户可见改动全部已验、验过之后相关文件没再改，才绿；有待验 / 待重验逐项列出。
-# 正式版发版时 Release 自动按标题「[验收] <正式 tag>」找台账跑同一份判定（#1486）；这里供 owner 提前手动查。
+# 发版前验收门禁（#1471）：台账里候选版的用户可见改动全部已验、验过之后相关文件没再改，才绿。
 release-acceptance ledger *args:
     bash tools/flow/release-acceptance.sh {{ledger}} {{args}}
 
-# 四种必须停下的情况的统一出口：命中核心 / 需改范围外文件 / 没有验收场景 / 连红 3 次。
 stuck n reason:
-    bash tools/flow/worker-stuck.sh {{n}} "{{reason}}"
+    python3 -B -I tools/flow/flow.py stuck {{n}} "{{reason}}"
 
-# 合入前独立评审：新起一个没参与写代码的只读 agent，对照 PR 关联卡的范围与验收查正确性，
-# 结果写成 PR 评论并在头提交上写提交状态 review/agent。模型可配（默认 claude，PPASS_REVIEW_AGENT 可换命令）。
+# 合入前全量独立只读评审（彻底废除增量盲区，审阅完整 origin/main...HEAD diff）。
 review pr *args:
-    bash tools/flow/review.sh {{pr}} {{args}}
+    python3 -B -I tools/flow/flow.py review {{pr}} {{args}}
 
-# just review 的判据测试：假 gh + 假 agent，校验评论格式、提交状态与只读权限；进 ci / ci-docs。
-flow-review-test:
-    @bash tools/test-flow-review.sh
-
-# CI 评审 job（tools/flow/ci-review.sh）的判据测试：假 gh + 假 agent，结论写成 review/agent；进 flow-tests（#1493）。
+# CI 评审 job（tools/flow/ci-review.sh）的判据测试：假 gh + 假 agent，结论写成 review/agent。
 flow-ci-review-test:
     @bash tools/test-ci-review.sh
 
-# PR 卡点：列出未过的检查、未解决的评审线程、冲突、是否开了自动合入（退出码 0 全清 / 1 有卡点 / 3 还在等结果）。
+# PR 卡点：列出未过的检查、未解决的评审线程、冲突、是否开了自动合入。
 pr-status pr:
     bash tools/flow/pr-status.sh {{pr}}
 
@@ -944,30 +928,14 @@ pr-status pr:
 pr-thread id reply:
     bash tools/flow/pr-thread.sh "$@"
 
-# just pr-status / pr-thread 的判据测试：假 gh，每条卡点配反证；进 ci / ci-docs。
-flow-pr-test:
-    @bash tools/test-flow-pr.sh
-
-# 门的状态：被手动停用的 workflow、发版调用（workflow_call）时被跳过的 job、main 的必需检查，
-# 以及每个停用项有没有标题带 workflow 名字的卡。
-# 停了没卡就红（退出码 1）——停用 workflow 是仓库设置动作，不进 git，只有这条命令会把这件事照出来。
+# 门的状态：被手动停用的 workflow、发版调用时被跳过的 job、main 的必需检查。
 gate-status:
     bash tools/flow/gate-status.sh
 
-# just gate-status 的判据测试：假 gh，六种情形（含反证，含"只认标题"）；进 ci / ci-docs。
 flow-gate-status-test:
     @bash tools/test-gate-status.sh
 
-# worker 三条命令的判据测试：临时仓库 + 假 gh / just，每条拒绝配反证；进 ci / ci-docs。
-flow-worker-test:
-    @bash tools/test-flow-worker.sh
-
-# V3 协作工作流门禁核心与模拟演练场的判据测试（13 场景对抗自测 + 三组变异反证；进 flow-tests / ci-docs）。
-flow-v3-harness-test:
-    @bash tools/test-flow-v3-harness.sh
-
-# ── owner 流程（tools/flow/owner-*.sh，说明见 docs/runbook/owner.md）──────────
-# 每一步自动判定；红了或判定不了就经 owner-stuck 写 issue 并停下，脚本里没有跳过。
+# ── owner 流程 ──────────────────────────────────────────────────────────
 
 # 在 origin/main 上打 test tag 并等 Release 结论（端 ∈ android macos windows ios；正式版拒绝）
 release-test +args:
@@ -978,28 +946,22 @@ release-test +args:
 idea text *args:
     bash tools/flow/owner-idea.sh "$@"
 
-# 给 status:inbox 的卡定方案：校验模型写的方案文件，按范围路径与字段分流（ready / needs:product / blocked）
-triage issue plan:
-    bash tools/flow/owner-triage.sh {{issue}} {{plan}}
+# 极简分拣立项（不再强制 18 字段方案表）
+triage issue *args:
+    python3 -B -I tools/flow/flow.py triage {{issue}} {{args}}
 
-# owner 流程停下的统一出口：写 status:blocked issue 或评论（--issue/--pr/--product/--log）
-# 参数原样转交（带空格的原因、选项不会被拆开）。
 [positional-arguments]
 owner-stuck reason *args:
-    bash tools/flow/owner-stuck.sh "$@"
+    python3 -B -I tools/flow/flow.py owner-stuck "$@"
 
-# owner 流程脚本的判据测试：临时仓库 + 假 gh，每条带反证（进 ci / ci-docs）
-flow-owner-test:
-    @bash tools/test-flow-owner.sh
-
-# main 红了自动开卡（tools/flow/main-red.sh）的判据测试：假 gh，每条带反证（#1469；进 ci / ci-docs）
+# main 红了自动开卡（tools/flow/main-red.sh）的判据测试：假 gh，每条带反证
 main-red-test:
     @bash tools/test-main-red.sh
 
-# 重编译锁入口的判据测试：可重入、串行、超时（#1308；进 ci / ci-docs）
+# 重编译锁入口的判据测试：可重入、串行、超时
 heavy-lock-test:
     @bash tools/test-heavy-lock.sh
 
-# workflow 不得再用已停用的 macOS runner（#1477；进 ci / ci-docs）
+# workflow 不得再用已停用的 macOS runner
 macos-runner-test:
     @bash tools/test-macos-runner.sh

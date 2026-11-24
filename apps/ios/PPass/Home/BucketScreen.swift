@@ -91,6 +91,10 @@ struct BucketScreen: View {
         access == .full ? .none : .noAccess
     }
 
+    static func noticeTitleKey(for access: MediaAccess) -> String? {
+        notice(for: access) == .noAccess ? "scope_album_no_access_title" : nil
+    }
+
     /// 相册卡片显示哪些：完整授权显示全部；相册未完整授权只显示「当前编辑态里选中的相册」
     /// （已保存的 + 本次未保存勾选的）。已保存但当前列表里没有的相册仍留在 checked（不静默丢范围），
     /// 但无法逐个展示/取消——既有界面限制，后续卡处理（#1775）。

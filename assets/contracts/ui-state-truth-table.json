@@ -1,0 +1,296 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": 1,
+  "description": "Cross-platform single source of truth for mobile UI states, permissions, guides, and connection rules (#1990-2).",
+  "connection_states": [
+    {
+      "id": "pairing_lost_trumps_all",
+      "pairing_lost": true,
+      "subscribe_connected": true,
+      "subscribe_exhausted": false,
+      "subscribe_had_failure": false,
+      "expected_status": "PairingLost",
+      "is_connected": false,
+      "needs_repair": true,
+      "detail_dot_color": "ACT"
+    },
+    {
+      "id": "pairing_lost_when_exhausted",
+      "pairing_lost": true,
+      "subscribe_connected": false,
+      "subscribe_exhausted": true,
+      "subscribe_had_failure": true,
+      "expected_status": "PairingLost",
+      "is_connected": false,
+      "needs_repair": true,
+      "detail_dot_color": "ACT"
+    },
+    {
+      "id": "connected_normal",
+      "pairing_lost": false,
+      "subscribe_connected": true,
+      "subscribe_exhausted": false,
+      "subscribe_had_failure": false,
+      "expected_status": "Connected",
+      "is_connected": true,
+      "needs_repair": false,
+      "detail_dot_color": "SAFE"
+    },
+    {
+      "id": "connected_trumps_stale_exhausted",
+      "pairing_lost": false,
+      "subscribe_connected": true,
+      "subscribe_exhausted": true,
+      "subscribe_had_failure": true,
+      "expected_status": "Connected",
+      "is_connected": true,
+      "needs_repair": false,
+      "detail_dot_color": "SAFE"
+    },
+    {
+      "id": "offline_exhausted",
+      "pairing_lost": false,
+      "subscribe_connected": false,
+      "subscribe_exhausted": true,
+      "subscribe_had_failure": true,
+      "expected_status": "Offline",
+      "is_connected": false,
+      "needs_repair": false,
+      "detail_dot_color": "IDLE"
+    },
+    {
+      "id": "reconnecting_after_failure",
+      "pairing_lost": false,
+      "subscribe_connected": false,
+      "subscribe_exhausted": false,
+      "subscribe_had_failure": true,
+      "expected_status": "Reconnecting",
+      "is_connected": false,
+      "needs_repair": false,
+      "detail_dot_color": "WAITING"
+    },
+    {
+      "id": "unknown_initial",
+      "pairing_lost": false,
+      "subscribe_connected": false,
+      "subscribe_exhausted": false,
+      "subscribe_had_failure": false,
+      "expected_status": "Unknown",
+      "is_connected": false,
+      "needs_repair": false,
+      "detail_dot_color": "IDLE"
+    }
+  ],
+  "photos_guides": [
+    {
+      "id": "finished_blocks_all_guides",
+      "scope_on": false,
+      "first_uploaded": false,
+      "background_on": false,
+      "finished": true,
+      "first_choice_pending": true,
+      "expected_guide": "None"
+    },
+    {
+      "id": "first_time_unconfigured_guides_scope",
+      "scope_on": false,
+      "first_uploaded": false,
+      "background_on": false,
+      "finished": false,
+      "first_choice_pending": true,
+      "expected_guide": "EnableScope"
+    },
+    {
+      "id": "saved_empty_scope_does_not_reprompt_scope",
+      "scope_on": false,
+      "first_uploaded": false,
+      "background_on": false,
+      "finished": false,
+      "first_choice_pending": false,
+      "expected_guide": "None"
+    },
+    {
+      "id": "scope_on_without_first_upload_shows_no_guide",
+      "scope_on": true,
+      "first_uploaded": false,
+      "background_on": false,
+      "finished": false,
+      "first_choice_pending": false,
+      "expected_guide": "None"
+    },
+    {
+      "id": "scope_on_first_uploaded_no_background_guides_background",
+      "scope_on": true,
+      "first_uploaded": true,
+      "background_on": false,
+      "finished": false,
+      "first_choice_pending": false,
+      "expected_guide": "EnableBackground"
+    },
+    {
+      "id": "scope_on_first_uploaded_background_on_finished",
+      "scope_on": true,
+      "first_uploaded": true,
+      "background_on": true,
+      "finished": false,
+      "first_choice_pending": false,
+      "expected_guide": "None"
+    }
+  ],
+  "scope_access_policies": [
+    {
+      "access": "FULL",
+      "offers_album_choices": true,
+      "shows_unrestricted_notice": false,
+      "notice_key": null
+    },
+    {
+      "access": "PARTIAL",
+      "offers_album_choices": false,
+      "shows_unrestricted_notice": true,
+      "notice_key": "scope_album_no_access_title"
+    },
+    {
+      "access": "NONE",
+      "offers_album_choices": false,
+      "shows_unrestricted_notice": true,
+      "notice_key": "scope_album_no_access_title"
+    }
+  ],
+  "initial_scope_times": [
+    {
+      "id": "saved_without_since_shows_all",
+      "saved": true,
+      "has_since": false,
+      "partial_access": false,
+      "expected_choice": "ALL"
+    },
+    {
+      "id": "saved_with_since_shows_today",
+      "saved": true,
+      "has_since": true,
+      "partial_access": false,
+      "expected_choice": "SINCE_TODAY"
+    },
+    {
+      "id": "unsaved_partial_access_defaults_to_all",
+      "saved": false,
+      "has_since": false,
+      "partial_access": true,
+      "expected_choice": "ALL"
+    },
+    {
+      "id": "unsaved_full_access_defaults_to_today",
+      "saved": false,
+      "has_since": false,
+      "partial_access": false,
+      "expected_choice": "SINCE_TODAY"
+    },
+    {
+      "id": "saved_with_since_retains_today_even_if_partial",
+      "saved": true,
+      "has_since": true,
+      "partial_access": true,
+      "expected_choice": "SINCE_TODAY"
+    },
+    {
+      "id": "saved_without_since_retains_all_even_if_partial",
+      "saved": true,
+      "has_since": false,
+      "partial_access": true,
+      "expected_choice": "ALL"
+    }
+  ],
+  "hero_idle_line_colors": [
+    {
+      "id": "wait_reason_amber",
+      "has_wait_reason": true,
+      "line_type": "AllSafe",
+      "all_safe_allowed": true,
+      "expected_color": "WAITING"
+    },
+    {
+      "id": "wait_reason_amber_overrides_pending",
+      "has_wait_reason": true,
+      "line_type": "Pending",
+      "all_safe_allowed": false,
+      "expected_color": "WAITING"
+    },
+    {
+      "id": "confirmed_safe_green",
+      "has_wait_reason": false,
+      "line_type": "AllSafe",
+      "all_safe_allowed": true,
+      "expected_color": "SAFE"
+    },
+    {
+      "id": "unconfirmed_safe_secondary",
+      "has_wait_reason": false,
+      "line_type": "AllSafe",
+      "all_safe_allowed": false,
+      "expected_color": "SECONDARY"
+    },
+    {
+      "id": "pending_secondary",
+      "has_wait_reason": false,
+      "line_type": "Pending",
+      "all_safe_allowed": true,
+      "expected_color": "SECONDARY"
+    },
+    {
+      "id": "paused_secondary",
+      "has_wait_reason": false,
+      "line_type": "Paused",
+      "all_safe_allowed": true,
+      "expected_color": "SECONDARY"
+    },
+    {
+      "id": "trouble_secondary",
+      "has_wait_reason": false,
+      "line_type": "Trouble",
+      "all_safe_allowed": true,
+      "expected_color": "SECONDARY"
+    },
+    {
+      "id": "ready_secondary",
+      "has_wait_reason": false,
+      "line_type": "Ready",
+      "all_safe_allowed": true,
+      "expected_color": "SECONDARY"
+    }
+  ],
+  "hero_from_today_empties": [
+    {
+      "id": "since_today_zero_zero_shows_empty",
+      "render": "Triplet",
+      "count_m": 0,
+      "count_n": 0,
+      "has_since_today": true,
+      "expected_empty": true
+    },
+    {
+      "id": "all_zero_zero_shows_triplet",
+      "render": "Triplet",
+      "count_m": 0,
+      "count_n": 0,
+      "has_since_today": false,
+      "expected_empty": false
+    },
+    {
+      "id": "since_today_nonzero_shows_triplet",
+      "render": "Triplet",
+      "count_m": 1,
+      "count_n": 1,
+      "has_since_today": true,
+      "expected_empty": false
+    },
+    {
+      "id": "access_blocked_does_not_show_from_today_empty",
+      "render": "AccessBlocked",
+      "count_m": 0,
+      "count_n": 0,
+      "has_since_today": true,
+      "expected_empty": false
+    }
+  ]
+}

@@ -46,7 +46,7 @@ labels: ["status:inbox"]
 
 **验收场景**：
 <!-- 期望行为写成可判定：操作步骤 → 期望结果 → 日志里哪一行算通过。
-     带自动验收判据的卡可附 ```v3-seal 机器封条块（mode: fix / speculate_then_fix / feature / verify + exam_rel + 64位 exam_sha256）。
+     回归单测直接写进各端正式测试套件（禁止提交一次性 exam_* 考卷文件）。
      每条标注证据等级：E1 编译 + just ci｜E2 contract 测试｜E3 真机/真环境实证｜E4 legacy 测试（仅参考） -->
 
 **前置依赖**：

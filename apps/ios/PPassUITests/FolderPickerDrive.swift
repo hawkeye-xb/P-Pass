@@ -1,10 +1,10 @@
 import XCTest
 
-/// #1744 目录来源真机 E3：只负责像用户一样点系统目录选择器（我的 iPhone → 目标目录 → 打开）。
+/// #1744 目录来源真机 E3：只负责像用户一样点系统目录选择器（我的 iPhone → 目标目录路径 → 打开）。
 /// 判定一律看 App 落盘日志与 status.json（UIRegress 同一约定：这里不判 PASS/FAIL，点不到才让 XCTest 失败）。
 /// 由 tools/e3/scenarios/ios/folder-blackmagic.sh 经 xcodebuild test -only-testing 驱动；环境经 TEST_RUNNER_ 前缀传入：
 ///   UIREG_RUN     登记轮次串（透传给 App 的 PPASS_E2E_RUN）
-///   UIREG_TARGET  要在「我的 iPhone」里打开的目录名（默认 Blackmagic Cam）
+///   UIREG_TARGET  要在「我的 iPhone」里逐级打开的目录路径，`/` 分隔（默认 Blackmagic Cam/Media）
 ///   UIREG_STAGE   =1 时 App 侧把所选目录里最小的媒体文件拷进 seed（相册+目录同内容去重用例）
 final class FolderPickerDrive: XCTestCase {
     func testPickFolder() throws {
@@ -16,31 +16,68 @@ final class FolderPickerDrive: XCTestCase {
         if env["UIREG_STAGE"] == "1" { app.launchEnvironment["PPASS_BGTEST_FOLDER_STAGE"] = "1" }
         app.launch()
 
-        let target = env["UIREG_TARGET"] ?? "Blackmagic Cam"
+        let rawTarget = env["UIREG_TARGET"] ?? "Blackmagic Cam/Media"
+        let segments = rawTarget.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard let firstTarget = segments.first, let lastTarget = segments.last else {
+            XCTFail("UIREG_TARGET 为空")
+            return
+        }
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         // 系统目录选择器是跨进程的 Files UI：优先在 app 树里找，找不到再试 springboard（中英都列）。
-        // 真机实测（2026-11-17 无障碍树）：picker 首次呈现要 ~40s，呈现后先落在「位置」列表——
-        // 目标目录是一行 Link（label「Blackmagic Cam, 文件夹 · 22.4 MB」），旁边还有「我的iPhone」
-        // 这一行；点目标行本身**不会**自动进目录（第一次只选中）。所以：
-        //   1) 先等选择器真的出现（最多 120s，别在没出现时就耗掉 30s 重试）；
-        //   2) 进目标目录：点的是那一行 **Link**（内层 Caption 是不可激活文字，真机实测点它没反应），
-        //      等右上角的 DOCPicker.actionButton（label=打开）出现；没出现再点，最多 3 次；
-        //   3) 出现才按确认——绝不盲点，免把别的目录授权进来。
-        waitForPicker(app: app, springboard: springboard, target: target, timeout: 120)
-        sleep(3) // 选择器刚呈现时还在动画里，太早点会被吞掉
-        // 位置页里目标是一个「文件夹块」（整行可点，frame 218×72），但 links 查询会先命中
-        // 块里的小标题（91×20）。取 label 含目标的最大 frame 元素按中心坐标点，才落在整行上。
-        var opened = false
-        for _ in 0..<4 where !opened {
-            guard let row = largestElement(containing: target, in: [app, springboard]) else { break }
-            print("TARGET_ROW frame=\(row.frame) hittable=\(row.isHittable)")
-            row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-            sleep(2)
-            opened = waitForOpenButton(app: app, springboard: springboard, timeout: 12)
+        // 真机实测：iOS 文件选择器会记住上次停留的目录——若上次已在末段目录（如 Title: Media + 打开按钮），
+        // 树里只有 Browse View (Picker) 与末段标题，不会有位置列表或上层段名；先认出 picker 本身，再按当前所在层级导航。
+        guard waitForPicker(app: app, springboard: springboard, segments: segments, timeout: 120) else {
+            dumpTrees(app: app, springboard: springboard, tag: "选择器未出现")
+            XCTFail("120s 内系统目录选择器未出现（路径 \(rawTarget)）")
+            return
         }
-        if !opened {
-            dumpTrees(app: app, springboard: springboard, tag: "打开按钮没出现")
-            XCTFail("进不去目标目录 \(target) 或没出现「打开/Open」（选择器没进入可选状态）")
+        sleep(3) // 选择器刚呈现时还在动画里，太早点会被吞掉
+        if !isAlreadyAtTargetFolder(lastSegment: lastTarget, app: app, springboard: springboard) {
+            // 若当前不在末段目录、也看不到第一段（例如停在别的深层目录），先点底部「浏览 / Browse」回位置列表，再进「我的 iPhone」。
+            if !anyLabel(contains: firstTarget, in: [app, springboard]) {
+                _ = tapIfPresent(in: [app, springboard], labels: ["浏览", "Browse"], timeout: 5)
+                sleep(2)
+            }
+            if !anyLabel(contains: firstTarget, in: [app, springboard]) {
+                _ = tapIfPresent(in: [app, springboard], labels: ["我的 iPhone", "我的iPhone", "On My iPhone"], timeout: 10)
+                sleep(2)
+            }
+            // 找到当前可见的最深起始段（支持选择器停在中间层如 Blackmagic Cam 的情况）
+            var startIdx = 0
+            for idx in segments.indices.reversed() {
+                if idx > 0, isInFolder(named: segments[idx - 1], app: app, springboard: springboard),
+                   anyLabel(contains: segments[idx], in: [app, springboard]) {
+                    startIdx = idx
+                    break
+                }
+            }
+            for idx in startIdx..<segments.count {
+                let segment = segments[idx]
+                let nextSegment = (idx + 1 < segments.count) ? segments[idx + 1] : nil
+                var entered = false
+                for _ in 0..<4 where !entered {
+                    guard let row = largestElement(containing: segment, in: [app, springboard]) else {
+                        sleep(1)
+                        continue
+                    }
+                    print("TARGET_ROW[\(segment)] frame=\(row.frame) hittable=\(row.isHittable)")
+                    row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                    sleep(2)
+                    if let nextSegment {
+                        entered = waitForLabel(contains: nextSegment, in: [app, springboard], timeout: 10)
+                    } else {
+                        entered = isAlreadyAtTargetFolder(lastSegment: lastTarget, app: app, springboard: springboard)
+                            || waitForOpenButton(app: app, springboard: springboard, timeout: 12)
+                    }
+                }
+                if !entered {
+                    dumpTrees(app: app, springboard: springboard, tag: "进目录失败:\(segment)")
+                    XCTFail("进不去目标目录段 \(segment)（完整路径 \(rawTarget)）或没出现「打开/Open」")
+                    return
+                }
+            }
+        } else {
+            print("PICKER_ALREADY_AT_TARGET[\(lastTarget)]")
         }
         let action = app.buttons["DOCPicker.actionButton"].firstMatch
         if action.exists && action.isHittable {
@@ -138,19 +175,43 @@ final class FolderPickerDrive: XCTestCase {
         return false
     }
 
-    /// 等系统目录选择器真的出现：目标行或「我的iPhone」行/位置标签任一可见。超时返回 false 由调用方判失败。
+    /// 等系统目录选择器真的出现：Browse View (Picker) / DOCPicker.actionButton / 任一段名 / 位置页标签任一可见。
     @discardableResult
-    private func waitForPicker(app: XCUIApplication, springboard: XCUIApplication, target: String, timeout: TimeInterval) -> Bool {
+    private func waitForPicker(app: XCUIApplication, springboard: XCUIApplication, segments: [String], timeout: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if anyLabel(contains: target, in: [app, springboard]) { return true }
-            for label in ["我的iPhone", "On My iPhone", "位置", "Browse"] {
-                if app.descendants(matching: .any)
-                    .matching(NSPredicate(format: "label CONTAINS[c] %@", label)).firstMatch.exists { return true }
+            for application in [app, springboard] {
+                if application.otherElements["Browse View (Picker)"].firstMatch.exists { return true }
+                if application.buttons["DOCPicker.actionButton"].firstMatch.exists { return true }
+                if application.navigationBars["FullDocumentManagerViewControllerNavigationBar"].firstMatch.exists { return true }
+            }
+            for seg in segments where anyLabel(contains: seg, in: [app, springboard]) { return true }
+            for label in ["我的 iPhone", "我的iPhone", "On My iPhone", "位置", "浏览", "Browse"] {
+                if anyLabel(contains: label, in: [app, springboard]) { return true }
             }
             sleep(1)
         }
         return false
+    }
+
+    /// 判断选择器当前是否已经处在指定目录内（看 DOC.browsingRoot 的 Title: <name> 或导航栏标题按钮「<name>, 操作菜单」）。
+    private func isInFolder(named folder: String, app: XCUIApplication, springboard: XCUIApplication) -> Bool {
+        for application in [app, springboard] {
+            if application.otherElements.matching(NSPredicate(format: "identifier CONTAINS[c] %@", "Title: \(folder)")).firstMatch.exists {
+                return true
+            }
+            let nav = application.navigationBars["FullDocumentManagerViewControllerNavigationBar"].firstMatch
+            if nav.exists, nav.buttons.matching(NSPredicate(format: "label BEGINSWITH[c] %@", folder)).firstMatch.exists {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// 选择器已处在目标末段目录且右上角「打开/Open」按钮就绪。
+    private func isAlreadyAtTargetFolder(lastSegment: String, app: XCUIApplication, springboard: XCUIApplication) -> Bool {
+        isInFolder(named: lastSegment, app: app, springboard: springboard)
+            && waitForOpenButton(app: app, springboard: springboard, timeout: 3)
     }
 
     /// 选择器里是否已经出现确认按钮：DOCPicker.actionButton（identifier）优先，其次 label 打开/Open。
@@ -201,6 +262,15 @@ final class FolderPickerDrive: XCTestCase {
         for application in apps {
             if application.descendants(matching: .any)
                 .matching(NSPredicate(format: "label CONTAINS[c] %@", text)).firstMatch.exists { return true }
+        }
+        return false
+    }
+
+    private func waitForLabel(contains text: String, in apps: [XCUIApplication], timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if anyLabel(contains: text, in: apps) { return true }
+            sleep(1)
         }
         return false
     }

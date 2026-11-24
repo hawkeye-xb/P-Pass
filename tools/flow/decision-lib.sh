@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# 「已采纳」方案（docs/decisions/）的解析：owner（owner-lib.sh）与 worker（worker-lib.sh）共用这一份，
+# 「已采纳」方案（docs/decisions/）的解析：acceptance-gate.sh 与 repo-lib.sh 共用这一份，
 # 两边判据不许各写一套。只被 source，不单独执行。只用 git / grep / sort（worker 测试的 PATH 白名单）。
 
 # 文本里引用的方案文件路径（docs/decisions/YYYY-MM-DD-*.md，一行一个，去重）。

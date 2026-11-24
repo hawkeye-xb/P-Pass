@@ -13,8 +13,6 @@
 "decision_destination" = "选好相册和时间范围后，每次打开 App，范围内的照片会自动传到 %1$@。";
 "decision_choose_scope" = "开启自动备份";
 "scope_album_no_access_title" = "相册未完整授权";
-"decision_choose_scope_note" = "需要允许访问全部照片";
-"decision_pick_photos" = "先挑几张试试";
 "scan_manual_title" = "输入配对码";
 "scan_manual_body" = "在电脑的「添加设备」里点「无法扫码？复制配对码」，把它发到这台手机上，粘贴到下面。";
 "scan_manual_placeholder" = "ppf://pair?node=…";
@@ -99,8 +97,6 @@
 "last_hours_ago" = "%1$ld 小时前";
 "rule_notify" = "通知";
 "setting_version" = "版本";
-"bucket_title" = "备份哪些照片";
-"bucket_hint" = "只有勾选的相册会备份。";
 "bucket_empty" = "手机上没有照片或视频。";
 "scope_album_no_access_body" = "无法读取这台手机上的照片，没法备份。";
 "scope_album_no_access_action" = "允许访问照片";
@@ -111,9 +107,8 @@
 "bucket_save" = "保存";
 "scope_time_since_date" = "%1$@以后";
 "scope_time_all" = "含以前的照片";
-"scope_value_since" = "%1$@以后";
-"scope_value_all" = "含以前的照片";
-"backup_scope_with_time" = "%1$@，%2$@";
+"scope_value_since" = " · %1$@起";
+"backup_scope_with_time" = "%1$@%2$@";
 "home_empty_albums" = "还没有备份好的照片。备份完成后会显示在这里。";
 "bucket_new" = "新";
 "backup_scope" = "备份范围";
@@ -149,8 +144,6 @@
 "photos_filter_empty" = "没有符合筛选条件的照片。";
 "photos_loading" = "正在读取照片库…";
 "photos_unreachable" = "无法连接电脑。请确认电脑已开机并打开 P-Pass。";
-"photos_no_albums" = "还没有选择相册，不会备份照片。";
-"photos_choose_albums" = "选择相册";
 "photos_live_disconnected" = "与电脑的连接已中断。";
 "photos_live_retry" = "重试";
 "photos_live_reconnecting" = "正在重新连接电脑…";
@@ -183,9 +176,6 @@
 "auto_backup_rule_label" = "自动备份";
 "auto_backup_off_hero" = "还没开自动备份。也可以先挑几张传。";
 "auto_backup_rule_denied_hint" = "没有照片权限，自动备份没开。可以在系统设置里允许，或先挑几张传。";
-"photos_first_run_intro" = "已连上 %1$@。手机上的照片会存到这台电脑。";
-"photos_first_run_enable" = "开启自动备份";
-"photos_first_run_pick" = "先挑几张传";
 "photos_guide_scope" = "自动备份未开启";
 "photos_guide_background" = "App 关闭也能备份";
 "photos_guide_enable" = "开启";

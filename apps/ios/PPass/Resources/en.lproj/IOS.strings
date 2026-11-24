@@ -75,19 +75,11 @@
 /* #1272 B：设置页末尾「更多」二级页入口（存储电脑、断开连接、版本、检查更新）。 */
 "more_label" = "More";
 
-/* #1323（iOS 独有）：部分照片权限之后怎么改成全部。iOS 不会再弹授权框，只能在系统设置里改；Android 由系统权限框自己说明。
-   路径按苹果官方「隐私与安全性 › 照片」（iOS 14 至今都在，不受 iOS 18 把 App 设置挪到「App」分组影响），选项名 iOS 18 起为「完全访问」。 */
-"photo_access_change_later_hint" = "You can change it to “Full Access” anytime in Settings › Privacy & Security › Photos › P-Pass.";
-
 /* 照片页引导卡：iOS 没有「App 关闭也能备份」，靠后台 App 刷新（产品负责人 11-04）。 */
 "photos_guide_background" = "Back up in the background";
 
-/* #1789 「备份范围」行值里的文件夹名词（评审：Swift 源码不许引用 Android 独有 key——folder_settings_title 只在 strings_android_only.xml，iOS 用自己的 key）。 */
-"folder_scope_noun" = "Media folders";
-
 /* Folder sources and authorization actions on the unified backup scope screen. */
 "folder_sources_add" = "Add a Folder";
-"folder_sources_status_ok" = "Authorized";
 "folder_sources_status_wait" = "Re-authorization needed";
 "folder_sources_reauth" = "Re-authorize";
 "folder_sources_remove" = "Remove";

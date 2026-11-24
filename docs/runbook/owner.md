@@ -2,14 +2,14 @@
 
 这些命令由 agent 在需要时跑（分拣新诉求、出 test 包、记想法、停下交人）。命令自带判定：红了或判定不了，就写 issue（`status:blocked`）
 或评论到对应的卡、PR，然后非 0 退出。不补做、不绕过、不改判定，接着做别的。
-脚本在 `tools/flow/owner-*.sh`，测试是 `tools/test-flow-owner.sh`（`just ci` 与 `just ci-docs` 都会跑）。
+日常协作引擎统一在 `tools/flow/flow.py`（配合 `owner-idea.sh` / `owner-release-test.sh`），自测为 `tools/test-flow.py`（`just ci` 与 `just ci-docs` 都会跑）。
 
 owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合入的必经之路。合入由 CI 与独立评审把关、自动完成
 （角色分工见 [AGENTS.md](../../AGENTS.md)「角色」「通知」「机器与模型」）。
 
 ## 开工自检（doctor）
 
-`just idea` / `just triage` / `just release-test` 这类 owner 命令会先自动跑 `just doctor`（`tools/flow/doctor.sh`）；只是查问题、读文档、跟人对话或汇报进度时不必手动跑——doctor 检查的是开发环境，不是所有任务的入口。它在你自己的外壳里检查：
+`just start` / `just idea` / `just release-test` 等命令会先自动跑 `just doctor`（`tools/flow/flow.py doctor`）；只是查问题、读文档、跟人对话或汇报进度时不必手动跑——doctor 检查的是开发环境，并在磁盘剩余 `< 25G` 时自动调用 `cleanup-local` 清理缓存。它在你自己的外壳里检查：
 当前目录是主副本或它的 worktree、bash 能否真执行（Windows 上必须是 Git Bash，不能是 WSL 桩）、
 本地提交拦截已装、gh 能读本仓库 issue、提交身份在 `.github/allowed-identities.txt` 里、磁盘 ≥ 15G。
 私仓模式与在线设备只报不判。任一必需项不满足就非 0 退出并打印怎么修，修好再重跑。
@@ -24,7 +24,7 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 | 步骤 | 命令 | 通过时最后一行 |
 |---|---|---|
 | 记想法（任何会话） | `just idea "<原话>" [--discuss] [--from <来源>]` | `IDEA DISCUSSION #N` 或 `IDEA ISSUE #N status:inbox Feature` |
-| 分拣新诉求 | `just triage <号> <方案文件>` | `TRIAGE <号> ready \| needs:product \| blocked`，下一行 `PRIORITY <号> P0–P3` |
+| 分拣新诉求 | `just triage <号> [--priority P0..P3] [--mode fix\|feature\|verify] [--needs-product]` | `TRIAGE #<号> status:ready mode=…`，下一行 `PRIORITY #<号> P0–P3` |
 | 出 test 包 | `just release-test <端...>` | `RELEASE-TEST OK v<X.Y.Z>-test.N <端...>` |
 | 数自上个 test 包以来的用户可见 PR（每日同步报给产品负责人） | `just release-scope --since <上个 test 包 tag>` | `验收范围 …：N 个 PR 里 M 个用户看得见` |
 | 出 test 包后更新验收台账 | `just release-scope --ledger <台账号> --pkg <test 包 tag>` | `台账 #N（…）：新增 a，待重验 b，仍待验 c，沿用 d` |
@@ -52,7 +52,7 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 - 本机跑时，评审通过后对 PR 执行 `gh pr merge --auto --squash`（CI 上不开，自动合入由 `just done` 开 PR 时开）。碰核心路径的 PR
   多一个条件：与 CI 的 acceptance gate 同一判定（正文引用已采纳方案，看不见的核心还要带测试，见 `acceptance-gate.sh` 头注释），不满足就判未通过、不开自动合入，
   评论里写明缺什么。用户看得到的改动（`UI_GLOBS`、`apps/**` 下的非测试文件）合入不要验收行，随版本验收（AGENTS.md「按版本验收」）。
-  级别判定与 `just done`、`just release-scope`、CI 的 acceptance gate 共用 `acceptance-gate.sh classify`；界面路径清单与 `owner-triage.sh` 的 `UI_GLOBS` 共用，核心路径规则取 `origin/main` 上的 `.github/core-paths.txt`。
+  级别判定与 `just done`、`just release-scope`、CI 的 acceptance gate 共用 `acceptance-gate.sh classify`（内含 `UI_GLOBS` 唯一真源），核心路径规则取 `origin/main` 上的 `.github/core-paths.txt`。
 - `review/agent` 进 main 的必需检查由产品负责人在仓库设置里做（命令见 #1435 的 PR 正文），脚本不改仓库设置。
   没进之前它只是评论与提交状态，不拦合入，`just done` 也不会开自动合入。
 
@@ -64,44 +64,10 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 **idea**：默认建 Discussions 的 Ideas 帖，正文是原话（一字不改）加来源和日期，不进看板。`--discuss` 建
 `status:inbox` 的 issue，类型设成 Feature。同标题已有打开的帖子或 issue 时，追加评论，不重复建。
 
-**triage**：方案由模型写进一个 markdown 文件，去向由脚本判。方案必须有这些字段：`**做法**`、`**涉及端**`、
-`**数据**`、`**用户可见行为**`、`**隐私**`、`**风险**`、`**影响**`、`**时间性**`、`**范围**`（后面跟 ``` 代码块）、`**验收场景**`、
-`**复现路径**`（Bug 卡必填：100% 复现的步骤/命令，复现不了写「无」并转 blocked 找人对齐；Feature/Task 写「无」）；
-可选字段 `**产品定案**`、`**owner 定案**`、`**标准依据**`，没有的写「无」。缺必填字段就拒绝。分流规则：
-
-1. 范围命中核心：方案要有 `**ADR**：docs/decisions/<文件>.md`，而且在 `origin/main` 上是「已采纳」，
-   否则打 `status:blocked`，写明先定 ADR。有就打 `core` 标签，接着往下判。
-   `**产品定案**` 的评论链接不能替代 ADR；核心卡仍要引用已采纳方案。
-   纯桌面升版可填 `**桌面升版**：0.12.0`。范围逐行列出 `tools/bump-version.sh --platform desktop` 生成的全部文件，
-   不用通配或混入说明等改动。分拣在 `origin/main` 的隔离副本中离线生成差异；只有范围完全一致且通过现有版本行判定，
-   才不算核心。生成失败（包括本机缺 Cargo 缓存）或范围不符仍按路径判，提交和 PR 仍独立检查实际改动。
-2. 用户可见行为、隐私、数据任一项不是「无」，或者范围碰到界面与文案路径（i18n、设计 token、
-   Android `res/` 与 `ui/`、桌面前端、iOS 界面、站点、更新说明），即使方案写了「无」，也打 `needs:product`。
-   这时方案必须有 `**选项一**` 和 `**选项二**`，各写做法与影响，否则拒绝。
-   例外（产品取向已经定过）：
-   - `**产品定案**` 可以写两种依据，任一成立即可：
-     - `docs/decisions/<文件>.md，产品负责人 <日期> 已确认`：引用的方案必须全部在 `origin/main` 上是「已采纳」，
-       字段里必须写明产品负责人确认；
-     - 本仓 issue/PR 评论链接 `https://github.com/<repo>/issues/<号>#issuecomment-<id>`（`pull` 同理）：
-       `gh api` 核对评论存在，链接里的 issue/PR 号必须与评论实际所属一致；作者必须是产品负责人
-       （对本仓有 admin 权限的 User）。字段里出现外仓评论链接就拒绝，不静默忽略。评论链接本身就是
-       拍板依据，不要求另写「已确认」。
-     两种依据同时出现时，所有方案引用都要已采纳、所有评论链接都要属于本仓且作者是产品负责人、编号一致；
-     任一不满足就拒绝。满足就不打 `needs:product`、不要选项，按第 4 条走。写「无」等于没写。
-     非核心卡的产品定案可以用评论链接，不要求另开一份方案文档；核心卡仍按第 1 条引用已采纳 ADR。
-   - `**owner 定案**：AGENTS.md「<逐字原文>」` 和/或仓库 owner 账号的评论链接。原文必须在 `origin/main` 的
-     AGENTS.md 里逐字出现（至少 8 个字）；评论用 `gh api` 核对存在、作者是仓库 owner。任一依据不成立就拒绝。
-   - `**标准依据**`：写明 WAI-ARIA/WCAG/ARIA APG、Android 权限规范、NN/g、Google 或 Microsoft 写作指南、
-     Apple HIG、Material Design 等业界标准。链接只认完整主机和适用路径：w3.org 的 `/WAI/` 或 `/TR/`、
-     nngroup.com、developer.android.com、developers.google.com/style、learn.microsoft.com/…style、
-     developer.apple.com/design、m3.material.io；其他主机或路径直接拒绝。没有链接时按标准名校验，
-     写不认识的出处也拒绝，不静默放行。
-   owner 定案或标准依据合格，且隐私、数据都是「无」、卡类型不是 Feature：不打 `needs:product`、不要选项，
-   打 `decided:owner`，依据写进「实施方案」。隐私或数据不是「无」、或 Feature 卡，owner 定案 / 标准依据都不顶用，
-   照常 `needs:product`。
-   不带这些字段，行为与之前一样。
-3. Bug 卡缺「复现路径」（写「无」或空）→ 打 `status:blocked`，写明先补复现，或转 `needs:product` 找人对齐。
-4. 其余打 `status:ready`。
+**triage**：极简立项（不再要求另写 18 字段方案文件）：
+- 直接指定 `--priority P0..P3`（或从卡面 `**影响**` × `**时间性**` 自动计算；`[MAIN-RED]` 标题自动 `P0`）与 `--mode fix|feature|verify`；
+- 涉及用户可见取向、隐私或数据去留未定案时传 `--needs-product` 打 `needs:product` 等产品负责人二选一拍板；
+- 核心路径改动仍由本地 hook、`just done` 与远端 `acceptance gate` 强校验 `core` 标签及 `origin/main` 已采纳方案引用。
 
 **优先级**（P0–P3，口径见 `AGENTS.md`「优先级口径」）也由脚本按 `**影响**`（不可挽回 / 面广 / 局部）×
 `**时间性**`（停线 / 截止日 / 线性 / 无）算，三种去向都打：
@@ -118,14 +84,13 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 - **P3 复看**：owner 每次发版规划时列出 30 天未动的 P3，逐张决定升级或关闭；关闭写明「不做」与理由。
 - **先核实实现状态**：triage 与复看时，先用 `git log`、`git grep` 查这张卡要做的事是不是已经做完，做完的直接关掉，不按标题判。
 
-范围、验收场景、是否核心写进任务卡的对应字段（其中范围仅供 triage 分流核心/界面与分支类型推断参考，普通业务与测试文件不再做本地硬拦截，领卡阶段的重复门禁预检也已退役，见 #1953 / #1955；核心禁区由基线 `.github/core-paths.txt` 黑名单焊死，带自动判据的卡用 `v3-seal` 锁死测试 `SHA256`），其余内容写进正文末尾的
-「实施方案」段。写回之后，脚本再核对一遍范围字段可读，读不出来就不写。
+核心禁区由基线 `.github/core-paths.txt` 黑名单焊死，回归单测直接写进各端正式测试套件并在 `fix` 模式下做零拷贝基线反证（禁止一次性 `exam_*` 考卷文件）。
 
-### 有人 / 无人双轨与队列规则（V3）
+### 有人 / 无人双轨与自适应资源调度（V3）
 
-- **有人在场**：owner 汇总产品取向二选一与核心方案给产品负责人集中拍板，真机界面结对迭代不跑慢测试。
-- **无人模式（`--unattended`）**：`just start <号> --unattended` 开工先查设备锁（`~/.cache/ppass-e3/lock-<dev>` / `owner-<dev>`）与屏幕/在线状态，锁屏、被占或离线立即 `0s` 打印 `SUSPENDED_ENV`（退出码 3）跳过切下一张，零弹窗；`just done --unattended` 连续 2 轮未过门禁即触发 `SUSPENDED_CIRCUIT_BREAK`（退出码 4）熔断挂起，并自动 `git rebase origin/main` + 重跑全套门禁重验（撞行冲突自动 `git rebase --abort` 报 `SUSPENDED_CONFLICT`）。
-- **流程规则改动先演练**：修改流程或门禁规则前先跑 `just flow-bench selftest`（或 `live`），不在真仓直接试错。
+- **有人在场**：owner 汇总产品取向二选一与核心方案给产品负责人集中拍板，真机界面结对迭代不跑慢测试；`just dispatch` 白天本机硬限 `1` 个后台槽保障秒回，探测到空闲远端节点自动经 SSH 分流跨平台任务。
+- **无人模式（`--unattended`）**：`just start <号> --unattended` 逐台查所需设备锁与在线未锁屏状态，锁屏/被占立即 `0s` 打印 `SUSPENDED_ENV`（退出码 3）跳过；`just done --unattended` 连续 2 轮未过门禁即触发 `SUSPENDED_CIRCUIT_BREAK`（退出码 4）熔断挂起，并自动 `git rebase origin/main` + 重跑门禁重验。
+- **流程规则自测**：修改流程或门禁规则后运行 `python3 -B -I tools/test-flow.py` 与 `just ci-docs`。
 
 **release-test** 的判定：
 

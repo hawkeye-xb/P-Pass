@@ -97,6 +97,7 @@ final class SettingsFeedbackTests: XCTestCase {
         func saveScope(_ selected: Set<String>, known: Set<String>, since: BackupSince) async throws {
             if failSave { throw Boom() }; disk = selected; self.since = since
         }
+        func saveToGallery(fileURL: URL, isVideo: Bool, hash: String) async throws -> SaveToGalleryOutcome { .saved }
     }
 
     private func make(onboarded: Bool = true) -> (AppModel, StubEngine, StubMedia) {
@@ -948,8 +949,8 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertNotEqual(L.s("photos_scope_empty_all"), "photos_scope_empty_all", "文案已打包")
     }
 
-    /// 设置行的时间档一律写日期（10-29 文案定稿）：今天也写「10月29日起的照片」，以前某天写那一天；全部 →「含以前的照片」。
-    /// 设置行用 scope_value_*（英文比选项短）；选范围页的选项用 scope_time_*，没存过时日期是今天。
+    /// 设置行的时间档一律写日期（#1995 产品定案）：全部不拖尾巴，某天起写「 · M月d日起」。
+    /// 选范围页的选项用 scope_time_*，没存过时日期是今天。
     func test_scope_time_label() {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(secondsFromGMT: 8 * 3600)!
@@ -957,7 +958,7 @@ final class SettingsFeedbackTests: XCTestCase {
         let midnight: Int64 = 1_793_203_200_000
         let zh = Locale(identifier: "zh_CN")
         XCTAssertEqual(SettingsScreen.timeLabel(.since(ms: midnight), now: now, calendar: cal, locale: zh), L.f("scope_value_since", "10月29日"))
-        XCTAssertEqual(SettingsScreen.timeLabel(.all, now: now, calendar: cal, locale: zh), L.s("scope_value_all"))
+        XCTAssertEqual(SettingsScreen.timeLabel(.all, now: now, calendar: cal, locale: zh), "", "#1995: 全部不拖长尾巴")
         let earlier = SettingsScreen.timeLabel(.since(ms: midnight - 86_400_000), now: now, calendar: cal, locale: zh)
         XCTAssertEqual(earlier, L.f("scope_value_since", "10月28日"))
         // 选项：没存过 / 存的是「全部」→ 今天；存过某天 → 那一天。
@@ -978,14 +979,20 @@ final class SettingsFeedbackTests: XCTestCase {
 
     // MARK: #1789 设置分组与单次入口（#1784）
 
-    /// #1789（验收 1）：素材文件夹并入「备份范围」行值——相册与文件夹用「 + 」连在一行，不再单独占设置行；
-    /// 旧版已登记目录（从未保存过范围）也按真实来源显示，不再误报「未选相册」。
+    /// #1789（验收 1）/ #1995（产品定案选项 A）：精简设置行文案保单行——相册与文件夹采用短写法并用「 · 」连接，
+    /// 全部历史不再显示尾巴；自某日起显示「 · M月d日起」；旧版已登记目录（从未保存过范围）也按真实来源显示，不再误报「未选相册」。
     /// 反证：`scopeValueText` 删掉 folders 段（回到只数相册），前两条红；删掉空兜底，第三条红。
     func test_scope_value_lists_albums_and_folders_in_one_row() {
         let both = SettingsScreen.scopeValueText(unreadable: false, albumCount: 3, folderCount: 2, since: .all, now: Date())
-        XCTAssertEqual(both, L.f("backup_scope_with_time", "\(L.p("backup_scope_n", 3)) + \(L.s("folder_scope_noun")) 2", L.s("scope_value_all")))
+        XCTAssertEqual(both, "\(L.p("backup_scope_n", 3)) · \(L.p("backup_scope_folder_n", 2))", "#1995: 全部历史无后缀，来源用中点连接")
+        let bothWithSince = SettingsScreen.scopeValueText(unreadable: false, albumCount: 1, folderCount: 1, since: .since(ms: 1_793_203_200_000), now: Date(), calendar: {
+            var c = Calendar(identifier: .gregorian)
+            c.timeZone = TimeZone(secondsFromGMT: 8 * 3600)!
+            return c
+        }(), locale: Locale(identifier: "zh_CN"))
+        XCTAssertEqual(bothWithSince, L.f("backup_scope_with_time", "\(L.p("backup_scope_n", 1)) · \(L.p("backup_scope_folder_n", 1))", L.f("scope_value_since", "10月29日")), "#1995: 指定日期后缀")
         let foldersOnly = SettingsScreen.scopeValueText(unreadable: false, albumCount: nil, folderCount: 2, since: nil, now: Date())
-        XCTAssertEqual(foldersOnly, "\(L.s("folder_scope_noun")) 2", "旧版目录也在同一行，不再说「未选相册」")
+        XCTAssertEqual(foldersOnly, L.p("backup_scope_folder_n", 2), "旧版目录也在同一行，不再说「未选相册」")
         XCTAssertEqual(SettingsScreen.scopeValueText(unreadable: false, albumCount: nil, folderCount: 0, since: nil, now: Date()), L.s("backup_scope_none"))
         XCTAssertEqual(SettingsScreen.scopeValueText(unreadable: true, albumCount: 3, folderCount: 2, since: .all, now: Date()), L.s("backup_scope_unreadable"))
     }

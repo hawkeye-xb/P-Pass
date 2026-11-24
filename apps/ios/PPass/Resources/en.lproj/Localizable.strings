@@ -13,8 +13,6 @@
 "decision_destination" = "After you choose albums and a time range, photos in that range are sent to %1$@ each time you open the app.";
 "decision_choose_scope" = "Turn on automatic backup";
 "scope_album_no_access_title" = "Photos access is incomplete";
-"decision_choose_scope_note" = "Requires access to all photos";
-"decision_pick_photos" = "Pick a few to try first";
 "scan_manual_title" = "Enter pairing code";
 "scan_manual_body" = "On the computer's \"Add a device\" card, click \"Can't scan? Copy the pairing code\", send it to this phone, and paste it below.";
 "scan_manual_placeholder" = "ppf://pair?node=…";
@@ -99,8 +97,6 @@
 "last_hours_ago" = "%1$ld h ago";
 "rule_notify" = "Notifications";
 "setting_version" = "Version";
-"bucket_title" = "Photos to back up";
-"bucket_hint" = "Only checked albums are backed up.";
 "bucket_empty" = "No photos or videos on this phone.";
 "scope_album_no_access_body" = "P-Pass can’t read photos on this phone, so it can’t back them up.";
 "scope_album_no_access_action" = "Allow access to photos";
@@ -111,9 +107,8 @@
 "bucket_save" = "Save";
 "scope_time_since_date" = "From %1$@ onward";
 "scope_time_all" = "Include older photos";
-"scope_value_since" = "%1$@ onward";
-"scope_value_all" = "Including older photos";
-"backup_scope_with_time" = "%1$@, %2$@";
+"scope_value_since" = " · %1$@+";
+"backup_scope_with_time" = "%1$@%2$@";
 "home_empty_albums" = "No backed-up photos yet. They'll appear here.";
 "bucket_new" = "New";
 "backup_scope" = "Backup range";
@@ -149,8 +144,6 @@
 "photos_filter_empty" = "No photos match this filter.";
 "photos_loading" = "Loading the photo library…";
 "photos_unreachable" = "Can't connect to the computer. Make sure it's on and P-Pass is open.";
-"photos_no_albums" = "No albums selected. Nothing will be backed up.";
-"photos_choose_albums" = "Choose albums";
 "photos_live_disconnected" = "Connection to the computer lost.";
 "photos_live_retry" = "Retry";
 "photos_live_reconnecting" = "Reconnecting to the computer…";
@@ -183,9 +176,6 @@
 "auto_backup_rule_label" = "Auto backup";
 "auto_backup_off_hero" = "Auto backup is off. You can also pick a few photos to send for now.";
 "auto_backup_rule_denied_hint" = "Photo access wasn't allowed, so auto backup stays off. You can allow it in system settings, or pick a few photos to send.";
-"photos_first_run_intro" = "Connected to %1$@. Photos on this phone are saved to this computer.";
-"photos_first_run_enable" = "Turn on auto backup";
-"photos_first_run_pick" = "Pick a few photos first";
 "photos_guide_scope" = "Auto backup is off";
 "photos_guide_background" = "Back up in the background";
 "photos_guide_enable" = "Turn on";

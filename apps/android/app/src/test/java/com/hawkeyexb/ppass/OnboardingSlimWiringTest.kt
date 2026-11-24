@@ -100,10 +100,11 @@ class OnboardingSlimWiringTest {
     @Test
     fun scope_time_always_names_the_date() {
         // 10-29 文案定稿：时间二选一不再有「从今天起」；选项用 scope_time_*，设置行的值用 scope_value_*（英文更短）。
+        // #1995 产品定案选项 A：设置行在全部历史时不拖尾巴（返回空串），某日起展示 scope_value_since。
         // 反证：设置行还用 scope_time_since_date，或留着 scope_time_today → 红。
         assertFalse(main.contains("scope_time_today"))
         val value = main.substringAfter("internal fun scopeValueLabel(").substringBefore("\n\n")
-        assertTrue(value.contains("R.string.scope_value_all"))
+        assertTrue(value.contains("\"\""))
         assertTrue(value.contains("R.string.scope_value_since"))
         val option = main.substringAfter("internal fun scopeSinceOptionLabel(").substringBefore("\n\n")
         assertTrue(option.contains("R.string.scope_time_since_date"))
@@ -111,7 +112,7 @@ class OnboardingSlimWiringTest {
         for (dir in listOf("values", "values-zh")) {
             val xml = File("src/main/res/$dir/strings.xml").readText()
             assertFalse("$dir 还有 scope_time_today", xml.contains("name=\"scope_time_today\""))
-            for (k in listOf("scope_time_since_date", "scope_time_all", "scope_value_since", "scope_value_all")) {
+            for (k in listOf("scope_time_since_date", "scope_time_all", "scope_value_since")) {
                 assertTrue("$dir 缺 $k", xml.contains("name=\"$k\""))
             }
         }

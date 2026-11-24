@@ -249,6 +249,9 @@ def check_tier1_anchors(
                 if is_repo_path:
                     # Strip line numbers like :314 or :28-35
                     clean_path = re.sub(r':\d+(?:-\d+)?$', '', t)
+                    # This machine-local file is intentionally absent from clean checkouts.
+                    if Path(clean_path).as_posix() == '.claude/settings.local.json':
+                        continue
                     p_root = repo_root / clean_path
                     p_rel = file_path.parent / clean_path
 
@@ -315,10 +318,10 @@ def run_checks(tier: int, repo_root: Path) -> int:
     if all_errors:
         print(f"FAILED: Found {len(all_errors)} anchor/link error(s):", file=sys.stderr)
         for err in all_errors:
-            print(f"  ❌ {err}", file=sys.stderr)
+            print(f"  - {err}", file=sys.stderr)
         return 1
 
-    print(f"OK: Tier {tier} documents all valid ✅")
+    print(f"OK: Tier {tier} documents all valid")
     return 0
 
 

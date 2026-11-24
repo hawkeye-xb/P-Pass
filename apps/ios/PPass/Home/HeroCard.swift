@@ -211,20 +211,19 @@ struct HeroCard: View {
         }
     }
 
-    /// 绿色只给「已确认的安全」——状态行说「都存好了」且闸门放行时才绿；等待用琥珀；其余用系统次级色。
-    private func statusColor(_ s: BackupUiState) -> Color {
-        if case .waiting = s { return PPColor.waiting }
-        if isConfirmedSafe(s) { return PPColor.safe }
+    internal static func heroIdleLineColor(hasWaitReason: Bool, line: StatusLine, allSafeAllowed: Bool) -> Color {
+        if hasWaitReason { return PPColor.waiting }
+        if case .allSafe = line, allSafeAllowed { return PPColor.safe }
         return PPColor.ink60
     }
 
-    private func isConfirmedSafe(_ s: BackupUiState) -> Bool {
-        if case .allSafe = HomeProjection.statusLine(s, pendingK: app.triplet?.k ?? 0),
-           HomeProjection.allSafeTextAllowed(app.access, app.triplet, pairingLost: app.pairingLost,
-                                             missingSource: app.facts.missingSourceUnacknowledged) {
-            return true
-        }
-        return false
+    private func statusColor(_ s: BackupUiState) -> Color {
+        let hasWait: Bool
+        if case .waiting = s { hasWait = true } else { hasWait = false }
+        let line = HomeProjection.statusLine(s, pendingK: app.triplet?.k ?? 0)
+        let allowed = HomeProjection.allSafeTextAllowed(app.access, app.triplet, pairingLost: app.pairingLost,
+                                                        missingSource: app.facts.missingSourceUnacknowledged)
+        return Self.heroIdleLineColor(hasWaitReason: hasWait, line: line, allSafeAllowed: allowed)
     }
 }
 

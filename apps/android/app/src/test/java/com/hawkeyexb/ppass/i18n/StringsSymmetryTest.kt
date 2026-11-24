@@ -101,6 +101,7 @@ class StringsSymmetryTest {
         val required = setOf(
             "cancel_remaining_label", "cancel_remaining_confirm_title", "state_pending",
             "missing_source_notice_body", "notif_backup_failed_body", "photos_lost_body_days", "backup_scope_n",
+            "backup_scope_folder_n",
         )
         assertTrue("缺 plurals：${required - en.keys}", en.keys.containsAll(required))
         assertEquals("en/zh plurals 键集不一致", en.keys.sorted(), zh.keys.sorted())
