@@ -147,7 +147,11 @@ else
     pass "场景 7: Tier 2 历史决策断链变红（反证成功）"
 fi
 
-# 场景 8: Tier 3 正常 site Markdown 链接
+# 场景 8: 网站文档正常时，不检查依赖与生成目录里的断链。
+for dir in node_modules dist .astro; do
+    mkdir -p "$FIXTURE/site/$dir/nested"
+    printf '[Missing](missing.md)\n' > "$FIXTURE/site/$dir/nested/README.md"
+done
 cat > "$FIXTURE/site/src/content/blog/post.md" <<'EOF'
 # Blog Post
 See image [Icon](/icons/logo.svg) and route [Blog](/blog/other).
@@ -165,10 +169,13 @@ cat > "$FIXTURE/site/src/content/blog/post.md" <<'EOF'
 Broken link to [Nonexistent](relative-missing.md).
 EOF
 
-if python3 "$CHECKER" --tier 3 --root "$FIXTURE" >/dev/null 2>&1; then
+if python3 "$CHECKER" --tier 3 --root "$FIXTURE" >"$TMP/site-broken.log" 2>&1; then
     fail "场景 9: Tier 3 断链应红但绿（反证失效）"
-else
+elif grep -Fq 'broken link -> relative-missing.md' "$TMP/site-broken.log"; then
     pass "场景 9: Tier 3 断链变红（反证成功）"
+else
+    cat "$TMP/site-broken.log"
+    fail "场景 9: Tier 3 没有报出网站文章里的断链"
 fi
 
 # 场景 10: 干净检出不需要本机专用配置。

@@ -19,7 +19,7 @@ Tiers:
         (Does NOT enforce code path freshness on historical docs).
 
   --tier 3 (Site blog & documentation):
-      Scans site/**/*.md.
+      Scans site/**/*.md, excluding dependencies and generated output.
       Checks:
         1. Markdown relative links target real existing files.
 """
@@ -303,9 +303,12 @@ def run_checks(tier: int, repo_root: Path) -> int:
             all_errors.extend(check_markdown_links(f, repo_root))
 
     elif tier == 3:
-        files = sorted(
-            {p for p in repo_root.glob('site/**/*.md') if p.is_file()}
-        )
+        generated_dirs = {'node_modules', 'dist', '.astro'}
+        files = []
+        for directory, subdirs, names in os.walk(repo_root / 'site'):
+            subdirs[:] = [name for name in subdirs if name not in generated_dirs]
+            files.extend(Path(directory) / name for name in names if name.endswith('.md'))
+        files.sort()
         print(f"[Tier 3] Checking {len(files)} site/blog documents...")
 
         for f in files:
