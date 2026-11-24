@@ -19,6 +19,7 @@ import com.hawkeyexb.ppass.ui.BucketScreen
 import com.hawkeyexb.ppass.ui.FolderScreen
 import com.hawkeyexb.ppass.ui.FolderUi
 import com.hawkeyexb.ppass.ui.HomeScreen
+import com.hawkeyexb.ppass.ui.ManualPairScreen
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -174,9 +175,33 @@ class NativeControlsScreensTest {
             nodeByText(label(R.string.storage_computer))
             clickByText(label(R.string.storage_computer))
             awaitHeading(label(R.string.storage_computer))
+            // 详情页返回先落回「更多」页（showMore 仍为开），再返回才回首页；
+            // 按现有的返回层级分两步断言，不为测试改业务。
+            clickByText(label(R.string.back))
+            awaitHeading(label(R.string.more_label))
             clickByText(label(R.string.back))
             nodeByText(label(R.string.auto_backup_rule_label))
             saveTree("native-home-secondary.txt", a11yRoot())
+        }
+    }
+
+    @Test
+    fun manual_pair_screen_uses_a_native_app_bar_and_back_leaves_the_page() {
+        var backCount = 0
+        hostCompose({
+            ManualPairScreen(
+                input = "",
+                onInputChange = {},
+                error = false,
+                onBack = { backCount++ },
+                onSubmit = {},
+            )
+        }) {
+            // 手动输入配对串曾是手写「‹」+ 裸字号顶栏，这里钉住它现在走原生 TopAppBar。
+            awaitHeading(label(R.string.scan_manual_title))
+            clickByText(label(R.string.back))
+            assertEquals("返回按钮必须回调一次", 1, backCount)
+            saveTree("native-manual-pair-appbar.txt", a11yRoot())
         }
     }
 

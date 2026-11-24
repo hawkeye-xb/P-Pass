@@ -158,14 +158,14 @@ fi
 #   「cfg(test) 紧跟 mod」的写法——挂在 use / fn 上的 `#[cfg(test)]` 不会藏住后面的代码。
 # 输出：<相对 ROOT 的路径>\t<行号>（同一行只记一次）
 scan_files() {
-  local re="$1" strip="$2" flags="$3"
+  local re="$1" strip="$2" flags="$3" all="${4:-0}"
   # xargs -r 不是 POSIX（BSD xargs 空输入也会跑一次 perl），所以先判空。
   local list
   list=$(mktemp)
   cat >"$list"
   if [ -s "$list" ]; then
     xargs -0 perl -0777 -e '
-      my ($re, $strip, $flags, $root) = splice(@ARGV, 0, 4);
+      my ($re, $strip, $flags, $root, $all) = splice(@ARGV, 0, 5);
       my $qr = $flags =~ /i/ ? qr/$re/im : qr/$re/m;
       for my $f (@ARGV) {
         open(my $fh, "<", $f) or next;
@@ -179,12 +179,12 @@ scan_files() {
         my %seen;
         while ($t =~ /$qr/g) {
           my $ln = (substr($t, 0, $-[0]) =~ tr/\n//) + 1;
-          next if $seen{$ln}++;
+          next if !$all && $seen{$ln}++;
           (my $rel = $f) =~ s{^\Q$root\E/}{};
           print "$rel\t$ln\n";
         }
       }
-    ' "$re" "$strip" "$flags" "$ROOT" <"$list"
+    ' "$re" "$strip" "$flags" "$ROOT" "$all" <"$list"
   fi
   rm -f "$list"
 }
@@ -701,7 +701,7 @@ echo "==> M.3: UI reads derived connection state"
 #
 # 只认「换行 + 缩进」这一种空白：Swift 的 `case .pairingLost` 是枚举分支、
 # 不是读字段，同行空格写法不能算命中（否则一个 switch 就误报一串）。
-M3_RAW='\b[A-Za-z_]\w*\??(?:[ \t]*\n\s*)?\.(?:pairingLost|liveState)\b'
+M3_RAW='\b(?!case\b)[A-Za-z_]\w*\??(?:[ \t]*\n\s*)?\.(?:pairingLost|liveState)\b'
 M3_ANDROID="$M3_RAW|\btimeline\s*\??\s*\.\s*state\b"
 M3_HITS=$(
   {
@@ -761,7 +761,7 @@ M4_ANDROID_HITS=""
 if [ ${#M2_DIRS[@]} -gt 0 ]; then
   M4_ANDROID_HITS=$(list_files "${M2_DIRS[@]}" -- '*.kt' \
     | perl -0ne 'print unless m{/ui/theme/|/(?:Theme|Tokens)\.kt\x00\z}' \
-    | scan_files "$M4_ANDROID_RE" 1 '' | sort -t"$(printf '\t')" -k1,1 -k2,2n || true)
+    | scan_files "$M4_ANDROID_RE" 1 '' 1 | sort -t"$(printf '\t')" -k1,1 -k2,2n || true)
 fi
 
 # 存量表的两个视图：全部条目（判「新文件」用）与树上真实存在的条目（判「超限 / 未收紧」用）。
@@ -794,7 +794,8 @@ M4_ANDROID_NEW_HITS=""
 if [ -s "$M4_NEW_LIST" ]; then
   M4_HITS_FILE=$(mktemp)
   printf '%s\n' "$M4_ANDROID_HITS" | sed '/^[[:space:]]*$/d' >"$M4_HITS_FILE"
-  M4_ANDROID_NEW_HITS=$(awk -F'\t' 'NR==FNR { newf[$1]=1; next } ($1 in newf)' \
+  # 同一行可能有多处命中，报错按行去重，别把同一行打印两遍。
+  M4_ANDROID_NEW_HITS=$(awk -F'\t' 'NR==FNR { newf[$1]=1; next } ($1 in newf) && !seen[$0]++' \
     "$M4_NEW_LIST" "$M4_HITS_FILE" | sort -t"$(printf '\t')" -k1,1 -k2,2n)
   rm -f "$M4_HITS_FILE"
 fi
@@ -862,7 +863,7 @@ if [ ${#M2_DIRS[@]} -gt 0 ]; then
         open(my $fh, "<", $f) or next;
         local $/; my $t = <$fh>; close $fh;
         $t =~ s{^[ \t]*(?://|/\*|\*(?:\s|\z))[^\n]*}{}mg;
-        my $icon = qr{Icons\.(?:AutoMirrored\.)?(?:Filled|Outlined|Rounded|Sharp|TwoTone)\.(?:ArrowBack|ArrowBackIos|KeyboardArrowLeft|ChevronLeft)\b};
+        my $icon = qr{Icons\.(?:AutoMirrored\.)?(?:Filled|Outlined|Rounded|Sharp|TwoTone|Default)\.(?:ArrowBack|ArrowBackIos|KeyboardArrowLeft|ChevronLeft)\b};
         my $glyph = qr{"‹"|"〈"};
         my $i;
         if ($t =~ $glyph) {
@@ -870,7 +871,7 @@ if [ ${#M2_DIRS[@]} -gt 0 ]; then
           # 即使旁边有 TopAppBar 也仍是手搓返回，直接报。
           $i = $-[0];
         } elsif ($t =~ $icon) {
-          next if $t =~ /\bTopAppBar\s*\(/;
+          next if $t =~ /\b(?:CenterAligned|Medium|Large)?TopAppBar\b/;
           $i = $-[0];
         } else {
           next;
