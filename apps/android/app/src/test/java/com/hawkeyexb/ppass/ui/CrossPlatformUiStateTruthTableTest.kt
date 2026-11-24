@@ -1,12 +1,11 @@
 package com.hawkeyexb.ppass.ui
 
+import com.hawkeyexb.ppass.backup.BackupTriplet
 import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.backup.ScopeTime
 import com.hawkeyexb.ppass.backup.initialScopeTime
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
@@ -87,7 +86,14 @@ class CrossPlatformUiStateTruthTableTest {
             val item = array.getJSONObject(i)
             val access = MediaAccess.valueOf(item.getString("access"))
             val expectedOffers = item.getBoolean("offers_album_choices")
-            assertEquals("[$access] offersAlbumChoices 匹配", expectedOffers, bucketScreenOffersAlbumChoices(access))
+            val expectedShowsNotice = item.getBoolean("shows_unrestricted_notice")
+            val expectedNoticeKey = if (item.isNull("notice_key")) null else item.getString("notice_key")
+
+            val actualOffers = bucketScreenOffersAlbumChoices(access)
+            val actualNoticeKey = bucketScreenAccessNoticeKey(access)
+            assertEquals("[$access] offersAlbumChoices 匹配", expectedOffers, actualOffers)
+            assertEquals("[$access] showsNotice 匹配", expectedShowsNotice, !actualOffers)
+            assertEquals("[$access] noticeKey 匹配", expectedNoticeKey, actualNoticeKey)
         }
     }
 
@@ -143,14 +149,19 @@ class CrossPlatformUiStateTruthTableTest {
         for (i in 0 until array.length()) {
             val item = array.getJSONObject(i)
             val id = item.getString("id")
-            val render = item.getString("render")
+            val render = when (item.getString("render")) {
+                "Triplet" -> HeroRender.Triplet
+                "AccessBlocked" -> HeroRender.AccessBlocked
+                else -> error("Unknown render: ${item.getString("render")}")
+            }
             val countM = item.getLong("count_m")
             val countN = item.getLong("count_n")
             val hasSinceToday = item.getBoolean("has_since_today")
             val expected = item.getBoolean("expected_empty")
 
-            val actual = render == "Triplet" && countM == 0L && countN == 0L && hasSinceToday
-            assertEquals("[$id] heroFromTodayEmpty 匹配", expected, actual)
+            val triplet = BackupTriplet(n = countN, m = countM, lastSuccessAt = 0L, confirmedRaw = 0L)
+            val actual = showsFromTodayEmpty(render = render, triplet = triplet, scopeHasStart = hasSinceToday)
+            assertEquals("[$id] showsFromTodayEmpty 匹配", expected, actual)
         }
     }
 }

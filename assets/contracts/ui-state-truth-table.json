@@ -148,13 +148,13 @@
       "access": "PARTIAL",
       "offers_album_choices": false,
       "shows_unrestricted_notice": true,
-      "notice_key": "backup_scope_photo_access_limited"
+      "notice_key": "scope_album_no_access_title"
     },
     {
       "access": "NONE",
       "offers_album_choices": false,
       "shows_unrestricted_notice": true,
-      "notice_key": "backup_scope_photo_access_limited"
+      "notice_key": "scope_album_no_access_title"
     }
   ],
   "initial_scope_times": [

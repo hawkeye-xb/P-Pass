@@ -96,8 +96,15 @@ final class CrossPlatformUiStateTruthTableTests: XCTestCase {
                 default: fatalError("Unknown access: \(accessStr)")
                 }
             }()
-            let expectedNotice = access == .full ? BucketScreen.AccessNotice.none : BucketScreen.AccessNotice.noAccess
-            XCTAssertEqual(BucketScreen.notice(for: access), expectedNotice, "[\(accessStr)] BucketScreen.notice 匹配")
+            let expectedOffers = try XCTUnwrap(item["offers_album_choices"] as? Bool)
+            let expectedShowsNotice = try XCTUnwrap(item["shows_unrestricted_notice"] as? Bool)
+            let expectedNoticeKey = item["notice_key"] as? String
+
+            let actualNotice = BucketScreen.notice(for: access)
+            let actualNoticeKey = BucketScreen.noticeTitleKey(for: access)
+            XCTAssertEqual(actualNotice == .none, expectedOffers, "[\(accessStr)] offersAlbumChoices 匹配")
+            XCTAssertEqual(actualNotice == .noAccess, expectedShowsNotice, "[\(accessStr)] showsNotice 匹配")
+            XCTAssertEqual(actualNoticeKey, expectedNoticeKey, "[\(accessStr)] noticeTitleKey 匹配")
         }
     }
 
@@ -128,6 +135,17 @@ final class CrossPlatformUiStateTruthTableTests: XCTestCase {
             let allSafeAllowed = try XCTUnwrap(item["all_safe_allowed"] as? Bool)
             let expectedColorStr = try XCTUnwrap(item["expected_color"] as? String)
 
+            let line: StatusLine = {
+                switch lineType {
+                case "AllSafe": return .allSafe
+                case "Pending": return .pending(3)
+                case "Paused": return .paused
+                case "Trouble": return .trouble
+                case "Ready": return .ready
+                default: fatalError("Unknown line_type: \(lineType)")
+                }
+            }()
+
             let expectedColor: Color = {
                 switch expectedColorStr {
                 case "WAITING": return PPColor.waiting
@@ -137,11 +155,7 @@ final class CrossPlatformUiStateTruthTableTests: XCTestCase {
                 }
             }()
 
-            let actualColor: Color = {
-                if hasWait { return PPColor.waiting }
-                if lineType == "AllSafe" && allSafeAllowed { return PPColor.safe }
-                return PPColor.ink60
-            }()
+            let actualColor = HeroCard.heroIdleLineColor(hasWaitReason: hasWait, line: line, allSafeAllowed: allSafeAllowed)
             XCTAssertEqual(actualColor, expectedColor, "[\(id)] heroIdleLineColor 匹配")
         }
     }

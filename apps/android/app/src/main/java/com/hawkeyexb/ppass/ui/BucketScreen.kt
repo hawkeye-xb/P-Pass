@@ -238,6 +238,9 @@ private fun BucketSourceCard(
  */
 internal fun bucketScreenOffersAlbumChoices(access: MediaAccess): Boolean = access == MediaAccess.FULL
 
+internal fun bucketScreenAccessNoticeKey(access: MediaAccess): String? =
+    if (bucketScreenOffersAlbumChoices(access)) null else "scope_album_no_access_title"
+
 /**
  * #1961：相册卡片显示哪些（对齐 iOS `BucketScreen.visibleAlbums` 的 #1811 不变量）。
  * 完整授权显示全部；未完整授权只显示当前编辑态里勾着的相册（已保存的 + 本次未保存勾选的），
