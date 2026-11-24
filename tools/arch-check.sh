@@ -35,6 +35,12 @@
 #   M.2 — Android UI 目录（apps/android/**/ui/**）不得导入或使用
 #         android.provider.MediaStore 与 android.content.ContentResolver，必须走
 #         统一媒体/备份层（com.hawkeyexb.ppass.backup.*，#1990-1）。无白名单，零容忍。
+#   M.3 — 界面只读派生后的连接状态（#2007）：UI 不得直读半成品传输/连接字段
+#         （pairingLost / liveState / timeline.state），点号访问允许跨行缩进。
+#   M.4 — 移动端业务视图不得写裸字号（#1990-4）：Android 走
+#         MaterialTheme.typography，iOS 走 PPFont；主题/token 定义文件豁免。
+#   M.5 — 移动端次级页不得手搓返回顶栏（#1990-4）：用了返回图标就必须用平台
+#         原生顶栏（Android TopAppBar / iOS .toolbar）；全屏媒体预览浮层豁免。
 #   G1/G5 是「存量不增」的锁：现有越界登记在 tools/arch-allowlist.txt，
 #   登记数必须与命中数精确相等，且登记相对基线分支只许降、不许升。
 #   迁移卡做完后该文件清零。自测：tools/test-arch-check.sh。
@@ -689,7 +695,13 @@ else
 fi
 
 echo "==> M.3: UI reads derived connection state"
-M3_RAW='\b[A-Za-z_]\w*\??\.(?:pairingLost|liveState)\b'
+# 点号访问允许跨行缩进（#1990 跟进项 #2）：`model\n  .pairingLost` 与
+# `timeline\n  ?.state` 必须同样命中。scan_files 用 perl -0777 整文件扫描，
+# 所以这里的换行断言能跨行；逐行 grep 会漏掉这种写法。
+#
+# 只认「换行 + 缩进」这一种空白：Swift 的 `case .pairingLost` 是枚举分支、
+# 不是读字段，同行空格写法不能算命中（否则一个 switch 就误报一串）。
+M3_RAW='\b[A-Za-z_]\w*\??(?:[ \t]*\n\s*)?\.(?:pairingLost|liveState)\b'
 M3_ANDROID="$M3_RAW|\btimeline\s*\??\s*\.\s*state\b"
 M3_HITS=$(
   {
@@ -707,6 +719,183 @@ if [ -z "$M3_HITS" ]; then
   echo "   ✅ M.3: clean"
 else
   printf '%s\n' "$M3_HITS" | awk -F'\t' '{print "M.3 VIOLATION: read the derived connection state: " $1 ":" $2}'
+  FAIL=1
+fi
+
+# ── M.4: 移动端业务视图禁写裸字号（#1990-4）──────────────
+#
+# 字号属于品牌 token，不许在业务视图里写死。Android 统一走
+# MaterialTheme.typography，iOS 统一走 PPFont；token 的定义处（Android
+# ui/theme/、Theme.kt / Tokens.kt，iOS Design 目录）是字号的唯一来源，
+# 不在扫描范围。
+#
+# 为什么是门禁而不是测试：裸字号是「写下去就回不去」的样式回归，行为测试
+# 看不出字号从 token 漂成字面量。自测：tools/test-arch-check.sh（正反例）。
+#
+# Android 存量棘轮：迁移是分卡的，未迁移的业务视图里还留着裸字号，不能
+# 一刀切零容忍。下面按文件登记当前上限，规则是「只降不升、且必须精确」：
+#   命中数 == 上限 → 通过（没动）；
+#   命中数  > 上限 → 新增裸字号，报红；
+#   命中数  < 上限 → 有人迁移了一部分却没收紧棘轮，同样报红，逼着把这一
+#                    行改小（清零就整行删掉）。文件整体不存在时跳过：自测
+#                    的临时根里没有这些真实文件，无法判定「下降」。
+# 不在表里的文件（含新文件、已迁移的 FolderScreen.kt）上限视为 0，出现即红。
+M4_ANDROID_RE='fontSize\s*=\s*[0-9]+(?:\.[0-9]+)?\.sp'
+M4_ANDROID_STOCK=$(cat <<'STOCK'
+apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/BucketScreen.kt	6
+apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/DecisionScreen.kt	3
+apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeNotices.kt	5
+apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt	44
+apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/IdentityGate.kt	3
+apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/Onboarding.kt	10
+apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/PairCode.kt	1
+apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/PhotosScreen.kt	14
+apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/ScanScreen.kt	13
+apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/TwoTabs.kt	1
+apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/UpdateDialog.kt	3
+apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/VideoScreen.kt	4
+STOCK
+)
+echo "==> M.4: mobile business views use typography tokens, not raw font sizes"
+M4_ANDROID_HITS=""
+if [ ${#M2_DIRS[@]} -gt 0 ]; then
+  M4_ANDROID_HITS=$(list_files "${M2_DIRS[@]}" -- '*.kt' \
+    | perl -0ne 'print unless m{/ui/theme/|/(?:Theme|Tokens)\.kt\x00\z}' \
+    | scan_files "$M4_ANDROID_RE" 1 '' | sort -t"$(printf '\t')" -k1,1 -k2,2n || true)
+fi
+
+# 存量表的两个视图：全部条目（判「新文件」用）与树上真实存在的条目（判「超限 / 未收紧」用）。
+M4_STOCK_ALL=$(mktemp)
+M4_STOCK_PRESENT=$(mktemp)
+M4_COUNTS=$(mktemp)
+M4_NEW_LIST=$(mktemp)
+printf '%s\n' "$M4_ANDROID_STOCK" | sed '/^[[:space:]]*$/d' >"$M4_STOCK_ALL"
+while IFS="$(printf '\t')" read -r f max; do
+  [ -n "$f" ] && [ -e "$ROOT/$f" ] && printf '%s\t%s\n' "$f" "$max"
+done <"$M4_STOCK_ALL" >"$M4_STOCK_PRESENT"
+printf '%s\n' "$M4_ANDROID_HITS" | sed '/^[[:space:]]*$/d' | cut -f1 \
+  | sort | uniq -c | awk '{print $2 "\t" $1}' | sort >"$M4_COUNTS"
+awk -F'\t' 'NR==FNR { max[$1]=1; next } !($1 in max) { print $1 }' \
+  "$M4_STOCK_ALL" "$M4_COUNTS" | sort -u >"$M4_NEW_LIST"
+
+M4_ANDROID_RATCHET=$(
+  awk -F'\t' '
+    NR==FNR { max[$1] = $2 + 0; next }
+    { actual[$1] = $2 + 0 }
+    END {
+      for (f in max) {
+        a = (f in actual) ? actual[f] : 0
+        if (a > max[f]) printf "over\t%s\t%d\t%d\n", f, a, max[f]
+        else if (a < max[f]) printf "loose\t%s\t%d\t%d\n", f, a, max[f]
+      }
+    }' "$M4_STOCK_PRESENT" "$M4_COUNTS" | sort
+)
+M4_ANDROID_NEW_HITS=""
+if [ -s "$M4_NEW_LIST" ]; then
+  M4_HITS_FILE=$(mktemp)
+  printf '%s\n' "$M4_ANDROID_HITS" | sed '/^[[:space:]]*$/d' >"$M4_HITS_FILE"
+  M4_ANDROID_NEW_HITS=$(awk -F'\t' 'NR==FNR { newf[$1]=1; next } ($1 in newf)' \
+    "$M4_NEW_LIST" "$M4_HITS_FILE" | sort -t"$(printf '\t')" -k1,1 -k2,2n)
+  rm -f "$M4_HITS_FILE"
+fi
+rm -f "$M4_STOCK_ALL" "$M4_STOCK_PRESENT" "$M4_COUNTS" "$M4_NEW_LIST"
+
+M4_IOS_DIRS=()
+for d in App Home Photos Pairing Diagnostics; do
+  [ -d "$ROOT/apps/ios/PPass/$d" ] && M4_IOS_DIRS+=("$ROOT/apps/ios/PPass/$d")
+done
+M4_IOS_RE='\.system\(\s*size\s*:'
+M4_IOS_HITS=""
+if [ ${#M4_IOS_DIRS[@]} -gt 0 ]; then
+  M4_IOS_HITS=$(list_files "${M4_IOS_DIRS[@]}" -- '*.swift' \
+    | scan_files "$M4_IOS_RE" 1 '' | sort -t"$(printf '\t')" -k1,1 -k2,2n || true)
+fi
+
+if [ -z "$M4_ANDROID_RATCHET" ] && [ -z "$M4_ANDROID_NEW_HITS" ] && [ -z "$M4_IOS_HITS" ]; then
+  echo "   ✅ M.4: clean"
+else
+  if [ -n "$M4_ANDROID_RATCHET" ]; then
+    printf '%s\n' "$M4_ANDROID_RATCHET" | while IFS="$(printf '\t')" read -r kind f a m; do
+      case "$kind" in
+        over)  printf '❌ M.4 VIOLATION（存量文件新增裸字号，上限 %s，实际 %s）：%s\n' "$m" "$a" "$f" ;;
+        loose) printf '❌ M.4 存量已下降（上限 %s，实际 %s）——请同步收紧 tools/arch-check.sh 的 M.4 存量上限（清零则删行）：%s\n' "$m" "$a" "$f" ;;
+      esac
+    done
+  fi
+  if [ -n "$M4_ANDROID_NEW_HITS" ]; then
+    printf '%s\n' "$M4_ANDROID_NEW_HITS" \
+      | awk -F'\t' '{print "❌ M.4 VIOLATION（业务视图新增裸字号，Android 改 MaterialTheme.typography / iOS 改 PPFont）：" $1 " 行 " $2}'
+  fi
+  if [ -n "$M4_IOS_HITS" ]; then
+    printf '%s\n' "$M4_IOS_HITS" \
+      | awk -F'\t' '{print "❌ M.4 VIOLATION（业务视图新增裸字号，Android 改 MaterialTheme.typography / iOS 改 PPFont）：" $1 " 行 " $2}'
+  fi
+  FAIL=1
+fi
+
+# ── M.5: 移动端次级页禁手搓返回顶栏（#1990-4）────────────
+#
+# 返回导航与次级页顶栏优先用平台原生控件：Android Material3 TopAppBar，
+# iOS SwiftUI .toolbar。判据按文件：用了返回图标就必须有原生顶栏；iOS 还
+# 禁止「隐藏系统导航栏 + 手搓 chevron.left」这种假原生。
+#
+# 豁免（全屏深色媒体预览浮层，本身没有标准导航栏）：Android
+# PhotosScreen.kt / VideoScreen.kt，iOS MediaViewer.swift。
+#
+# 自测：tools/test-arch-check.sh（正反例 + 豁免样例）。
+echo "==> M.5: secondary pages use native top bars (Android TopAppBar / iOS .toolbar)"
+M5_ANDROID_HITS=""
+if [ ${#M2_DIRS[@]} -gt 0 ]; then
+  M5_LIST=$(mktemp)
+  list_files "${M2_DIRS[@]}" -- '*.kt' \
+    | perl -0ne 'print unless m{/(?:PhotosScreen|VideoScreen)\.kt\x00\z}' >"$M5_LIST"
+  if [ -s "$M5_LIST" ]; then
+    M5_ANDROID_HITS=$(xargs -0 perl -0777 -e '
+      my $root = shift;
+      for my $f (@ARGV) {
+        open(my $fh, "<", $f) or next;
+        local $/; my $t = <$fh>; close $fh;
+        $t =~ s{^[ \t]*(?://|/\*|\*(?:\s|\z))[^\n]*}{}mg;
+        my $i = index($t, "Icons.AutoMirrored.Filled.ArrowBack");
+        next if $i < 0;
+        next if $t =~ /\bTopAppBar\s*\(/;
+        my $ln = (substr($t, 0, $i) =~ tr/\n//) + 1;
+        (my $rel = $f) =~ s{^\Q$root\E/}{};
+        print "$rel\t$ln\n";
+      }' "$ROOT" <"$M5_LIST" | sort -t"$(printf '\t')" -k1,1 -k2,2n || true)
+  fi
+  rm -f "$M5_LIST"
+fi
+M5_IOS_HITS=""
+if [ ${#M4_IOS_DIRS[@]} -gt 0 ]; then
+  M5_IOS_LIST=$(mktemp)
+  list_files "${M4_IOS_DIRS[@]}" -- '*.swift' \
+    | perl -0ne 'print unless m{/MediaViewer\.swift\x00\z}' >"$M5_IOS_LIST"
+  if [ -s "$M5_IOS_LIST" ]; then
+    M5_IOS_HITS=$(xargs -0 perl -0777 -e '
+      my $root = shift;
+      for my $f (@ARGV) {
+        open(my $fh, "<", $f) or next;
+        local $/; my $t = <$fh>; close $fh;
+        $t =~ s{^[ \t]*(?://|/\*|\*(?:\s|\z))[^\n]*}{}mg;
+        my $i = index($t, "chevron.left");
+        next if $i < 0;
+        my $hidden = ($t =~ /\.toolbar\(\s*\.hidden\s*,\s*for\s*:\s*\.navigationBar\s*\)/) ? 1 : 0;
+        my $native = ($t =~ /\.toolbar\b/) ? 1 : 0;
+        next if $native && !$hidden;
+        my $ln = (substr($t, 0, $i) =~ tr/\n//) + 1;
+        (my $rel = $f) =~ s{^\Q$root\E/}{};
+        print "$rel\t$ln\n";
+      }' "$ROOT" <"$M5_IOS_LIST" | sort -t"$(printf '\t')" -k1,1 -k2,2n || true)
+  fi
+  rm -f "$M5_IOS_LIST"
+fi
+
+if [ -z "$M5_ANDROID_HITS" ] && [ -z "$M5_IOS_HITS" ]; then
+  echo "   ✅ M.5: clean"
+else
+  { printf '%s\n' "$M5_ANDROID_HITS"; printf '%s\n' "$M5_IOS_HITS"; } | sed '/^$/d' \
+    | awk -F'\t' '{print "❌ M.5 VIOLATION（手搓返回顶栏，改用平台原生顶栏）：" $1 " 行 " $2}'
   FAIL=1
 fi
 

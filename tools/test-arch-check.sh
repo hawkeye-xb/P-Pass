@@ -573,6 +573,126 @@ expect_green "M.3 iOS derived status enum" "$(sample apps/ios/PPass/Home/HeroCar
 expect_green "M.3 iOS state owner retains raw state" "$(sample apps/ios/PPass/App/AppModel.swift 'func update() { self.liveState = value }')"
 expect_green "M.3 Android derived state" "$(sample apps/android/app/src/main/java/com/example/ui/HomeScreen.kt 'fun label(connection: ConnectionState) = connection.needsRepair')"
 
+echo "== M.3 跨行点号访问（#1990 跟进项 #2，逐行 grep 会漏；必须同样报红）"
+expect_red "M.3 Android 跨行 raw pairing flag" "$(sample apps/android/app/src/main/java/com/example/ui/HomeScreen.kt 'fun bad(holder: Holder) = holder
+    .pairingLost')" "M.3 VIOLATION"
+expect_red "M.3 Android 跨行 ?.state" "$(sample apps/android/app/src/main/java/com/example/MainActivity.kt 'fun bad() = timeline
+    ?.state')" "M.3 VIOLATION"
+expect_red "M.3 iOS 跨行 raw live state" "$(sample apps/ios/PPass/Photos/PhotosScreen.swift 'var body: some View {
+    Text(app
+        .liveState.text)
+}')" "M.3 VIOLATION"
+expect_red "M.3 iOS 跨行 raw pairing flag" "$(sample apps/ios/PPass/Home/HeroCard.swift 'var running: Bool { model
+    .pairingLost }')" "M.3 VIOLATION"
+expect_green "M.3 Swift case 分支不误报" "$(sample apps/ios/PPass/Diagnostics/DiagnosticsScreen.swift 'func f(status: ConnectionState.Status) {
+    switch status {
+    case .pairingLost: return
+    case .connected: return
+    }
+}')"
+expect_green "M.3 Swift case 换行不误报" "$(sample apps/ios/PPass/Diagnostics/DiagnosticsScreen.swift 'func f(status: ConnectionState.Status) -> Bool {
+    switch status {
+    case .liveState:
+        return true
+    default:
+        return false
+    }
+}')"
+
+# ── M.4: 移动端业务视图禁写裸字号（#1990-4）──────────────
+echo "== M.4 正样例（业务视图写裸字号，必须报红）"
+M4_ANDROID_FILE=apps/android/app/src/main/java/com/example/ui/HomeScreen.kt
+M4_IOS_FILE=apps/ios/PPass/Home/BucketScreen.swift
+expect_red "M.4 Android fontSize = 14.sp" "$(sample "$M4_ANDROID_FILE" 'Text("x", fontSize = 14.sp)')" "M.4 VIOLATION"
+expect_red "M.4 Android fontSize = 13.5.sp" "$(sample "$M4_ANDROID_FILE" 'Text("x", fontSize = 13.5.sp)')" "M.4 VIOLATION"
+expect_red "M.4 Android 跨行 fontSize" "$(sample "$M4_ANDROID_FILE" 'Text(
+    "x",
+    fontSize = 15.sp,
+)')" "M.4 VIOLATION"
+expect_red "M.4 iOS .system(size:)" "$(sample "$M4_IOS_FILE" '.font(.system(size: 13, weight: .semibold))')" "M.4 VIOLATION"
+expect_red "M.4 iOS 跨行 .system(size:)" "$(sample "$M4_IOS_FILE" '.font(.system(
+    size: 40,
+    weight: .regular,
+))')" "M.4 VIOLATION"
+
+echo "== M.4 反样例（token 用法与 token 定义处必须不报）"
+expect_green "M.4 Android 走 MaterialTheme.typography" "$(sample "$M4_ANDROID_FILE" 'Text("x", style = MaterialTheme.typography.bodyMedium)')"
+expect_green "M.4 Android ui/theme 定义 token" "$(sample apps/android/app/src/main/java/com/example/ui/theme/PPTypography.kt 'val body = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)')"
+expect_green "M.4 Android Theme.kt 豁免" "$(sample apps/android/app/src/main/java/com/example/ui/Theme.kt 'val x = fontSize = 14.sp')"
+expect_green "M.4 Android Tokens.kt 豁免" "$(sample apps/android/app/src/main/java/com/example/ui/Tokens.kt 'val x = fontSize = 14.sp')"
+expect_green "M.4 Android 非 ui 目录不扫" "$(sample apps/android/app/src/main/java/com/example/backup/Foo.kt 'val x = fontSize = 14.sp')"
+expect_green "M.4 iOS 走 PPFont" "$(sample "$M4_IOS_FILE" '.font(PPFont.body)')"
+expect_green "M.4 iOS Design 目录是 token 定义处" "$(sample apps/ios/PPass/Design/PPStyle.swift '.font(.system(size: 13))')"
+expect_green "M.4 iOS .system(.body) 不是裸字号" "$(sample "$M4_IOS_FILE" '.font(.system(.body))')"
+
+echo "== M.4 Android 存量棘轮（表内只降不升，且必须精确）"
+M4_STOCK_ONE=apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/PairCode.kt
+M4_STOCK_SIX=apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/BucketScreen.kt
+M4_MIGRATED=apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/FolderScreen.kt
+M4_SIX='Text("a", fontSize = 14.sp)
+Text("b", fontSize = 14.sp)
+Text("c", fontSize = 14.sp)
+Text("d", fontSize = 14.sp)
+Text("e", fontSize = 14.sp)
+Text("f", fontSize = 14.sp)'
+expect_green "M.4 存量文件命中数等于上限（1）→ 通过" "$(sample "$M4_STOCK_ONE" 'Text("x", fontSize = 14.sp)')"
+expect_red "M.4 存量文件超出上限（2 > 1）→ 报新增" "$(sample "$M4_STOCK_ONE" 'Text("x", fontSize = 14.sp)
+Text("y", fontSize = 15.sp)')" "存量文件新增裸字号"
+expect_red "M.4 存量文件少于上限（0 < 1，未收紧棘轮）→ 报未收紧" "$(sample "$M4_STOCK_ONE" 'Text("x")')" "存量已下降"
+expect_green "M.4 存量文件多处命中数等于上限（6）→ 通过" "$(sample "$M4_STOCK_SIX" "$M4_SIX")"
+expect_red "M.4 存量文件多处超一处（7 > 6）→ 报新增" "$(sample "$M4_STOCK_SIX" "$M4_SIX
+Text(\"g\", fontSize = 14.sp)")" "存量文件新增裸字号"
+expect_red "M.4 存量文件多处少一处（5 < 6）→ 报未收紧" "$(sample "$M4_STOCK_SIX" 'Text("a", fontSize = 14.sp)
+Text("b", fontSize = 14.sp)
+Text("c", fontSize = 14.sp)
+Text("d", fontSize = 14.sp)
+Text("e", fontSize = 14.sp)')" "存量已下降"
+expect_red "M.4 已迁移的 FolderScreen.kt 再写裸字号（未登记）→ 报新增" "$(sample "$M4_MIGRATED" 'Text("x", fontSize = 14.sp)')" "业务视图新增裸字号"
+
+# ── M.5: 移动端次级页禁手搓返回顶栏（#1990-4）──────────────
+echo "== M.5 正样例（手搓返回顶栏，必须报红）"
+M5_ANDROID_HAND='import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+@Composable fun Header(onBack: () -> Unit) {
+    Row { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) }
+}'
+expect_red "M.5 Android 无 TopAppBar 手搓 ArrowBack" "$(sample "$M4_ANDROID_FILE" "$M5_ANDROID_HAND")" "M.5 VIOLATION"
+M5_IOS_HAND='import SwiftUI
+struct Detail: View {
+    var body: some View {
+        Button(action: {}) { Image(systemName: "chevron.left") }
+    }
+}'
+expect_red "M.5 iOS 无 .toolbar 手搓 chevron.left" "$(sample "$M4_IOS_FILE" "$M5_IOS_HAND")" "M.5 VIOLATION"
+M5_IOS_HIDDEN='import SwiftUI
+struct Detail: View {
+    var body: some View {
+        Button(action: {}) { Image(systemName: "chevron.left") }
+            .toolbar(.hidden, for: .navigationBar)
+    }
+}'
+expect_red "M.5 iOS 隐藏系统导航栏又手搓 chevron.left" "$(sample "$M4_IOS_FILE" "$M5_IOS_HIDDEN")" "M.5 VIOLATION"
+
+echo "== M.5 反样例（原生顶栏与全屏预览豁免必须不报）"
+M5_ANDROID_NATIVE='import androidx.compose.material3.TopAppBar
+@Composable fun Header() {
+    TopAppBar(title = {}, navigationIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) })
+}'
+expect_green "M.5 Android TopAppBar + ArrowBack" "$(sample "$M4_ANDROID_FILE" "$M5_ANDROID_NATIVE")"
+expect_green "M.5 Android 没有返回图标" "$(sample "$M4_ANDROID_FILE" '@Composable fun Header() { Text("hi") }')"
+expect_green "M.5 Android 全屏预览 PhotosScreen.kt 豁免" "$(sample apps/android/app/src/main/java/com/example/ui/PhotosScreen.kt "$M5_ANDROID_HAND")"
+expect_green "M.5 Android 全屏预览 VideoScreen.kt 豁免" "$(sample apps/android/app/src/main/java/com/example/ui/VideoScreen.kt "$M5_ANDROID_HAND")"
+M5_IOS_NATIVE='import SwiftUI
+struct Detail: View {
+    var body: some View {
+        Button(action: {}) { Image(systemName: "chevron.left") }
+            .toolbar { ToolbarItem(placement: .navigationBarLeading) { Button("") {} } }
+    }
+}'
+expect_green "M.5 iOS .toolbar + chevron.left" "$(sample "$M4_IOS_FILE" "$M5_IOS_NATIVE")"
+expect_green "M.5 iOS 没有返回图标" "$(sample "$M4_IOS_FILE" 'struct Detail: View { var body: some View { Text("hi") } }')"
+expect_green "M.5 iOS 全屏查看器 MediaViewer.swift 豁免" "$(sample apps/ios/PPass/Photos/MediaViewer.swift "$M5_IOS_HAND")"
+
 echo
 echo "arch-check 自测：通过 ${PASS}，失败 $FAILED"
 [ "$FAILED" -eq 0 ]

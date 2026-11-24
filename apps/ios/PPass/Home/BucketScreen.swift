@@ -5,10 +5,10 @@ import PPassMedia
 /// 统一备份范围：相册与文件夹卡片共用选中表现、同一时间档和同一个保存动作。
 /// 添加文件夹只登记授权并标成待保存；取消勾选保留授权，移除需单独确认且不删原素材。
 /// 首次（从未保存过）不预选任何来源；时间默认「从今天起」；新相册默认不勾。允许空集 = 一个都不备份。
-/// 相册未完整授权时只显示「保存过的相册」供取消，不给新增相册（#1811 评审）。
-/// 底部只有主按钮：首次「开始备份」，编辑「保存」。不显示合计张数与大小（#1263 删掉 bucket_summary；iOS 没有公开的大小接口，#1016）。
+/// 相册未完整授权时只显示「保存过的相册」供取消，不给新增相册。
+/// 底部只有主按钮：首次「开始备份」，编辑「保存」。不显示合计张数与大小（iOS 没有公开的大小接口）。
 /// 与 Android 的差别只有：标题用系统大标题导航栏；相册是异步读的，所以多了加载中 / 读取失败两种状态。
-/// #1961：未完整权限提示与来源卡片对齐 Android（actBg 权限卡、双列等高、菜单收动作、区分失败文案）。
+/// 未完整权限提示与来源卡片对齐 Android（actBg 权限卡、双列等高、菜单收动作、区分失败文案）。
 struct BucketScreen: View {
     let firstTime: Bool
     /// 选中的来源、保存时看到的全部来源、时间档是不是「全部」。
@@ -45,7 +45,7 @@ struct BucketScreen: View {
             .sheet(item: $reauthTarget) { target in
                 FolderPicker { url in Task { await reauthorize(target, at: url) } }
             }
-            // #1961：移除确认改成带文件夹名的 .alert（与 Android AlertDialog 同语义），不再用底部确认表。
+            // 移除确认用带文件夹名的 .alert（与 Android AlertDialog 同语义）。
             .alert(L.f("folder_sources_remove_confirm_title", removeTarget?.displayName ?? ""), isPresented: Binding(
                 get: { removeTarget != nil }, set: { if !$0 { removeTarget = nil } })) {
                 Button(L.s("folder_sources_remove"), role: .destructive) {
@@ -83,7 +83,7 @@ struct BucketScreen: View {
         }
     }
 
-    /// 页面按照片权限档多说的一句（10-29；#1811 起权限两态：完整 / 未完整）。
+    /// 页面按照片权限档多说的一句（权限两态：完整 / 未完整）。
     enum AccessNotice: Equatable { case none, noAccess }
 
     /// 完整授权才把相册当成自动备份来源；有限授权和拒绝统一成「相册未完整授权」，同一套提示与出口。
@@ -97,13 +97,13 @@ struct BucketScreen: View {
 
     /// 相册卡片显示哪些：完整授权显示全部；相册未完整授权只显示「当前编辑态里选中的相册」
     /// （已保存的 + 本次未保存勾选的）。已保存但当前列表里没有的相册仍留在 checked（不静默丢范围），
-    /// 但无法逐个展示/取消——既有界面限制，后续卡处理（#1775）。
+    /// 但无法逐个展示/取消。
     static func visibleAlbums(_ albums: [AlbumBucket], checked: Set<String>, photoAccess: MediaAccess) -> [AlbumBucket] {
         guard photoAccess != .full else { return albums }
         return albums.filter { checked.contains($0.id) }
     }
 
-    /// 首次加载：没有存过的范围一律空——显式传 cameraAlbum 也不预选相机相册（#1811）；
+    /// 首次加载：没有存过的范围一律空——显式传 cameraAlbum 也不预选相机相册；
     /// 已保存的相册全部保留（含当前列表里不可见的），权限恢复后重新可见，不会因权限切换静默丢掉已存范围。
     static func initialSelectionWithUnavailable(saved: Set<String>?, availableAlbums: Set<String>,
                                                 cameraAlbum: String?) -> Set<String> {
@@ -113,7 +113,7 @@ struct BucketScreen: View {
         return visible.union(invisibleSaved)
     }
 
-    /// 授权后的刷新不得覆盖未保存选择，也绝不静默改变已保存范围（#1811 评审）：
+    /// 授权后的刷新不得覆盖未保存选择，也绝不静默改变已保存范围：
     /// - 目录：仍可用就保留；
     /// - 已保存的相册：保留在当前 checked 里（none / albums 为空时也不丢，full 恢复后重新可见）；
     ///   用户已主动取消的（不在 current 里）不会被刷新加回；
@@ -130,8 +130,8 @@ struct BucketScreen: View {
     }
 
     /// 相册权限提示只针对相册；文件夹仍可添加和备份。首次点击才申请，拒绝后改去系统设置。
-    /// #1961：与首页权限卡、Android `AlbumNoAccessNotice` 同一套——actBg 圆角 16 卡、ink 标题、
-    /// ink40 正文、40pt 紧凑描边次级按钮；不再用刺眼红字标题和全宽黑底主按钮与底部主按钮打架。
+    /// 与首页权限卡、Android `AlbumNoAccessNotice` 同一套：actBg 圆角 16 卡、ink 标题、
+    /// ink40 正文、40pt 紧凑描边次级按钮。
     private var noAccess: some View {
         let presentation = PhotoAccessPresentation.of(PhotoKitAuthorization().currentLevel())
         let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -185,10 +185,10 @@ struct BucketScreen: View {
         .buttonStyle(.plain)
     }
 
-    /// #1961：封面左下角的来源类型角标（相册 / 文件夹），读屏读出类型词（对齐 Android SourceCard 的 kind 图标）。
+    /// 封面左下角的来源类型角标（相册 / 文件夹），读屏读出类型词（对齐 Android SourceCard 的 kind 图标）。
     private func kindBadge(symbol: String, label: String) -> some View {
         Image(systemName: symbol)
-            .font(.system(size: 13, weight: .semibold))
+            .font(PPFont.icon(13, .semibold))
             .foregroundStyle(PPColor.ink)
             .padding(6)
             .background(PPColor.paper.opacity(0.92), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -229,7 +229,7 @@ struct BucketScreen: View {
     }
 
     /// 文件夹与相册使用同一选中外观与同一张卡高度；重新授权 / 移除收进标题行右侧的菜单
-    /// （#1961，对齐 Android SourceCard 的 overflow menu），不再让底部按钮行把双列挤得高低错落。
+    /// （对齐 Android SourceCard 的 overflow menu）。
     private func folderCard(_ source: FolderSourceInfo) -> some View {
         let id = FolderMediaSource.bucketId(sourceId: source.id)
         let on = checked.contains(id)
@@ -240,7 +240,7 @@ struct BucketScreen: View {
             } label: {
                 VStack(alignment: .leading, spacing: 0) {
                     PPColor.linen.aspectRatio(1.6, contentMode: .fit)
-                        .overlay { Image(systemName: "folder.fill").font(.system(size: 40)).foregroundStyle(PPColor.ink40) }
+                        .overlay { Image(systemName: "folder.fill").font(PPFont.icon(40)).foregroundStyle(PPColor.ink40) }
                         .overlay(alignment: .topTrailing) { SelectBadge(selected: on).padding(8) }
                         .overlay(alignment: .bottomLeading) { kindBadge(symbol: "folder", label: L.s("source_kind_folder")) }
                     HStack(spacing: 6) {
@@ -272,7 +272,7 @@ struct BucketScreen: View {
                     .accessibilityIdentifier("folderSourceRemove")
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(PPFont.icon(15, .semibold))
                     .foregroundStyle(PPColor.ink60)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
@@ -291,7 +291,7 @@ struct BucketScreen: View {
         Button { showingAddPicker = true } label: {
             VStack(alignment: .leading, spacing: 0) {
                 PPColor.linen.aspectRatio(1.6, contentMode: .fit)
-                    .overlay { Image(systemName: "plus").font(.system(size: 36, weight: .medium)).foregroundStyle(PPColor.ink40) }
+                    .overlay { Image(systemName: "plus").font(PPFont.icon(36, .medium)).foregroundStyle(PPColor.ink40) }
                 Text(L.s("folder_sources_add")).font(PPFont.sans(14.5, .semibold, relativeTo: .subheadline))
                     .foregroundStyle(PPColor.ink).lineLimit(1)
                     .padding(.init(top: 9, leading: 12, bottom: 11, trailing: 12))
@@ -328,7 +328,7 @@ struct BucketScreen: View {
         })
     }
 
-    /// #1961：失败提示按操作区分（添加 / 重新授权 / 移除），不再一律说「文件夹没添加成功」。
+    /// 失败提示按操作区分（添加 / 重新授权 / 移除）。
     @discardableResult
     private func runFolder(_ what: String, failureKey: String, operation: () async throws -> Void,
                            apply: ([FolderSourceInfo]) -> Void = { _ in }) async -> Bool {
@@ -360,7 +360,7 @@ struct BucketScreen: View {
         .accessibilityIdentifier("bucketSince")
     }
 
-    /// 「某天起的照片」那一档的选项文字，一律写日期（10-29 文案定稿，同 Android `scopeSinceOptionLabel`）：保存过某天 → 那一天；
+    /// 「某天起的照片」那一档的选项文字，一律写日期（同 Android `scopeSinceOptionLabel`）：保存过某天 → 那一天；
     /// 从未保存或存的是「全部」→ 今天（保存时落的就是今天零点，见 `ScopePolicy.sinceForSave`）。
     static func sinceOptionLabel(_ saved: BackupSince?, now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
         let start: Date
@@ -423,7 +423,7 @@ struct BucketScreen: View {
 }
 
 /// 双列来源卡的统一外壳（对齐 Android SourceCard）：圆角 16；选中 paper 底 + 2pt ink 描边，
-/// 未选 linen 底 + 1pt border 描边。视觉值由计算属性给出，单测逐项钉住（#1961 评审）。
+/// 未选 linen 底 + 1pt border 描边。视觉值由计算属性给出，单测逐项钉住。
 struct SourceCardChrome: ViewModifier {
     let selected: Bool
 
@@ -446,7 +446,7 @@ struct SourceCardChrome: ViewModifier {
 }
 
 /// 右上勾选角标（Android SelectBadge）：22 圆；选中 = ink 底 paper 勾，未选 = paper-dim 底 + 1.5 border-strong 圈。
-/// 视觉值由计算属性给出，单测逐项钉住（#1961 评审）。
+/// 视觉值由计算属性给出，单测逐项钉住。
 struct SelectBadge: View {
     let selected: Bool
 
@@ -463,7 +463,7 @@ struct SelectBadge: View {
         ZStack {
             Circle().fill(fillColor)
             if selected {
-                Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(PPColor.paper)
+                Image(systemName: "checkmark").font(PPFont.icon(11, .bold)).foregroundStyle(PPColor.paper)
             } else {
                 Circle().strokeBorder(unselectedBorderColor, lineWidth: unselectedBorderWidth)
             }

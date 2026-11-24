@@ -26,12 +26,17 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -120,8 +125,8 @@ private fun NewBadge(modifier: Modifier = Modifier) {
     }
 }
 
-/** #1794：没有相册权限时相册区的现状说明 + 申请入口（样式同首页权限卡）。
- *  #1788：系统不再弹框时动作改「去设置」（对齐 iOS 同位置的 requestAccess / openAppSettings 分流），
+/** 没有相册权限时相册区的现状说明 + 申请入口（样式同首页权限卡）。
+ *  系统不再弹框时动作改「去设置」（对齐 iOS 同位置的 requestAccess / openAppSettings 分流），
  *  出口由调用方接应用详情页，设置回来按真实权限刷新。 */
 @Composable
 private fun AlbumNoAccessNotice(canPrompt: Boolean, onRequest: () -> Unit, onOpenSettings: () -> Unit) {
@@ -159,7 +164,7 @@ private fun AlbumNoAccessNotice(canPrompt: Boolean, onRequest: () -> Unit, onOpe
 }
 
 /**
- * #1797：相册与文件夹共用的标准来源卡。勾选/点击/菜单语义由 SourceCard 承载，
+ * 相册与文件夹共用的标准来源卡。勾选/点击/菜单语义由 SourceCard 承载，
  * 封面复用 BucketCoverImage；「新」徽标叠在封面槽内。卡片尺寸（封面高度、内容区）
  * 由 SourceCard 统一给出，相册、文件夹与「添加文件夹」天然同网格同尺寸。
  */
@@ -197,7 +202,7 @@ private fun BucketSourceCard(
 }
 
 /**
- * #1794 / #1961：相册区能不能选。相册自动备份只认完整照片权限——「部分照片权限」对相册自动备份
+ * 相册区能不能选。相册自动备份只认完整照片权限——「部分照片权限」对相册自动备份
  * 与「无权限」没有区别（底层引擎和首页 HeroCard 在 PARTIAL 下都停止相册自动备份），所以只有 FULL
  * 才给选相册；PARTIAL / NONE 都在顶部显示现状与开启入口。
  * 文件夹区和「添加文件夹」不受影响（对齐 iOS，范围页始终能进）。
@@ -208,7 +213,7 @@ internal fun bucketScreenAccessNoticeKey(access: MediaAccess): String? =
     if (bucketScreenOffersAlbumChoices(access)) null else "scope_album_no_access_title"
 
 /**
- * #1961：相册卡片显示哪些（对齐 iOS `BucketScreen.visibleAlbums` 的 #1811 不变量）。
+ * 相册卡片显示哪些（对齐 iOS `BucketScreen.visibleAlbums` 的不变量）。
  * 完整授权显示全部；未完整授权只显示当前编辑态里勾着的相册（已保存的 + 本次未保存勾选的），
  * 保证它们仍能取消；没勾的受限相册不展示，避免诱使用户误选一勾就报「自动备份已停止」。
  */
@@ -230,14 +235,14 @@ internal fun bucketScreenEmptyNoticeVisible(
 ): Boolean = bucketsEmpty && foldersEmpty && bucketScreenOffersAlbumChoices(access)
 
 /**
- * #1788：范围页相册提示的动作去向——系统还肯弹框（rationale=true）就页内申请；不再弹框
+ * 范围页相册提示的动作去向——系统还肯弹框（rationale=true）就页内申请；不再弹框
  * （问过至少一次后被锁，Android 官方口径：shouldShowRequestPermissionRationale）改「去设置」。
  * 对齐 iOS 同位置的 requestAccess / openAppSettings 分流；NONE 且 rationale=false 在本 App
  * 只可能是被锁——进范围页前 onboarding 的系统权限框一定先问过一次（同 `ruleEnableRoute` 部分态的口径）。
  */
 internal fun albumNoAccessNoticeOpensSettings(canPrompt: Boolean): Boolean = !canPrompt
 
-/** #1886：范围页两个时间胶囊放不下、需要换行——纯函数，单测用三星 SM-S928N 实测像素钉住。
+/** 范围页两个时间胶囊放不下、需要换行——纯函数，单测用三星 SM-S928N 实测像素钉住。
  *
  *  输入是两段胶囊的**自身宽度**（含内边距，px）与行可用宽、间距；两段自身宽 + 间距超过可用宽就换行。
  *  这是两个胶囊容器（`FlowRow`）按内容换行的契约：不设宽度 / 字号 / 百分比阈值。旧写法（普通 `Row`）
@@ -256,7 +261,7 @@ data class FolderBucketUi(
     val needsPermission: Boolean = false,
 )
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun BucketScreen(
     buckets: List<MediaScanner.Bucket>,
@@ -269,7 +274,7 @@ fun BucketScreen(
     selectedFolderKeys: Set<String> = emptySet(),
     saving: Boolean = false,
     albumAccess: MediaAccess = MediaAccess.FULL,
-    /** #1788：系统还肯不肯为相册权限弹框（rationale）；false = 被锁，页内动作改「去设置」。 */
+    /** 系统还肯不肯为相册权限弹框（rationale）；false = 被锁，页内动作改「去设置」。 */
     albumAccessCanPrompt: Boolean = true,
     onRequestAlbumAccess: () -> Unit = {},
     onOpenAlbumSettings: () -> Unit = {},
@@ -299,28 +304,43 @@ fun BucketScreen(
         androidx.compose.material3.ProvideTextStyle(
             androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
         ) {
-        Column(Modifier.fillMaxSize().padding(24.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // #1797：返回交给 Material3 IconButton——触控区、涟漪、role 与描述由组件给出，与 FolderScreen 同款。
-                IconButton(onClick = onCancel) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = stringResource(R.string.back),
-                        tint = PPColor.Ink,
-                    )
-                }
-                // #1801：页标题标 heading 语义，TalkBack 按标题导航直达本页；不改视觉。
-                Text(
-                    stringResource(R.string.backup_scope),
-                    fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
-                    modifier = Modifier.semantics { heading() },
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            containerColor = PPColor.Paper,
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Text(
+                            stringResource(R.string.backup_scope),
+                            style = MaterialTheme.typography.headlineSmall.copy(fontFamily = PPFont.Serif),
+                            color = PPColor.Ink,
+                            modifier = Modifier.semantics { heading() },
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onCancel) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(R.string.back),
+                                tint = PPColor.Ink,
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = PPColor.Paper,
+                        scrolledContainerColor = PPColor.Paper,
+                        navigationIconContentColor = PPColor.Ink,
+                        titleContentColor = PPColor.Ink,
+                    ),
                 )
-            }
+            },
+        ) { innerPadding ->
+        Column(Modifier.fillMaxSize().padding(innerPadding).padding(24.dp)) {
             Spacer(Modifier.height(12.dp))
-            // #1886：两个时间胶囊改放可换行的 FlowRow——普通 Row 里第二个胶囊只能吃第一个剩下的宽度，
+            // 两个时间胶囊改放可换行的 FlowRow——普通 Row 里第二个胶囊只能吃第一个剩下的宽度，
             // 英文 1.5× 时被挤成 145px（51.5dp），标签被硬裁成「Incl」。FlowRow 放不下时把第二个胶囊
             // 整体落到下一行、各自保持自身宽度，不再互相挤；换行契约见 scopeTimeChipsWrap（纯函数，单测钉住）。
-            // #1882：筛选条必须画在下方列表之上——列表向上滚动时，顶边被裁剩 1px 的相册卡
+            // 筛选条必须画在下方列表之上——列表向上滚动时，顶边被裁剩 1px 的相册卡
             // 虚拟触控框会外扩 24dp 遮住上面的 Chip，TalkBack 读到的可点区只剩 32dp。
             // zIndex 抬高绘制/命中层级，配上下方 Box 的 clipToBounds 把卡片触控框夹在视口内。
             FlowRow(
@@ -339,7 +359,7 @@ fun BucketScreen(
                     horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
                     verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
                 ) {
-                    // #1794：没有完整相册权限时相册区不给新增选择，只说现状 + 申请入口；文件夹区照常。
+                    // 没有完整相册权限时相册区不给新增选择，只说现状 + 申请入口；文件夹区照常。
                     if (!offersAlbums) {
                         item(key = "album-no-access", span = { GridItemSpan(maxLineSpan) }) {
                             AlbumNoAccessNotice(
@@ -358,7 +378,7 @@ fun BucketScreen(
                             )
                         }
                     }
-                    // #1961：未完整授权时只剩编辑态里勾着的相册（可取消），不显示诱选受限相册。
+                    // 未完整授权时只剩编辑态里勾着的相册（可取消），不显示诱选受限相册。
                     items(visibleAlbumBuckets(buckets, checked, albumAccess), key = { "album:${it.id}" }) { b ->
                         BucketSourceCard(
                             title = b.name ?: stringResource(R.string.bucket_unnamed),
@@ -375,7 +395,7 @@ fun BucketScreen(
                         )
                     }
                     items(folderBuckets, key = { "folder:${it.key}" }) { folder ->
-                        // #1797：重新授权与移除收进标准菜单；移除仍先过确认弹窗（语义不变）。
+                        // 重新授权与移除收进标准菜单；移除仍先过确认弹窗（语义不变）。
                         BucketSourceCard(
                             title = folder.bucket.name ?: stringResource(R.string.bucket_unnamed),
                             bucketId = folder.bucket.id,
@@ -423,6 +443,7 @@ fun BucketScreen(
                     fontSize = 18.sp, fontWeight = FontWeight.Bold,
                 )
             }
+        }
         }
         }
     }

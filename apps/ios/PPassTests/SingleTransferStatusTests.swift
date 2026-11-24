@@ -1,11 +1,11 @@
 @testable import PPass
 import XCTest
 
+/// 设置页的分组结构、单次传输入口与二级路由：
+/// 分组顺序、范围行随自动备份开关显隐、两个单次入口各自只发起对应的选择、
+/// 二级路由映射，以及决定页 / 范围编辑器的导航与返回接线。
+@MainActor
 final class SingleTransferStatusTests: XCTestCase {
-    private func source(_ relative: String) throws -> String {
-        try String(contentsOf: RepoPaths.root.appendingPathComponent(relative), encoding: .utf8)
-    }
-
     func testSettingsGroupsAreFixedAndInOrder() {
         XCTAssertEqual(SettingsLayout.sections, [.backup, .selection, .conditions])
         XCTAssertEqual(SettingsLayout.conditionRows, [.wifi, .notifications, .more])
@@ -20,6 +20,7 @@ final class SingleTransferStatusTests: XCTestCase {
         var requested: [String] = []
         let entries = SettingsLayout.selectionRows
         XCTAssertEqual(entries.map(\.labelKey), ["pick_from_photos_label", "pick_from_files_label"])
+        XCTAssertEqual(entries.map(\.accessibilityID), ["pickPhotosRow", "pickFilesRow"], "读屏与端到端靠这两个标识定位入口")
         let photos = { requested.append("photos") }
         let files = { requested.append("files") }
         entries[0].request(photos: photos, files: files)
@@ -28,45 +29,53 @@ final class SingleTransferStatusTests: XCTestCase {
         XCTAssertEqual(requested, ["photos", "files"])
     }
 
-    func testSingleTransferListRowsUseNativeListRowHeightAndDisclosure() {
-        for entry in SettingsLayout.selectionRows {
-            let row = entry.listRow(action: {})
-            XCTAssertNil(row.minimumHeight)
-            XCTAssertEqual(row.disclosureSymbol, "chevron.right")
-        }
-        let standalone = SingleTransferSelectionRow(title: "Photos", action: {})
-        XCTAssertEqual(standalone.minimumHeight, PPUI.Layout.rowMinHeight)
+    /// 二级路由：只有「备份范围」与「更多」有二级页，开关行不参与导航。
+    func testSettingsRowsMapToTheirNativeRoutes() {
+        XCTAssertEqual(SettingsLayout.Backup.scope.route, .bucket)
+        XCTAssertNil(SettingsLayout.Backup.rule.route)
+        XCTAssertNil(SettingsLayout.Backup.background.route)
+        XCTAssertEqual(SettingsLayout.Condition.more.route, .more)
+        XCTAssertNil(SettingsLayout.Condition.wifi.route)
+        XCTAssertNil(SettingsLayout.Condition.notifications.route)
+        XCTAssertEqual(Set(SettingsScreen.Route.allCases),
+                       Set([SettingsScreen.Route.bucket, .storage, .diagnostics, .more]))
     }
 
-    /// #1784：设置页不再有「挑几张传」的进度/结果行——单次状态只在英雄区出现。
-    func testNoPickProgressLineIsLeftInTheSettingsCard() throws {
-        let settings = try source("apps/ios/PPass/Home/SettingsScreen.swift")
-        XCTAssertFalse(settings.contains("pickedLine"), "设置页不再渲染单次传输的进度/结果句")
-        let hero = try source("apps/ios/PPass/Home/HeroCard.swift")
-        XCTAssertTrue(hero.contains("HomeProjection.pickedLine(app.pickedBatch)"), "英雄区消费单次传输的进度/结果句")
+    /// 决定页主按钮进范围页，范围页返回回到决定页；两个单次入口各自只打开对应的选择器。
+    func testDecisionNavigationAndPickerEntries() {
+        let app = AppModel(backend: FakeBackend.make(.normal))
+        app.phase = .decision
+
+        app.decisionChooseScope()
+        XCTAssertEqual(app.phase, .chooseAlbums, "主按钮进范围页")
+        XCTAssertTrue(app.autoRule)
+
+        app.leaveFirstScope()
+        XCTAssertEqual(app.phase, .decision, "范围页返回回到决定页")
+
+        app.decisionPickPhotos()
+        XCTAssertTrue(app.pickerRequested, "照片入口只打开照片选择器")
+        XCTAssertFalse(app.filePickerRequested)
+        app.pickerRequested = false
+        XCTAssertFalse(app.decisionBusy, "选择器关闭后解锁")
+
+        app.decisionPickFiles()
+        XCTAssertTrue(app.filePickerRequested, "文件入口只打开文件选择器")
+        XCTAssertFalse(app.pickerRequested)
     }
 
-    /// #1784：条件行只在原组内显隐、尊重系统减少动态效果——状态变化直接呈现，不加过渡动画。
-    func testSettingsAndHeroRenderStateDirectlyWithoutTransitions() throws {
-        for file in ["apps/ios/PPass/Home/SettingsScreen.swift", "apps/ios/PPass/Home/HeroCard.swift"] {
-            let source = try source(file)
-            for api in ["withAnimation", ".animation(", ".transition(", "animatableData"] {
-                XCTAssertFalse(source.contains(api), "\(file) 直接呈现状态，不使用 \(api)（尊重系统减少动态效果）")
-            }
-        }
+    /// 范围编辑入口：英雄卡「调整范围」选中设置 Tab 并请求打开范围页，由 SettingsScreen 消费。
+    func testScopeEditorActionSelectsSettingsAndRequestsTheRoute() {
+        let app = AppModel(backend: FakeBackend.make(.normal))
+        app.tab = .photos
+        app.adjustScopeFromIncompleteAlbum()
+        XCTAssertEqual(app.tab, .settings)
+        XCTAssertTrue(app.wantsScopeEditor)
     }
 
-    /// #1962：设置页二级路由（范围 / 存储详情 / 诊断 / 更多）隐藏底部双 Tab 栏，对齐 Android 二级页
-    /// 收起 Photos/设置 tab 栏。反证：去掉 `.toolbar(.hidden, for: .tabBar)`，本条判红。
-    func testSecondaryRoutesHideTheBottomTabBar() throws {
-        let settings = try source("apps/ios/PPass/Home/SettingsScreen.swift")
-        let nav = try XCTUnwrap(settings.range(of: ".navigationDestination(for: Route.self)")?.lowerBound)
-        let slice = String(settings[nav...].prefix(800))
-        XCTAssertTrue(slice.contains(".toolbar(.hidden, for: .tabBar)"), "二级路由必须隐藏底部 tabBar")
-        let destination = try XCTUnwrap(settings.range(of: "func secondaryDestination(")?.lowerBound)
-        let body = String(settings[destination...])
-        for route in [".bucket", ".storage", ".diagnostics", ".more"] {
-            XCTAssertTrue(body.contains("case \(route)"), "二级路由必须覆盖 \(route)")
-        }
+    /// 手动输入页的返回：从扫码页进来回扫码页，从欢迎页进来回欢迎页。
+    func testManualPairBackReturnsToWhereItCameFrom() {
+        XCTAssertEqual(OnboardingFlow.manualBackTarget(fromScan: true), .scan)
+        XCTAssertEqual(OnboardingFlow.manualBackTarget(fromScan: false), .welcome)
     }
 }
