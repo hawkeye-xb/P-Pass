@@ -78,29 +78,17 @@ KNOWN_EXTENSIONS = (
 
 
 def get_just_recipes(repo_root: Path) -> set[str]:
-    justfile = repo_root / 'justfile'
-    if not justfile.exists():
-        return set()
-    try:
-        res = subprocess.run(
-            ['just', '--summary'],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return set(res.stdout.strip().split())
-    except Exception:
-        # Fallback to parsing recipe names from justfile
-        recipes = set()
-        for line in justfile.read_text(encoding='utf-8', errors='ignore').splitlines():
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            m = re.match(r'^([a-zA-Z0-9_-]+)(?:\s+[^:=]*)*:', line)
-            if m:
-                recipes.add(m.group(1))
-        return recipes
+    res = subprocess.run(
+        ['just', '--justfile', str(repo_root / 'justfile'), '--summary'],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    recipes = set(res.stdout.split())
+    if not recipes:
+        raise ValueError('just --summary returned no recipes')
+    return recipes
 
 
 def check_markdown_links(file_path: Path, repo_root: Path) -> list[str]:
@@ -203,7 +191,7 @@ def check_tier1_anchors(
                         and '[' not in subcmd
                         and '*' not in subcmd
                     ):
-                        if just_recipes and subcmd not in just_recipes:
+                        if subcmd not in just_recipes:
                             rel_f = file_path.relative_to(repo_root) if file_path.is_relative_to(repo_root) else file_path
                             errors.append(
                                 f"{rel_f}:{line_no}: unknown just recipe `{subcmd}` (in `{code}`)"
@@ -280,7 +268,12 @@ def run_checks(tier: int, repo_root: Path) -> int:
         files = sorted(
             {p for pat in t1_patterns for p in repo_root.glob(pat) if p.is_file()}
         )
-        just_recipes = get_just_recipes(repo_root)
+        try:
+            just_recipes = get_just_recipes(repo_root)
+        except (OSError, subprocess.CalledProcessError, ValueError) as exc:
+            detail = getattr(exc, 'stderr', None) or str(exc)
+            print(f"cannot validate just recipes: {detail.strip()}", file=sys.stderr)
+            return 1
         print(f"[Tier 1] Checking {len(files)} active guideline documents...")
 
         for f in files:

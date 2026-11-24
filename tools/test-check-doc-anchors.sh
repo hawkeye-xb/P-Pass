@@ -200,9 +200,24 @@ else
     fail "场景 11: GBK 输出下有效文档应绿但红"
 fi
 
+# 场景 12: 命令清单读取失败或为空时，一级检查不能报绿。
+mkdir -p "$TMP/fake-bin"
+printf '#!/bin/bash\nexit "${FAKE_JUST_EXIT:-0}"\n' > "$TMP/fake-bin/just"
+chmod +x "$TMP/fake-bin/just"
+for rc in 0 1; do
+    if FAKE_JUST_EXIT="$rc" PATH="$TMP/fake-bin:$PATH" python3 "$CHECKER" --tier 1 --root "$FIXTURE" >"$TMP/just-summary.log" 2>&1; then
+        fail "场景 12: 无法取得 just 命令清单时错误放行（just 退出 $rc）"
+    elif grep -Fq 'cannot validate just recipes' "$TMP/just-summary.log"; then
+        pass "场景 12: 无法取得 just 命令清单时报错（just 退出 $rc）"
+    else
+        cat "$TMP/just-summary.log"
+        fail "场景 12: 没有说明 just 命令清单读取失败"
+    fi
+done
+
 if [ "$fail_count" -gt 0 ]; then
     echo "❌ $fail_count 个场景失败"
     exit 1
 fi
 
-echo "✅ 全部 11 个反证与自测场景全绿！"
+echo "✅ 全部 12 个反证与自测场景全绿！"
