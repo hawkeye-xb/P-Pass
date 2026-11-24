@@ -167,7 +167,6 @@
     <string name="scope_time_all">含以前的照片</string>
     <!-- #1995（产品负责人拍板选项 A）：精简设置行文案保单行。全部历史不拖尾巴（为空），自某日起精简为「 · %1$s起」。 -->
     <string name="scope_value_since"> · %1$s起</string>
-    <string name="scope_value_all">全部</string>
     <string name="backup_scope_with_time">%1$s%2$s</string>
     <!-- #1263：照片页空状态（电脑上还没有照片），只有这一种说法。 -->
     <string name="home_empty_albums">还没有备份好的照片。备份完成后会显示在这里。</string>

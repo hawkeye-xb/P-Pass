@@ -112,7 +112,7 @@ class OnboardingSlimWiringTest {
         for (dir in listOf("values", "values-zh")) {
             val xml = File("src/main/res/$dir/strings.xml").readText()
             assertFalse("$dir 还有 scope_time_today", xml.contains("name=\"scope_time_today\""))
-            for (k in listOf("scope_time_since_date", "scope_time_all", "scope_value_since", "scope_value_all")) {
+            for (k in listOf("scope_time_since_date", "scope_time_all", "scope_value_since")) {
                 assertTrue("$dir 缺 $k", xml.contains("name=\"$k\""))
             }
         }

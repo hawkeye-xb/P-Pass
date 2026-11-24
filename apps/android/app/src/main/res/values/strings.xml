@@ -179,7 +179,6 @@
     <string name="scope_time_all">Include older photos</string>
     <!-- #1995 (Product Owner Option A): Compact settings-row copy to keep it on a single line. Full history has no suffix, since-date is compacted to " · %1$s+". -->
     <string name="scope_value_since"> · %1$s+</string>
-    <string name="scope_value_all">All</string>
     <string name="backup_scope_with_time">%1$s%2$s</string>
     <!-- #1263: empty Photos tab (no photos on the computer yet); one wording only. -->
     <string name="home_empty_albums">No backed-up photos yet. They\'ll appear here.</string>
