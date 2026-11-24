@@ -417,8 +417,8 @@ pub fn check_library_path(
 /// [`check_library_path`] 的可测版本：两个探测器可注入，单测能在不依赖真实远端卷 /
 /// 重解析点的前提下反证「任一前置检查去掉都变红」。生产入口传平台的真实判据。
 ///
-/// 顺序（都在任何 `canonicalize()` 之前）：连接方事实 → UNC/设备或远端重解析点 →
-/// 网络卷/映射盘 → 解析真实路径 → 再核一次解析后的卷 → 敏感目录。
+/// 顺序（都在任何 `canonicalize()` 之前）：连接方事实 → 字面 UNC/设备命名空间 →
+/// 网络卷/映射盘（Windows 盘符根零外连短路） → 远端重解析点 → 解析真实路径 → 再核一次解析后的卷 → 敏感目录。
 fn check_library_path_with(
     target: &Path,
     platform_dir: &Path,
@@ -434,13 +434,10 @@ fn check_library_path_with(
             return Err(config::ui_err("ui.err_library_user_dirs", &[]));
         }
     }
-    // #1918 / #1927：在任何 `canonicalize()` 之前先拒绝 UNC 网络共享、Windows 设备/
-    // 非盘符命名空间，以及**指向远端 / 设备命名空间的重解析点**（本地盘符下的 junction
-    // / symlink）。否则服务端会以 `NT SERVICE\P-Pass` 身份跟随重解析点向网络位置发起
-    // SMB/NTLM 连接或访问设备对象（与 `user_dirs` 共用同一份判据）。
-    if platform::UserDirFacts::is_unc_or_device_path(target) || remote_reparse(target) {
+    // #1918：在任何文件系统访问之前先按字面拒绝 UNC 网络共享与 Windows 设备/非盘符命名空间。
+    if platform::UserDirFacts::is_unc_or_device_path(target) {
         tracing::warn!(
-            "#1918/#1927: 拒绝 UNC / 设备命名空间或指向远端的重解析点作为照片库位置：{}",
+            "#1918: 拒绝 UNC 或设备命名空间作为照片库位置：{}",
             target.display()
         );
         return Err(config::ui_err(
@@ -448,14 +445,27 @@ fn check_library_path_with(
             &[("dir", &target.display())],
         ));
     }
-    // #1927：首次建库与搬迁对齐——直接选网络卷 / 映射网络盘（`Z:\new_lib`，子目录尚不
-    // 存在也能识破）一律拒绝，且必须在 `canonicalize()` 之前。
+    // #1927 / #1993：首次建库与搬迁对齐——直接选网络卷 / 映射网络盘（`Z:\new_lib`，子目录尚不
+    // 存在也能由 `GetDriveTypeW` 零外连识破）必须排在 `remote_reparse` 之前拒绝，避免先对映射盘
+    // 发起 `symlink_metadata("Z:\\")` SMB 外连，也保证稳定返回 `ui.err_relocate_network_volume`。
     if network_volume(target) {
         tracing::warn!(
             "#1927: 拒绝网络卷 / 映射网络盘作为照片库位置：{}",
             target.display()
         );
         return Err(config::ui_err("ui.err_relocate_network_volume", &[]));
+    }
+    // #1927：在 `canonicalize()` 之前拒绝指向远端 / 设备命名空间的本地重解析点（junction / symlink），
+    // 防止服务端以 `NT SERVICE\P-Pass` 身份跟随重解析点向网络位置发起 SMB/NTLM 连接。
+    if remote_reparse(target) {
+        tracing::warn!(
+            "#1927: 拒绝指向远端或设备命名空间的重解析点作为照片库位置：{}",
+            target.display()
+        );
+        return Err(config::ui_err(
+            "ui.err_library_target_missing",
+            &[("dir", &target.display())],
+        ));
     }
     let Some(real) = resolve_components(target) else {
         tracing::info!("#1826: 选择的位置解析不出真实路径：{}", target.display());
@@ -1475,10 +1485,23 @@ mod tests {
         }
         // 只有未 canonicalize 的链接路径算「在网络卷上」；解析后的真实目录不算，
         // 于是拦截只能来自 resolve_components 之前那道前置检查。
+        // #1993：当目标已是映射网络盘时，remote_reparse 探针调用次数必须为 0（避免先发起
+        // symlink_metadata("Z:\\") SMB 外连，也避免 fail-closed 把错误码变成 err_library_target_missing）。
+        let reparse_calls = std::cell::Cell::new(0usize);
+        let remote_reparse = |_: &Path| {
+            reparse_calls.set(reparse_calls.get() + 1);
+            true
+        };
         let network_volume = |p: &Path| p == link.as_path();
-        let err = check_library_path_with(&link, &platform_dir, None, &|_| false, &network_volume)
-            .expect_err("网络卷 / 映射盘必须在 canonicalize 之前被拒");
+        let err =
+            check_library_path_with(&link, &platform_dir, None, &remote_reparse, &network_volume)
+                .expect_err("网络卷 / 映射盘必须在 canonicalize 之前被拒");
         assert!(err.contains("ui.err_relocate_network_volume"), "{err}");
+        assert_eq!(
+            reparse_calls.get(),
+            0,
+            "目标为映射网络盘时 remote_reparse 探针调用次数必须为 0，避免外连"
+        );
     }
 
     /// #1927：本地符号链接跳往已挂载网络卷时，字面路径看不出来——解析出真实路径后

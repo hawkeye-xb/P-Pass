@@ -123,11 +123,11 @@ fn is_valid_dir_fact_path_with(
         && bytes[6] == b'\\';
     // 3. POSIX 本地绝对路径（单个 `/` 开头；在 Windows 宿主上 `is_absolute()` 为 false）。
     let posix = bytes[0] == b'/' && path.is_absolute();
-    // #1927：格式合法后，还要在 `canonicalize()` / `real_path` 之前拦掉指向远端 /
-    // 设备命名空间的重解析点，以及网络卷 / 映射网络盘——服务形态下这些都会让服务
-    // 账户以服务身份外连 SMB/NTLM（`user_dirs` 进入 `real_path` 前就要拒）。
-    // 两个判据以探针注入，单测能单独反证任一分支去掉后变红。
-    (normal_drive || verbatim_drive || posix) && !reparse_point(path) && !network_volume(path)
+    // #1927 / #1993：格式合法后，还要在 `canonicalize()` / `real_path` 之前拦掉网络卷 /
+    // 映射网络盘（先查，Windows 盘符根零外连短路）以及指向远端 / 设备命名空间的重解析点——
+    // 服务形态下这些都会让服务账户以服务身份外连 SMB/NTLM（`user_dirs` 进入 `real_path` 前就要拒）。
+    // 两个判据以探针注入，单测能单独反证任一分支去掉或顺序颠倒后变红。
+    (normal_drive || verbatim_drive || posix) && !network_volume(path) && !reparse_point(path)
 }
 
 impl UserDirFacts {
@@ -756,11 +756,26 @@ mod floor_tests {
             !facts.selection_ready_with(&move |p: &Path| p == downloads.as_path(), &|_| false),
             "重解析点命中用户目录必须不就绪"
         );
-        // 仅网络卷探针对 pictures 命中 ⇒ 不就绪。
+        // 仅网络卷探针对 pictures 命中 ⇒ 不就绪，且该映射盘目录不得再走进 reparse_point 触发 stat（#1993）。
         let pictures = facts.pictures.clone().unwrap();
+        let pictures_for_reparse = pictures.clone();
+        let reparse_calls_on_net = std::cell::Cell::new(0usize);
         assert!(
-            !facts.selection_ready_with(&|_| false, &move |p: &Path| p == pictures.as_path()),
+            !facts.selection_ready_with(
+                &|p: &Path| {
+                    if p == pictures_for_reparse.as_path() {
+                        reparse_calls_on_net.set(reparse_calls_on_net.get() + 1);
+                    }
+                    false
+                },
+                &move |p: &Path| p == pictures.as_path(),
+            ),
             "网络卷命中用户目录必须不就绪"
+        );
+        assert_eq!(
+            reparse_calls_on_net.get(),
+            0,
+            "命中网络卷/映射网络盘的用户目录必须在调用 reparse_point 探针前短路拒绝"
         );
         // 默认入口对合法本地绝对路径就绪：证明探针确实接进了 `selection_ready`。
         assert!(facts.selection_ready(), "合法宿主目录默认入口应就绪");
