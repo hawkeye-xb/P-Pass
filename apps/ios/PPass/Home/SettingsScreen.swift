@@ -235,18 +235,18 @@ struct SettingsScreen: View {
     private static let valueFont = PPFont.sans(PPUI.TextSize.rowValue, relativeTo: .subheadline)
     private static let hintFont = PPFont.sans(PPUI.TextSize.rowHint, relativeTo: .footnote)
 
-    /// 「备份范围」行值（#1789，对位 Android 同一行）：相册与素材文件夹用「 + 」连在一行，文件夹不再单独占设置行；
-    /// 旧版已登记目录（从未保存过范围）也按真实来源显示，不再误报「未选定自动备份范围」。
-    /// 「3 个相册 + 素材文件夹 2 · 含以前的照片」；读不到说「读不到」，什么都没有说「未选定自动备份范围」。
+    /// 「备份范围」行值（#1789，对位 Android 同一行；#1995 精简文案保单行）：
+    /// 相册与文件夹采用短写法用「 · 」连接（例如「1 相册 · 1 文件夹」），时间档如果是全部则不带尾巴，某日起则接「 · M月d日起」；
+    /// 读不到说「读不到」，什么都没有说「未选定自动备份范围」。
     /// 静态纯函数：SettingsFeedbackTests 直接跑它判红。
     static func scopeValueText(unreadable: Bool, albumCount: Int?, folderCount: Int, since: BackupSince?,
                                now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
         if unreadable { return L.s("backup_scope_unreadable") }
         let albums = albumCount.flatMap { $0 > 0 ? L.p("backup_scope_n", $0) : nil }
-        let folders = folderCount > 0 ? "\(L.s("folder_scope_noun")) \(folderCount)" : nil
-        let sources = [albums, folders].compactMap { $0 }.joined(separator: " + ")
+        let folders = folderCount > 0 ? L.p("backup_scope_folder_n", folderCount) : nil
+        let sources = [albums, folders].compactMap { $0 }.joined(separator: " · ")
         guard !sources.isEmpty else { return L.s("backup_scope_none") }
-        guard let since else { return sources }
+        guard let since, case .since = since else { return sources }
         return L.f("backup_scope_with_time", sources, timeLabel(since, now: now, calendar: calendar, locale: locale))
     }
 
@@ -255,10 +255,9 @@ struct SettingsScreen: View {
                             folderCount: app.selectedFolderCount, since: app.since, now: Date())
     }
 
-    /// 设置行时间档的说法，一律写日期（10-29 文案定稿，同 Android `scopeValueLabel`）：某天起 →「M月d日起的照片」；
-    /// 全部 →「含以前的照片」。用 scope_value_*（英文比选项短）。
+    /// 设置行时间档的说法（#1995 产品定案，同 Android `scopeValueLabel`）：全部时无尾巴；某天起 →「 · M月d日起」。
     static func timeLabel(_ since: BackupSince, now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
-        guard case .since(let ms) = since else { return L.s("scope_value_all") }
+        guard case .since(let ms) = since else { return "" }
         return L.f("scope_value_since", scopeDate(Date(timeIntervalSince1970: Double(ms) / 1000), calendar: calendar, locale: locale))
     }
 

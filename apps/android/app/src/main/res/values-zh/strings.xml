@@ -169,9 +169,10 @@
     <!-- #1263：备份范围的时间二选一（不做自选日期）。scope_time_* 是选范围页的选项，scope_value_* 是设置行的值，一律写日期。 -->
     <string name="scope_time_since_date">%1$s以后</string>
     <string name="scope_time_all">含以前的照片</string>
-    <string name="scope_value_since">%1$s以后</string>
-    <string name="scope_value_all">含以前的照片</string>
-    <string name="backup_scope_with_time">%1$s，%2$s</string>
+    <!-- #1995（产品负责人拍板选项 A）：精简设置行文案保单行。全部历史不拖尾巴（为空），自某日起精简为「 · %1$s起」。 -->
+    <string name="scope_value_since"> · %1$s起</string>
+    <string name="scope_value_all">全部</string>
+    <string name="backup_scope_with_time">%1$s%2$s</string>
     <!-- #1263：照片页空状态（电脑上还没有照片），只有这一种说法。 -->
     <string name="home_empty_albums">还没有备份好的照片。备份完成后会显示在这里。</string>
     <!-- MOB-02 §六: 新相册徽标 -->
@@ -183,7 +184,10 @@
     <!-- #1020：存了范围但读不出来，不是「未选定自动备份范围」。 -->
     <string name="backup_scope_unreadable">读不到已保存的选择</string>
     <plurals name="backup_scope_n">
-        <item quantity="other">%1$d 个相册</item>
+        <item quantity="other">%1$d 相册</item>
+    </plurals>
+    <plurals name="backup_scope_folder_n">
+        <item quantity="other">%1$d 文件夹</item>
     </plurals>
     <string name="storage_computer">存储电脑</string>
     <!-- UX-03: 后台规则一行 + 极简设置。MOB-10 起后台条件为「Wi-Fi（可在设置关闭）+ 电量不低」，
