@@ -61,12 +61,27 @@ class ARCH14UiWiringTest {
     // #413：UI 只经 EngineGateway 碰引擎——holder 里不再直接调旧引擎的暂停 / 继续 / 取消 / 计数入口。
     // 反证：backupNow 改回 `pauseFlow(context)` → 红。
     @Test
-    fun the_holder_reaches_the_engine_only_through_the_gateway() {
-        val holderClass = holder.substringBefore("// ================================================================ W1 接线点：EngineGateway")
-        listOf("pauseFlow(", "continueFlow(", "cancelRemainingFlow(", "countRemainingFlow(", "restoreSkippedFlow(", "flowProjection(")
-            .forEach { assertFalse("holder 还在直接调 $it", holderClass.contains(it)) }
-        assertTrue(holderClass.contains("FlowCommand.Pause -> gateway?.pause()"))
-        assertTrue(holderClass.contains("FlowCommand.Continue -> gateway?.resume()"))
+    fun the_holder_reaches_the_engine_only_through_the_gateway() = kotlinx.coroutines.test.runTest {
+        val calls = mutableListOf<String>()
+        val fakeGateway = object : com.hawkeyexb.ppass.backup.EngineGateway {
+            override val view = kotlinx.coroutines.flow.MutableStateFlow<com.hawkeyexb.ppass.backup.flow.EngineView?>(null)
+            override val revision = kotlinx.coroutines.flow.emptyFlow<Long>()
+            override fun facts(bucketIds: Set<Long>?, inScopeTotal: Long?, sinceSec: Long?) =
+                com.hawkeyexb.ppass.backup.flow.FlowProjection(view = null, confirmed = 0L, inScopeTotal = inScopeTotal, failed = 0L)
+            override suspend fun pause() { calls += "pause" }
+            override suspend fun resume() { calls += "resume" }
+            override suspend fun remainingSnapshot(): com.hawkeyexb.ppass.backup.flow.RemainingSnapshot = error("unused")
+            override suspend fun cancelRemaining(snapshot: com.hawkeyexb.ppass.backup.flow.RemainingSnapshot) { calls += "cancel" }
+            override suspend fun restoreSkipped() { calls += "restore" }
+            override suspend fun retryFailed() { calls += "retry" }
+            override fun onMediaChanged() { calls += "media" }
+            override fun close() { calls += "close" }
+        }
+        com.hawkeyexb.ppass.backup.dispatchFlowCommand(com.hawkeyexb.ppass.backup.flow.FlowCommand.Pause, fakeGateway) { calls += "wake" }
+        com.hawkeyexb.ppass.backup.dispatchFlowCommand(com.hawkeyexb.ppass.backup.flow.FlowCommand.Continue, fakeGateway) { calls += "wake" }
+        com.hawkeyexb.ppass.backup.dispatchFlowCommand(com.hawkeyexb.ppass.backup.flow.FlowCommand.Retry, fakeGateway) { calls += "wake" }
+        com.hawkeyexb.ppass.backup.dispatchFlowCommand(com.hawkeyexb.ppass.backup.flow.FlowCommand.Wake, fakeGateway) { calls += "wake" }
+        assertEquals(listOf("pause", "resume", "retry", "wake"), calls)
     }
 
     // 确认框：写明 N；关闭按钮不许也叫「取消」（要确认的动作本身就叫取消，MOB-89 同形的误触）。

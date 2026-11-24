@@ -1,7 +1,6 @@
 import Foundation
 import PPassCore
 
-/// 时间线的分页与筛选（对位 Android PhotosScreen 的 loader 状态）。按月分组，组头 yyyy.MM。
 @MainActor
 final class TimelineModel: ObservableObject {
     struct MonthSection { let title: String; let items: [TimelineItem] }
@@ -10,11 +9,9 @@ final class TimelineModel: ObservableObject {
     @Published private(set) var loading = false
     @Published private(set) var error: String?
     @Published var filter: TimelineFilter = .all
-    /// 截图路由用：首屏加载完自动打开第一张照片 / 第一个视频。
     @Published private(set) var autoOpen: TimelineItem?
     var openOnLoad: LaunchRoute?
 
-    /// 实时订阅的状态（对位 Android `SubscriptionSessionState`），页面据此显示「重连中 / 已断开 · 重试」。
     @Published private(set) var live = TimelineLiveState()
 
     private var source: TimelineSource?
@@ -22,14 +19,12 @@ final class TimelineModel: ObservableObject {
     private var feedToken: UUID?
     private var cursor: String?
     private var exhausted = false
-    /// 每装进一份新的整页快照 +1：在飞的翻页 / 首页加载回来发现快照已换，就丢掉自己的结果（否则会把旧游标的下一页接到新快照后面）。
     private var snapshot = 0
     private var refreshing = false
     private var refreshAgain = false
 
     func bind(_ source: TimelineSource) { if self.source == nil { self.source = source } }
 
-    /// 接上实时更新通道（#963）。幂等；页面消失时 `detach`。
     func attach(_ feed: TimelineLiveFeed) {
         guard feedToken == nil else { return }
         self.feed = feed
@@ -40,9 +35,6 @@ final class TimelineModel: ObservableObject {
             case .fallbackTick: Task { await self.refreshFallback() }
             case .state(let s):
                 self.live = s
-                // #1904（对位 Android #1883）：初始整页加载失败留下的 error 不会自己消失，
-                // 而详情页这时已经说「已连接」——照片页不能停在「连不上」上。连上就把那一页补回来：
-                // 成功即清 error（refreshFromSignal 会做），失败保留（页面照旧说「无法连接电脑」，那是实话）。
                 if s.connected, self.error != nil {
                     Task { await self.refreshFromSignal() }
                 }
@@ -57,9 +49,6 @@ final class TimelineModel: ObservableObject {
 
     func retryLive() { feed?.retry() }
 
-    /// 桌面说时间线变了：整页覆盖（SYNC-01 对账删掉的照片必须真的消失），先拿到结果再换，不先清空（不闪、不丢滚动位置）。
-    /// 备份一批会连发信号：刷新进行中再来信号只记一笔，跑完补一次，N 个信号不会排成 N 次请求。
-    /// 失败不动已有内容也不亮错误（等下一次信号 / 兜底）；成功清错误（订阅恢复后「连不上」要能自己消掉）。
     func refreshFromSignal() async {
         guard let source else { return }
         if refreshing { refreshAgain = true; return }
@@ -75,12 +64,10 @@ final class TimelineModel: ObservableObject {
                 snapshot += 1
                 error = nil
             } catch {
-                // 保持现状
             }
         } while refreshAgain
     }
 
-    /// 60 秒兜底：仅追加没见过的（不动已加载内容和翻页游标），防的是真实丢事件。
     func refreshFallback() async {
         guard let source, !refreshing else { return }
         guard let page = try? await source.page(cursor: nil, reason: .fallback) else { return }
@@ -115,7 +102,6 @@ final class TimelineModel: ObservableObject {
         if let route = openOnLoad {
             openOnLoad = nil
             autoOpen = items.first { $0.isVideo == (route == .video) }
-            // 商店截图：PPASS_VIEWER_ITEM=<序号> 指定打开第几条（从 0 数），换一张照片截看图页（仅 DEBUG，见 DebugLaunchInput）。
             if let i = DebugLaunchInput.viewerItem, items.indices.contains(i) {
                 autoOpen = items[i]
             }
@@ -123,7 +109,7 @@ final class TimelineModel: ObservableObject {
     }
 
     func loadMore(retry: Bool = false) async {
-        guard !loading, !exhausted, retry || error == nil else { return } // 失败后只有用户点「重试」才再试，不在滚动里反复撞
+        guard !loading, !exhausted, retry || error == nil else { return }
         await load(.more)
     }
 
@@ -135,7 +121,7 @@ final class TimelineModel: ObservableObject {
         let mine = snapshot
         do {
             let page = try await source.page(cursor: cursor, reason: reason)
-            guard mine == snapshot else { return } // 这期间整页被换过：这一页属于旧快照
+            guard mine == snapshot else { return }
             items += page.items
             cursor = page.nextCursor
             exhausted = page.nextCursor == nil
@@ -144,7 +130,6 @@ final class TimelineModel: ObservableObject {
             if items.isEmpty {
                 self.error = String(describing: error)
             } else {
-                // 已有内容时翻页失败：对位 Android，静默停在这里（不挡住已加载的照片；下一次信号整页刷新会重来）。
                 exhausted = true
             }
         }

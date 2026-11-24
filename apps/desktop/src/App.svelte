@@ -7,6 +7,7 @@
     serviceRecoveryAction,
     canStopService,
     isServiceRunning,
+    isServiceRecovery,
     serviceStateActionKey,
     serviceStateFromEvent,
     serviceStateLabelKey,
@@ -58,16 +59,9 @@
   import ClockIcon from "@lucide/svelte/icons/clock";
   import SettingsIcon from "@lucide/svelte/icons/settings";
   import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
-  // T-091: 人性化时间 + 哨兵判定纯函数（时间戳单位见模块头注释：unix 毫秒）
-  import { humanTime, daysSince, relativeTime } from "./lib/humanTime.js";
-  // PRES-01: presence 三档 → 文案/点色（connection 路径事实优先展示）
-  import { presenceText, flowConnectionText } from "./lib/connection.js";
-  // DEV-03: 「自己断开」与「业主移除」的判据 + 已断开行文案（纯函数，
-  // disconnected.test.js 钉边界）。
-  import { disconnectedRow } from "./lib/disconnected.js";
+  import { humanTime } from "./lib/humanTime.js";
+  import { byActivity, deviceRow, overviewRows } from "./lib/deviceOverview.js";
   import { disconnectedClause, noDevicesText } from "./lib/deviceCounts.js";
-  // #1577（#1402 卡2）：15 天「很久没联系」提示（last_seen 距今 > 15 天）。
-  import { staleHint } from "./lib/staleHint.js";
   // #1699：设备页分组——未知/缺失的 removal 值留在列表里（fail-open）。
   import { deviceGroups as deviceGroupsOf } from "./lib/deviceGroups.js";
   // #1433：设备名兜底（空名 → 「手机 · <ID 前 4 位>」）抽成共用函数，所有显示
@@ -539,43 +533,6 @@
 
   // #1044 B4：行状态（含优先级：已断开 > 需要看看 > 正在传输 > 在线态）
   // 由 daemon 给出（devices.list 的 `row_state`），这里只按结论取文案。
-  function deviceRow(d, now) {
-    const wm = watermarks[d.node_id];
-    const lastBackupAt = wm?.last_backup_at ?? null;
-    const backupTime = humanTime(lastBackupAt, now);
-    const backupRight = backupTime ? t("ui.device_last_backup", { time: backupTime }) : t("ui.device_never_backed_up");
-    switch (d.row_state) {
-      case "disconnected":
-        // DEV-03: 不借用「离线」话术，也不参与「几天没备份」告警。
-        return disconnectedRow(humanTime(d.departed_at, now), d.departed_by);
-      case "needs_attention":
-        return {
-          alert: true,
-          dot: "act",
-          sub: t("ui.device_no_backup_days", { n: daysSince(lastBackupAt, now) }),
-          right: t("ui.device_needs_attention"),
-        };
-      case "transferring": {
-        // NET-05: 只在这台设备正有 Flow 传输时显示传输路径。
-        const flow = flowConnectionText(d.flow_connection);
-        if (flow) return { alert: false, dot: flow.dot, sub: flow.sub, right: backupRight };
-        break;
-      }
-    }
-    // #1577（#1402 卡2）：15 天没联系（只对已配对、且**离线**的行）。放在 5 天
-    // 备份告警（needs_attention）之后——同一台设备同时满足两者时，5 天告警优先，
-    // 15 天档不覆盖它（卡上「现有 5 天告警不动」）；在线/最近在线的行也不提示。
-    if (d.removal === "none" && d.presence === "offline" && staleHint(d.last_seen, now)) {
-      return { alert: true, dot: "act", sub: t("ui.device_stale_hint"), right: backupRight };
-    }
-    const pres = presenceText(
-      d.presence,
-      d.connection,
-      relativeTime(d.last_seen, now),
-      humanTime(d.last_seen, now)
-    );
-    return { alert: false, dot: pres.dot, sub: pres.sub, right: backupRight };
-  }
 
   // 设计稿离线版：总览标题副标题是"全家 N 张照片…"+"最近一次备份：
   // <时间> · 来自 <设备>"，不是"已配对设备 N 台 · 照片库 M 张"——
@@ -583,35 +540,8 @@
   // 优雅退回旧文案（没备份过/watermarks 还没加载完时不假装有数据）。
   // #1066：由 daemon 在 devices.list 里给结论（{at, name} | null），前端不再拿水位推导。
   const lastBackupOverall = $derived(lastBackupOverallWire);
-  // 设计稿离线版：总览水位卡只放"需要留意的 + 最近动过的"，不是全量
-  // 平铺——告警设备（alert）永远全show，正常设备只show 前 OK_CAP 个，
-  // 剩下的收进"一切正常的还有 N 台"链接（点进「家人与设备」看全部，
-  // 那边才是全量真相，这里只是总览摘要）。
-  // 2026-08-18（用户反馈①）：卡里展示 3 行、按「最新活跃」排。活跃度
-  // 取 max(last_seen, last_backup_at)——两者都是"这台设备最近有动静"的
-  // 真实证据，只看其中一个都会漏（刚连上还没备份 / 备份完就锁屏离线）。
-  // 告警设备（needs_attention）仍然全部置顶且不受 3 行上限挤出：这张卡的
-  // 使命是"一眼确认备份没坏"，而告警设备按定义就是最不活跃的那批，纯
-  // 活跃排序恰好会把最该看见的行排到最后。
-  const OVERVIEW_ROWS = 3;
-  // #1044 B4：最近活跃（max(last_seen, last_backup_at)）与告警判定由 daemon 给出。
-  const byActivity = (a, b) => (b.last_activity_at ?? 0) - (a.last_activity_at ?? 0);
-  // #1577（#1402 卡2）：设备页主列表分「已配对」「已断开」两组；「已移除」折叠区
-  // 隐藏（用户看不到移除过哪些设备，恢复靠手机重扫码）。每组按最近活跃倒序。
-  // #1699：分组在 lib/deviceGroups.js——未知/缺失的 removal 值留在列表里
-  // （fail-open），不能因为对不上字符串让整行消失。
   const deviceGroups = $derived(deviceGroupsOf(devices, byActivity));
-  const waterRows = $derived.by(() => {
-    // 水位卡问的是「在用设备的备份健康度」——已断开/已移除的都不该算进来
-    // （比「家人与设备」列表的口径更窄）。已断开的设备催用户「去开 App
-    // 备份」是错的。
-    const active = devices.filter((d) => d.removal === "none").sort(byActivity);
-    const withRow = active.map((d) => ({ d, row: deviceRow(d, nowMs) }));
-    const alerts = withRow.filter((x) => x.d.needs_attention);
-    const ok = withRow.filter((x) => !x.d.needs_attention);
-    const shown = [...alerts, ...ok.slice(0, Math.max(0, OVERVIEW_ROWS - alerts.length))];
-    return { shown, moreOk: Math.max(0, active.length - shown.length) };
-  });
+  const waterRows = $derived(overviewRows(devices, watermarks, nowMs));
 
   // auto = 快到期时的自动换码（计次、失败不弹提示：码到期后自会盖住，给刷新按钮）。
   async function startPairing({ auto = false } = {}) {
@@ -1067,11 +997,7 @@
     checkWizard().catch(() => {});
     if (next === "running") {
       clearTimeout(selfHealRetry);
-      // DESK-38 (#475) semantics: only a real recovery resets/reconciles the
-      // wall. The first `starting -> running` is just the initial connect;
-      // the wall's own first load handles it. Treating that as a recovery
-      // made the first page load twice (#946 CI).
-      if (previous === "unreachable" || previous === "stopped") onServiceBackOnline();
+      if (isServiceRecovery(previous, next)) onServiceBackOnline();
       refresh();
     } else if (next === "unreachable") {
       maybeSelfHeal();
@@ -2050,7 +1976,7 @@
                   <h3 data-testid="device-group-{group.key}" class="px-[22px] pt-[14px] pb-[4px] text-[13px] font-semibold text-ink-60">{t(group.title)}</h3>
                   <ul>
                     {#each group.items as d}
-                      {@const row = deviceRow(d, nowMs)}
+                      {@const row = deviceRow(d, watermarks[d.node_id], nowMs)}
                     <!-- #1132 D9：固定宽度的列在窄窗 / 200% 缩放下会把按钮裁出
                          可视区、名称与 ID 重叠——允许换行（flex-wrap），装不下
                          的列落到下一行，任何宽度都不裁切（1.4.10 重排）。 -->

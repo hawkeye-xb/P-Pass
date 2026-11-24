@@ -564,6 +564,15 @@ expect_green "M.2 backup 目录允许" "$(sample apps/android/app/src/main/java/
 import android.content.ContentResolver')"
 expect_green "M.2 注释不误报" "$(sample apps/android/app/src/main/java/com/example/ui/Foo.kt '// 注释里提到 MediaStore 与 ContentResolver')"
 
+echo "== M.3: UI reads derived connection state"
+expect_red "M.3 Android raw pairing flag" "$(sample apps/android/app/src/main/java/com/example/ui/HomeScreen.kt 'fun bad(holder: Holder) = holder.pairingLost.value')" "M.3 VIOLATION"
+expect_red "M.3 Android raw subscription state" "$(sample apps/android/app/src/main/java/com/example/MainActivity.kt 'fun bad() = timeline?.state')" "M.3 VIOLATION"
+expect_red "M.3 iOS raw live state" "$(sample apps/ios/PPass/Photos/PhotosScreen.swift 'var body: some View { Text(app.liveState.text) }')" "M.3 VIOLATION"
+expect_red "M.3 iOS raw pairing flag" "$(sample apps/ios/PPass/Home/HeroCard.swift 'var body: some View { Text(app.pairingLost.description) }')" "M.3 VIOLATION"
+expect_green "M.3 iOS derived status enum" "$(sample apps/ios/PPass/Home/HeroCard.swift 'func label() { switch app.connectionState.status { case .pairingLost: break; default: break } }')"
+expect_green "M.3 iOS state owner retains raw state" "$(sample apps/ios/PPass/App/AppModel.swift 'func update() { self.liveState = value }')"
+expect_green "M.3 Android derived state" "$(sample apps/android/app/src/main/java/com/example/ui/HomeScreen.kt 'fun label(connection: ConnectionState) = connection.needsRepair')"
+
 echo
 echo "arch-check 自测：通过 ${PASS}，失败 $FAILED"
 [ "$FAILED" -eq 0 ]

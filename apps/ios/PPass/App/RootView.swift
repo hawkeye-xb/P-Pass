@@ -1,16 +1,12 @@
 import PhotosUI
 import SwiftUI
 
-/// 截图 / 调试用的起始路由：环境变量 `PPASS_ROUTE`（simctl launch 时用 SIMCTL_CHILD_PPASS_ROUTE 传入）。
-/// 只决定「一打开停在哪一屏」，不改任何业务数据。仅 DEBUG 构建生效。
 enum LaunchRoute: String {
     case photos, family, settings, viewer, video, bucket, storage, diagnostics
-    /// #1323 决定页（截图 / 预览用：演示数据下直接停在决定页）。
     case decision
     case welcome, scan, manual, pairWaiting, pairCode, pairRefused, pairLapsed, pairFailed
 
     static let current: LaunchRoute? = {
-        // #1152：只在 DEBUG 构建里读（`DebugLaunchInput`）。
         DebugLaunchInput.route.flatMap(LaunchRoute.init(rawValue:))
     }()
 }
@@ -30,7 +26,6 @@ struct RootView: View {
                     BucketScreen(firstTime: true) { selected, known, wantsAll in
                         app.albumsChosen(selected, known: known, wantsAll: wantsAll, firstTime: true)
                     }
-                    // #1323：首次选范围是从决定页进来的，还没做决定——返回回决定页（对位 Android Buckets(firstTime) 的返回）。
                     .toolbar {
                         ToolbarItem(placement: .navigationBarLeading) {
                             Button { app.leaveFirstScope() } label: { Label(L.s("back"), systemImage: "chevron.backward") }
@@ -46,7 +41,6 @@ struct RootView: View {
         .font(PPFont.body)
         .ppScreen()
         .onAppear(perform: applyLaunchRoute)
-        // #1272：系统照片选择器（设置页「挑几张传」与照片页空状态「先挑几张传」共用）。不传 photoLibrary ⇒ 不需要照片权限；选完就传。
         .sheet(isPresented: $app.pickerRequested) {
             PhotoPickerSheet { results in
                 app.pickedChosen(results.enumerated().compactMap { i, r in
@@ -58,7 +52,6 @@ struct RootView: View {
         .sheet(isPresented: $app.filePickerRequested) {
             SingleTransferFilePicker { items in app.pickedChosen(items) }
         }
-        // 设置没存上 / 命令没执行成（#971 #972）：可见的失败反馈，点掉即清。
         .alert(L.s("notice_title"), isPresented: Binding(get: { app.notice != nil }, set: { if !$0 { app.notice = nil } })) {
             Button(L.s("ok_got_it")) {}
         } message: { Text(app.notice?.message ?? "") }
@@ -74,9 +67,6 @@ struct RootView: View {
     }
 }
 
-/// 两个 tab：照片 / 设置（Android TwoTabs.kt：默认照片）。iOS 用系统 TabView + SF Symbols，
-/// 选中色由根上的 `.tint`（品牌 accent）决定；设置 tab 的红点换成系统角标。
-/// 看大图是 fullScreenCover，自然盖住 tab 栏，不需要手动隐藏。
 struct MainTabs: View {
     @EnvironmentObject var app: AppModel
 
@@ -89,11 +79,8 @@ struct MainTabs: View {
             SettingsScreen()
                 .toolbarBackground(PPColor.paper, for: .tabBar).toolbarBackground(.visible, for: .tabBar)
                 .tabItem { Label(L.s("tab_settings"), systemImage: "gearshape") }
-                .badge(settingsAlert ? "!" : nil)
+                .badge(app.settingsAlert ? "!" : nil)
                 .tag(AppModel.Tab.settings)
         }
     }
-
-    /// 设置 tab 的角标：配对失效，或后台备份被系统挡住（对位 Android `settingsAlert`：pairingLost || 后台待授权 / 被停）。
-    private var settingsAlert: Bool { app.pairingLost || app.backgroundNotice != nil }
 }
