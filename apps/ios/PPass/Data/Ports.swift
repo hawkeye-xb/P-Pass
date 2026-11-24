@@ -69,22 +69,23 @@ struct AlbumBucket: Identifiable, Equatable, Sendable {
     var coverAssetId: String? = nil
 }
 
-/// 手机相册：授权、相册列表、备份范围。
+enum SaveToGalleryOutcome: Equatable, Sendable {
+    case saved
+    case alreadyExists
+}
+
+/// 手机相册：授权、相册列表、备份范围、相册写回。
 protocol MediaLibrary: AnyObject {
     func access() -> MediaAccess
     func requestAccess() async -> MediaAccess
     func albums() async throws -> [AlbumBucket]
     func cover(_ album: AlbumBucket, side: CGFloat) async -> UIImage?
-    /// nil = 从未保存过范围（与空集不同：空集 = 一个都不备份）。读盘失败抛出，不当成「从未保存」（#971）。
     func savedScope() throws -> Set<String>?
-    /// 时间档（#1263）；nil = 从未保存过范围。
     func savedSince() throws -> BackupSince?
-    /// 上次保存范围时已知的相册（新出现的相册标「新」、默认不勾）。
     func knownAlbums() -> Set<String>
-    /// 当前系统里实际存在的相册 id；没有完整授权（读不到相册）= nil。不弹授权。
     func existingAlbumIds() async -> Set<String>?
-    /// 写盘失败抛出（#971）：调用方不许当成已保存。
     func saveScope(_ selected: Set<String>, known: Set<String>, since: BackupSince) async throws
+    func saveToGallery(fileURL: URL, isVideo: Bool, hash: String) async throws -> SaveToGalleryOutcome
 }
 
 enum PairingStatus: Equatable {

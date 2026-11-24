@@ -534,6 +534,36 @@ echo "== B.2 platform-path 变异反证（断言不是恒真式）"
 # 3) 把认路径那条正则改坏（换成不匹配任何东西），正样例必须漏报（绿）。
 expect_green "B.2 platform-path 正则改坏后正样例漏报" "$(sample crates/media-codec/src/a.rs "$B2PP_UNIX")" ARCH_PLATFORM_PATH_RE='THIS_MATCHES_NOTHING'
 
+# ── M.1: iOS UI layer PhotoKit isolation (#1990-1) ─────────────────
+echo "== M.1 正样例（iOS UI 目录调用 PhotoKit，必须报红）"
+expect_red "M.1 import Photos" "$(sample apps/ios/PPass/Photos/Foo.swift 'import Photos')" "M.1 VIOLATION"
+expect_red "M.1 PHPhotoLibrary" "$(sample apps/ios/PPass/Home/Foo.swift 'func f() { PHPhotoLibrary.shared() }')" "M.1 VIOLATION"
+expect_red "M.1 PHAsset" "$(sample apps/ios/PPass/App/Foo.swift 'func f(a: PHAsset) {}')" "M.1 VIOLATION"
+expect_red "M.1 PHAssetCreationRequest" "$(sample apps/ios/PPass/Photos/Foo.swift 'func f() { PHAssetCreationRequest.creationRequestForAssetFromImage(atFileURL: u) }')" "M.1 VIOLATION"
+
+echo "== M.1 反样例（必须不报）"
+expect_green "M.1 PhotosUI 不误报" "$(sample apps/ios/PPass/Photos/Foo.swift 'import SwiftUI
+import PhotosUI')"
+expect_green "M.1 Live 目录允许" "$(sample apps/ios/PPass/Live/Foo.swift 'import Photos
+func f() { PHPhotoLibrary.shared() }')"
+expect_green "M.1 注释不误报" "$(sample apps/ios/PPass/Photos/Foo.swift '// 注释里提到 import Photos 和 PHPhotoLibrary')"
+expect_green "M.1 PHPickerResult 不误报" "$(sample apps/ios/PPass/Photos/Foo.swift 'struct PhotoPickerSheet { let x: PHPickerResult? }')"
+
+# ── M.2: Android UI layer MediaStore / ContentResolver isolation (#1990-1) ──
+echo "== M.2 正样例（Android UI 目录调用 MediaStore/ContentResolver，必须报红）"
+expect_red "M.2 import MediaStore" "$(sample apps/android/app/src/main/java/com/example/ui/Foo.kt 'import android.provider.MediaStore')" "M.2 VIOLATION"
+expect_red "M.2 import ContentResolver" "$(sample apps/android/app/src/main/java/com/example/ui/Foo.kt 'import android.content.ContentResolver')" "M.2 VIOLATION"
+expect_red "M.2 full MediaStore" "$(sample apps/android/app/src/main/java/com/example/ui/Foo.kt 'val x = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI')" "M.2 VIOLATION"
+expect_red "M.2 ContentResolver param" "$(sample apps/android/app/src/main/java/com/example/ui/Foo.kt 'fun f(r: ContentResolver) {}')" "M.2 VIOLATION"
+expect_red "M.2 MediaStore bare" "$(sample apps/android/app/src/main/java/com/example/ui/Foo.kt 'val x = MediaStore.MediaColumns._ID')" "M.2 VIOLATION"
+
+echo "== M.2 反样例（必须不报）"
+expect_green "M.2 普通 UI 代码通过" "$(sample apps/android/app/src/main/java/com/example/ui/Foo.kt 'package com.example.ui
+import com.example.backup.MediaScanner')"
+expect_green "M.2 backup 目录允许" "$(sample apps/android/app/src/main/java/com/example/backup/Foo.kt 'import android.provider.MediaStore
+import android.content.ContentResolver')"
+expect_green "M.2 注释不误报" "$(sample apps/android/app/src/main/java/com/example/ui/Foo.kt '// 注释里提到 MediaStore 与 ContentResolver')"
+
 echo
 echo "arch-check 自测：通过 ${PASS}，失败 $FAILED"
 [ "$FAILED" -eq 0 ]

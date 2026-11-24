@@ -74,6 +74,10 @@ final class FakeMediaLibrary: MediaLibrary {
             ?? FakeImages.tile(seed: seed, size: CGSize(width: side * 1.6, height: side))
     }
 
+    func saveToGallery(fileURL: URL, isVideo: Bool, hash: String) async throws -> SaveToGalleryOutcome {
+        .saved
+    }
+
     var inScopeTotal: Int64 { Int64(all.filter { scope?.contains($0.id) == true }.reduce(0) { $0 + $1.count }) }
 }
 

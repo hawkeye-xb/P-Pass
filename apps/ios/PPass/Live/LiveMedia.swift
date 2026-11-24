@@ -22,6 +22,7 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
     private let scopeStore: () -> BackupScopeStore
     private let requestCoverImage: CoverImageRequester
     private let cancelCoverImage: @Sendable (PHImageRequestID) -> Void
+    private let resolveSavedStore: @Sendable () -> SavedToGalleryStore?
 
     init(
         scopeStore: @escaping () -> BackupScopeStore,
@@ -29,12 +30,17 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
         library: any PhotoLibraryReading = PhotoKitLibrary(),
         albumListing: (() -> [AlbumBucket])? = nil,
         requestCoverImage: CoverImageRequester? = nil,
-        cancelCoverImage: (@Sendable (PHImageRequestID) -> Void)? = nil
+        cancelCoverImage: (@Sendable (PHImageRequestID) -> Void)? = nil,
+        savedStore: (@Sendable () -> SavedToGalleryStore?)? = nil
     ) {
         self.scopeStore = scopeStore
         self.auth = auth
         self.catalog = AlbumCatalog(library: library)
         self.albumListing = albumListing
+        self.resolveSavedStore = savedStore ?? {
+            guard let root = try? LiveBackend.resolveRoot(logger: NoopLogger()) else { return nil }
+            return SavedToGalleryStore(directory: root.url)
+        }
         self.requestCoverImage = requestCoverImage ?? { assetId, targetSize, contentMode, options, resultHandler in
             guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil).firstObject else {
                 resultHandler(nil, nil)
@@ -213,6 +219,28 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
         }
         guard access() == .full else { return nil }
         return 0
+    }
+
+    func saveToGallery(fileURL: URL, isVideo: Bool, hash: String) async throws -> SaveToGalleryOutcome {
+        if stillExistsInGallery(hash: hash) {
+            return .alreadyExists
+        }
+        var placeholder: String?
+        try await PHPhotoLibrary.shared().performChanges {
+            let request = isVideo
+                ? PHAssetCreationRequest.creationRequestForAssetFromVideo(atFileURL: fileURL)
+                : PHAssetCreationRequest.creationRequestForAssetFromImage(atFileURL: fileURL)
+            placeholder = request?.placeholderForCreatedAsset?.localIdentifier
+        }
+        if let placeholder {
+            try? resolveSavedStore()?.remember(hash: hash, localIdentifier: placeholder)
+        }
+        return .saved
+    }
+
+    private func stillExistsInGallery(hash: String) -> Bool {
+        guard let id = resolveSavedStore()?.localIdentifier(for: hash) else { return false }
+        return PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).count > 0
     }
 }
 

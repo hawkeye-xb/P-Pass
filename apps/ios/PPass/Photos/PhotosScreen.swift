@@ -39,7 +39,7 @@ struct PhotosScreen: View {
         }
         .onChange(of: model.autoOpen) { item in if let item { open(item) } }
         .fullScreenCover(item: $viewer) { session in
-            MediaViewer(session: session, timeline: app.backend.timeline)
+            MediaViewer(session: session, timeline: app.backend.timeline, media: app.backend.media)
         }
     }
 
