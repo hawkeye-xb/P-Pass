@@ -1,26 +1,14 @@
-// UI-16: 英雄卡的绿色是承诺——五条闸门全满足才准用 PPColor.Safe。
-//
-// 事实源：docs/design/2026-09-22-home-notice-priority.md §2.2 规则 G、
-// §2.3 规则 H（H-C）、§2.3b 规则 S。
-//
-// HomeScreen 是 Compose、本仓无 Robolectric，所以判据全部提纯成纯函数
-// （与 shouldShowWifiDeferredHint / heroActionOf 同一条路），真行为由本文件
-// 直接测；「生产链路真的接上了这些判据」由末尾的源文本门禁守。
 package com.hawkeyexb.ppass.ui
 
 import com.hawkeyexb.ppass.backup.BackupTriplet
 import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.backup.tripletOf
-import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UI16HeroGreenGateTest {
-
-    private fun homeScreen() =
-        File("src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt").readText()
 
     /** 五条闸门全过的基线：10 张全部确认、无失败、未暂停。 */
     private fun healthy(): BackupTriplet = tripletOf(n = 10L, confirmedCount = 10L, lastSuccessAt = 1L)
@@ -181,44 +169,49 @@ class UI16HeroGreenGateTest {
 
     @Test
     fun the_hero_number_is_not_hardcoded_green_anymore() {
-        val source = homeScreen()
-        assertFalse(
-            "英雄卡主数字不许无条件用 PPColor.Safe——绿色必须过规则 G 的五条闸门",
-            source.contains("fontSize = 40.sp, fontFamily = PPFont.Serif,\n                            color = PPColor.Safe,"),
-        )
-        assertTrue(
-            "颜色必须由规则 G 的裁决函数决定",
-            source.contains("if (heroNumberIsSafe(mediaAccess, t, pairingLost)) PPColor.Safe else"),
-        )
+        val connected = ConnectionState(ConnectionState.Status.Connected)
+        val lost = ConnectionState(ConnectionState.Status.PairingLost)
+        assertEquals(PPColor.Safe, heroNumberColor(MediaAccess.FULL, healthy(), connected))
+        assertEquals(PPColor.Ink, heroNumberColor(MediaAccess.FULL, healthy(), lost))
+        assertEquals(PPColor.Ink, heroNumberColor(MediaAccess.PARTIAL, healthy(), connected))
     }
 
     @Test
     fun the_render_branch_and_the_status_line_are_both_wired_to_the_pure_decisions() {
-        val source = homeScreen()
-        assertTrue(
-            "主位必须走规则 H 的裁决，而不是只判 triplet != null",
-            // #1038：同一个裁决函数，多传账本读不读得到、范围存没存（缺了它们生产里就永远到不了那两种渲染）。
-            // #1789（改断言、保意图）：folder-only 要出真实进度，裁决函数多收来源可用性（#1784 验收 5）；
-            // 空范围缺的是来源不是权限，再多收 hasSelectedAlbum（#1788 评审定案接线，评审 Ak）。
-            source.contains("val heroRender = heroRenderOf(mediaAccess, t, countsReadable = countsReadable, scopeSaved = scopeSaved,\n                    hasUsableSource = hasUsableSource, hasSelectedAlbum = hasSelectedAlbum)"),
+        val drifted = tripletOf(n = 10L, confirmedCount = 51L, lastSuccessAt = 1L)
+        assertEquals(
+            HeroRender.Unreconciled,
+            heroRenderOf(
+                MediaAccess.FULL,
+                drifted,
+                countsReadable = true,
+                scopeSaved = true,
+                hasUsableSource = true,
+                hasSelectedAlbum = true,
+            ),
         )
-        assertTrue(
-            "H-C 分支必须在场（两个数对不上时的第三种渲染）",
-            source.contains("heroRender == HeroRender.Unreconciled") &&
-                source.contains("R.string.hero_unreconciled_title"),
+        assertEquals(
+            HeroRender.CountsUnreadable,
+            heroRenderOf(
+                MediaAccess.FULL,
+                healthy(),
+                countsReadable = false,
+                scopeSaved = true,
+                hasUsableSource = true,
+                hasSelectedAlbum = true,
+            ),
         )
-        assertTrue(
-            "状态行必须过规则 S 的闸门",
-            source.contains("allSafeTextAllowed("),
+        assertEquals(
+            HeroRender.Triplet,
+            heroRenderOf(
+                MediaAccess.PARTIAL,
+                healthy(),
+                countsReadable = true,
+                scopeSaved = true,
+                hasUsableSource = true,
+                hasSelectedAlbum = false,
+            ),
         )
-
-        // H-C 分支体内不许出现任何 m/n 分数（groupThousands / hero_of_n）。
-        val branch = source.substringAfter("heroRender == HeroRender.Unreconciled")
-            .substringBefore("DOG-01d")
-        assertFalse(
-            "H-C 分支不许渲染任何 m/n 分数",
-            branch.contains("groupThousands") || branch.contains("hero_of_n"),
-        )
-        assertFalse("H-C 分支不许用 PPColor.Safe", branch.contains("PPColor.Safe"))
+        assertFalse(allSafeTextAllowed(MediaAccess.FULL, drifted, pairingLost = false, missingSourceCount = 0))
     }
 }

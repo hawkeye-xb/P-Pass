@@ -688,6 +688,28 @@ else
   FAIL=1
 fi
 
+echo "==> M.3: UI reads derived connection state"
+M3_RAW='\b[A-Za-z_]\w*\??\.(?:pairingLost|liveState)\b'
+M3_ANDROID="$M3_RAW|\btimeline\s*\??\s*\.\s*state\b"
+M3_HITS=$(
+  {
+    list_files "$ROOT/apps/android" -- '*.kt' '*.java' \
+      | perl -0ne 'print if m{/src/main/.+(?:/ui/|/MainActivity\.kt\x00\z)}' \
+      | scan_files "$M3_ANDROID" 1 ''
+    if [ ${#M1_DIRS[@]} -gt 0 ]; then
+      list_files "${M1_DIRS[@]}" -- '*.swift' \
+        | perl -0ne 'print unless m{/PPass/App/AppModel\.swift\x00\z}' \
+        | scan_files "$M3_RAW" 1 ''
+    fi
+  } | sort
+)
+if [ -z "$M3_HITS" ]; then
+  echo "   ✅ M.3: clean"
+else
+  printf '%s\n' "$M3_HITS" | awk -F'\t' '{print "M.3 VIOLATION: read the derived connection state: " $1 ":" $2}'
+  FAIL=1
+fi
+
 # ── Result ──────────────────────────────────────────
 
 if [ $FAIL -eq 0 ]; then

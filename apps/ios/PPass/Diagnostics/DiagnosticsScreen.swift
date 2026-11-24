@@ -1,8 +1,6 @@
 import PPassCore
 import SwiftUI
 
-/// 诊断页（Android 没有这一屏；iOS 为取证加的，入口是设置卡的「版本」行）。
-/// 版本号以**完整串**为准（#346：CFBundleShortVersionString 装不下 -test.N）；数据来源如实说是不是演示数据。
 struct DiagnosticsScreen: View {
     @EnvironmentObject var app: AppModel
     @State private var copied = false
@@ -13,7 +11,7 @@ struct DiagnosticsScreen: View {
             section(L.s("diag_section_state"), rows: stateRows)
             Section {
                 Button {
-                    DiagnosticsClipboard.copy((buildRows + stateRows).map { "\($0.0): \($0.1)" }.joined(separator: "\n")) // 仅本机 + 过期（#1152）
+                    DiagnosticsClipboard.copy((buildRows + stateRows).map { "\($0.0): \($0.1)" }.joined(separator: "\n"))
                     copied = true
                     Haptics.success()
                 } label: {
@@ -78,8 +76,6 @@ struct DiagnosticsScreen: View {
     }
 }
 
-/// 「存储电脑」配对日期（#1206）：按界面语言给本地化长日期，不自己拼格式串。
-/// 中文「2026年10月14日」、英文「October 14, 2026」；locale 与 `L` 同一份（App 语言）。
 enum PairedDateText {
     static func format(pairedAt ms: Int64, locale: Locale = .current) -> String {
         let f = DateFormatter()
@@ -90,14 +86,11 @@ enum PairedDateText {
     }
 }
 
-/// 存储电脑详情（对位 Android 的详情子页）：状态图标 + 名称 + 配对状态 + 断开连接（`device.unpair` + 断开清单）。
 struct StorageDetailScreen: View {
     @EnvironmentObject var app: AppModel
     @State private var confirming = false
     @State private var working = false
 
-    /// 只陈述有出处的事实：最近成功取引擎账目，配对日期取配对记录，张数取已确认数；不编数据。
-    /// #1904：连接表述从唯一状态 `app.connection` 取（与照片页同一个事实源）。
     private var detailBody: String {
         storageDetailBody(app.connection,
                           lastSuccessAt: app.triplet?.lastSuccessAt,
@@ -108,11 +101,8 @@ struct StorageDetailScreen: View {
     var body: some View {
         List {
             Section {
-                // Android 信息卡：状态点 9、点与名称间距 10、名称与正文间距 10。
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 10) {
-                        // #1904：状态点跟正文同一份连接状态——绿=真的连上了、红=要人处理、
-                        // 琥珀=重连中、灰=没有连接。
                         Circle().fill(storageDetailDotColor(app.connection.status)).frame(width: 9, height: 9)
                         Text(app.desktopName ?? L.s("storage_device_default")).font(PPFont.bodyBold)
                     }
@@ -132,8 +122,7 @@ struct StorageDetailScreen: View {
             }
             .ppTinted(PPUI.Surface.settingsCard)
         }
-        // 居中警告框（iOS 确认不可撤销操作的惯例，如「忽略此网络」）；confirmationDialog 在 iOS 26 的 iPhone 上
-        // 变成贴着按钮的气泡，读起来像提示而不是确认。内容同 Android 的确认卡：标题 + 说明 + 取消 / 确认断开。
+        // iOS 26 上 confirmationDialog 表现为贴附按钮的气泡，居中 alert 更符合不可逆操作确认惯例
         .alert(L.s("disconnect_armed_title"), isPresented: $confirming) {
             Button(L.s("cancel"), role: .cancel) {}
             Button(L.s("disconnect_confirm"), role: .destructive) {
@@ -151,23 +140,13 @@ struct StorageDetailScreen: View {
     }
 }
 
-// MARK: - #1904 详情卡正文与状态点（纯函数，可单测；对位 Android #1883）
-
-/// 详情卡正文的裁决——纯函数，可单测。
-///
-/// 第一行说哪句只由唯一连接状态决定：「已连接」只在那一个状态出现，其余状态一律只说「未连接」。
-/// 配对已失效时正文**只有一行**：那张卡已经说「配对已失效」，再拼一行「配对 X · 已备份 N 张」
-/// 就是同一张卡自相矛盾。
 struct StorageDetailLines: Equatable {
     let statusKey: String
-    /// 第一行是否带「最近同步 X」这个参数（「配对已失效」不带）。
     let takesLastSuccess: Bool
-    /// 是否再拼第二行「配对 X · 已备份 N 张」（配对日期未知时不拼）。
     let showPairedLine: Bool
 }
 
 func storageDetailLines(status: ConnectionState.Status, pairedAtMs: Int64?) -> StorageDetailLines {
-    // 配对记录里 0 = 未知（老 pairing 升级上来）——不硬凑第二行，不编数据。
     let hasPairedAt = (pairedAtMs ?? 0) > 0
     switch status {
     case .pairingLost:
@@ -179,8 +158,6 @@ func storageDetailLines(status: ConnectionState.Status, pairedAtMs: Int64?) -> S
     }
 }
 
-/// 详情卡状态点颜色——跟正文同一份连接状态，不再只看配对有效性。
-/// 绿=真的连上了、红=要人处理、琥珀=重连中、灰=没有连接（tokens 的 idle = offline peer）。
 func storageDetailDotColor(_ status: ConnectionState.Status) -> Color {
     switch status {
     case .connected: return PPColor.safe
@@ -190,10 +167,6 @@ func storageDetailDotColor(_ status: ConnectionState.Status) -> Color {
     }
 }
 
-/// 详情卡正文——连接表述从唯一状态 `ConnectionState` 取，与照片页同一个事实源。
-/// 配对已失效直接说失效；真的连上了才说「已连接」；其余（断开 / 重连中 / 还没连上）
-/// 只说「未连接」+ 最近同步——不再把「配对还有效」当成「电脑连得上」。
-/// 行数与参数由 `storageDetailLines` 裁决，本函数只做文案映射。
 func storageDetailBody(_ connection: ConnectionState,
                        lastSuccessAt: Int64?,
                        pairedAtMs: Int64?,

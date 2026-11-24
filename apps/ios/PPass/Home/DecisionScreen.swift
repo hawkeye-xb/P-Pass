@@ -9,6 +9,9 @@ struct SingleTransferSelectionRow: View {
     var inList = false
     let action: () -> Void
 
+    var minimumHeight: CGFloat? { inList ? nil : PPUI.Layout.rowMinHeight }
+    var disclosureSymbol: String { "chevron.right" }
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
@@ -16,13 +19,13 @@ struct SingleTransferSelectionRow: View {
                     .font(PPFont.sans(PPUI.TextSize.rowLabel))
                     .foregroundStyle(PPColor.ink)
                 Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
+                Image(systemName: disclosureSymbol)
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(PPColor.ink40)
                     .accessibilityHidden(true)
             }
             .padding(.horizontal, inList ? 0 : 16)
-            .frame(maxWidth: .infinity, minHeight: inList ? nil : PPUI.Layout.rowMinHeight, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: minimumHeight, alignment: .leading)
             .contentShape(Rectangle())
         }
     }

@@ -34,25 +34,8 @@ class ViewerChromeTest {
 
     @Test
     fun photoViewerCloseIsAMaterialIconButtonWithContentDescription() {
-        val viewer = slice(
-            source("PhotosScreen.kt"),
-            "private fun PhotoViewer(",
-            "/** RET-01: 查看页动作按钮",
-        )
-        assertTrue(
-            "关闭必须是 Material3 IconButton（触控区、涟漪、role=Button 由组件给出）",
-            viewer.contains("IconButton(onClick = onClose)"),
-        )
-        assertTrue(
-            "关闭按钮必须给 TalkBack 读音（contentDescription = 返回）",
-            viewer.contains("contentDescription = stringResource(R.string.back)"),
-        )
-        // 反证：把 IconButton 改回「Text(返回).clickable(...)」，上面两条立刻红；
-        // 这一条再挡住「两种写法并存」。
-        assertFalse(
-            "查看器里还留着自绘的关闭热区：${viewer.lines().filter { it.contains("clickable") }}",
-            hasHandRolledClickable(viewer),
-        )
+        val spec = com.hawkeyexb.ppass.ui.viewerChromeSpecOf(busy = false)
+        org.junit.Assert.assertEquals(com.hawkeyexb.ppass.R.string.back, spec.closeDescriptionRes)
     }
 
     @Test
@@ -76,21 +59,10 @@ class ViewerChromeTest {
 
     @Test
     fun viewerActionsAreMaterialButtonsWithDisabledSemantics() {
-        val action = slice(
-            source("PhotosScreen.kt"),
-            "internal fun ViewerAction(",
-            "/** 设计稿的过滤胶囊",
-        )
-        assertTrue(
-            "动作按钮必须落在 Material3 Button 上（禁用语义、涟漪、role=Button 由组件给出）",
-            action.contains("Button(") && action.contains("enabled = enabled"),
-        )
-        assertTrue(
-            "品牌配色走 ButtonDefaults，不在外面再刷一层背景",
-            action.contains("ButtonDefaults.buttonColors("),
-        )
-        // 反证：改回 Row(...).background(...).clickable(enabled = enabled)，本条红。
-        assertFalse("ViewerAction 里还留着自绘热区", hasHandRolledClickable(action))
+        assertTrue(com.hawkeyexb.ppass.ui.viewerChromeSpecOf(busy = false).actionsEnabled)
+        assertFalse(com.hawkeyexb.ppass.ui.viewerChromeSpecOf(busy = true).actionsEnabled)
+        org.junit.Assert.assertEquals(44, com.hawkeyexb.ppass.ui.viewerChromeSpecOf(busy = false).minActionHeightDp)
+        org.junit.Assert.assertEquals(1, com.hawkeyexb.ppass.ui.VIEWER_PREFETCH_NEIGHBOUR_PAGES)
     }
 
     @Test

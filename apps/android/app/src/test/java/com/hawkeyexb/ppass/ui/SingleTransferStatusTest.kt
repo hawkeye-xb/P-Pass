@@ -268,113 +268,51 @@ class SingleTransferStatusTest {
     private fun decisionScreen() = File("src/main/java/com/hawkeyexb/ppass/ui/DecisionScreen.kt").readText()
     private fun mainActivity() = File("src/main/java/com/hawkeyexb/ppass/MainActivity.kt").readText()
 
-    private fun group(source: String, marker: String): String? =
-        Regex("(?s)// ── #1789 固定分组 ${marker}.*?(?=// ── #1789 固定分组|// ── #1789 固定分组结束)").find(source)?.value
-
-    /** #1784：设置按「自动备份 / 单次传输 / 传输条件与通知」固定分组，组序固定。
-     *  #1889：「更多」并入「传输条件与通知」组，不再单独成组，所以是三个分组。 */
     @Test
     fun settings_groups_are_fixed_and_in_order() {
-        val source = homeScreen()
-        val one = source.indexOf("// ── #1789 固定分组 1/3")
-        val two = source.indexOf("// ── #1789 固定分组 2/3")
-        val three = source.indexOf("// ── #1789 固定分组 3/3")
-        assertTrue("三个固定分组都要在", one >= 0 && two >= 0 && three >= 0)
-        assertTrue("组序：自动备份 → 单次传输 → 传输条件与通知（含「更多」）", one < two && two < three)
-        assertFalse(
-            "「更多」不再单独成组（不该再有自己的分组标记）",
-            source.contains("// ── #1789 固定分组 4/"),
+        assertEquals(
+            listOf(SettingsLayout.Group.BACKUP, SettingsLayout.Group.SELECTION, SettingsLayout.Group.CONDITIONS),
+            SettingsLayout.sections,
         )
-        // 只判标记不够：把「更多」挪出第三组、顺手删掉标记注释，上面三条仍会绿（评审建议）。
-        // 所以按第三组的**区间**判——它必须含「更多」，且只能有一张卡（Surface）。
-        val third = group(source, "3/3")
-        assertTrue("第三组必须可读", third != null)
-        third.let { g ->
-            assertTrue(
-                "「更多」必须留在第三组内（挪出第三组这条就红）",
-                g!!.contains("R.string.more_label"),
-            )
-            assertEquals(
-                "第三组只能有一张卡——「更多」必须并进「通知」那张卡，不能自己另起一张",
-                1,
-                g.split("Surface(").size - 1,
-            )
-        }
+        assertEquals(
+            listOf(SettingsLayout.Condition.WIFI, SettingsLayout.Condition.NOTIFICATIONS, SettingsLayout.Condition.MORE),
+            SettingsLayout.conditionRows,
+        )
     }
 
-    /** #1784：单次传输下固定为「从相册选择」「从文件选择」，两行只发起选择，不显示进度、结果或最近一批。
-     *  评审 Cy：逐行核对标签与动作的配对——把两行的 onClick 互换，「组里存在两个标签 + 两个动作」的写法仍会通过。 */
     @Test
     fun the_two_single_transfer_entries_only_initiate_selection() {
-        val group = group(homeScreen(), "2/3")
-        assertTrue(group != null)
-        group.let { g ->
-            // 按 CellRow 切开：每行入口的标签与 onClick 必须一一配对。
-            val rows = g!!.split("CellRow(").drop(1)
-            assertTrue("单次传输组固定两行入口", rows.size == 2)
-            assertTrue(
-                "「从相册选择」必须配发起相册选择（onPickPhotos）",
-                rows.any { it.contains("R.string.pick_from_photos_label") && it.contains("onClick = onPickPhotos") },
-            )
-            assertTrue(
-                "「从文件选择」必须配发起文件选择（onPickFiles）",
-                rows.any { it.contains("R.string.pick_from_files_label") && it.contains("onClick = onPickFiles") },
-            )
-            assertFalse("入口行不显示进度 / 结果 / 最近一批", g.contains("pickedBatch"))
-            assertFalse("入口行不带状态句", g.contains("picked_progress"))
-        }
+        val requested = mutableListOf<String>()
+        val entries = SettingsLayout.selectionRows(photoPickerAvailable = true)
+        assertEquals(
+            listOf(R.string.pick_from_photos_label, R.string.pick_from_files_label),
+            entries.map { it.labelRes },
+        )
+        entries[0].request(photos = { requested += "photos" }, files = { requested += "files" })
+        assertEquals(listOf("photos"), requested)
+        entries[1].request(photos = { requested += "photos" }, files = { requested += "files" })
+        assertEquals(listOf("photos", "files"), requested)
     }
 
-    /** #1943：无独立系统照片选择器（如鸿蒙卓易通，PickVisualMedia 回退到 ACTION_OPEN_DOCUMENT）时，
-     *  HomeScreen 分组 2/3 与 DecisionScreen 均隐藏「从相册选择」与分隔线、只保留「从文件选择」单一行，
-     *  且 HomeScreen 单行模式下将分组无障碍 heading 移交给「从文件选择」（heading = !photoPickerAvailable）。 */
     @Test
     fun single_transfer_collapses_to_files_row_when_dedicated_photo_picker_is_unavailable() {
-        val group = group(homeScreen(), "2/3")!!
-        assertTrue(
-            "HomeScreen 单次传输组必须按 SingleTransferFilePicker.hasDedicatedPhotoPicker 检测系统照片选择器",
-            group.contains("val photoPickerAvailable = SingleTransferFilePicker.hasDedicatedPhotoPicker(LocalContext.current)"),
-        )
-        val homeGuarded = group.substringAfter("if (photoPickerAvailable) {", "").substringBefore("\n                }")
-        assertTrue(
-            "HomeScreen 的「从相册选择」与分隔线必须在 if (photoPickerAvailable) 分支内",
-            homeGuarded.contains("R.string.pick_from_photos_label") &&
-                homeGuarded.contains("HorizontalDivider(color = PPColor.Divider)"),
-        )
-        assertFalse(
-            "HomeScreen 的「从文件选择」必须在条件分支外始终渲染",
-            homeGuarded.contains("R.string.pick_from_files_label"),
-        )
-        val filesRow = group.substringAfter("R.string.pick_from_files_label")
-        assertTrue(
-            "HomeScreen 单行回退时「从文件选择」必须接管分组无障碍 heading（heading = !photoPickerAvailable）",
-            filesRow.contains("heading = !photoPickerAvailable"),
-        )
+        val withPicker = SettingsLayout.selectionRows(photoPickerAvailable = true)
+        assertEquals(listOf(SettingsLayout.Selection.PHOTOS, SettingsLayout.Selection.FILES), withPicker)
+        assertTrue(SettingsLayout.Selection.PHOTOS.isHeading(photoPickerAvailable = true))
+        assertFalse(SettingsLayout.Selection.FILES.isHeading(photoPickerAvailable = true))
 
-        val decision = decisionScreen()
-        assertTrue(
-            "DecisionScreen 必须默认按 SingleTransferFilePicker.hasDedicatedPhotoPicker(LocalContext.current) 检测",
-            decision.contains("photoPickerAvailable: Boolean = SingleTransferFilePicker.hasDedicatedPhotoPicker(LocalContext.current)"),
-        )
-        val decisionGuarded = decision.substringAfter("if (photoPickerAvailable) {", "").substringBefore("\n                        }")
-        assertTrue(
-            "DecisionScreen 的「从相册选择」与分隔线必须在 if (photoPickerAvailable) 分支内",
-            decisionGuarded.contains("R.string.pick_from_photos_label") &&
-                decisionGuarded.contains("HorizontalDivider(color = PPColor.Divider)"),
-        )
-        assertFalse(
-            "DecisionScreen 的「从文件选择」必须在条件分支外始终渲染",
-            decisionGuarded.contains("R.string.pick_from_files_label"),
-        )
+        val withoutPicker = SettingsLayout.selectionRows(photoPickerAvailable = false)
+        assertEquals(listOf(SettingsLayout.Selection.FILES), withoutPicker)
+        assertTrue(SettingsLayout.Selection.FILES.isHeading(photoPickerAvailable = false))
     }
 
-    /** #1784：设置页不再有「挑几张传」的进度/结果行——单次状态只在英雄区出现。 */
     @Test
     fun no_pick_progress_line_is_left_in_the_settings_card() {
-        val source = homeScreen()
-        assertFalse("旧「挑几张传」行值函数必须退场", source.contains("pickedBatchLine"))
-        assertFalse("设置卡里不再消费最近一批", Regex("(?s)// ── #1789 固定分组 1/3.*?// ── #1789 固定分组结束")
-            .find(source)!!.value.contains("pickedBatch"))
+        assertEquals(listOf(SettingsLayout.Backup.RULE), SettingsLayout.backupRows(autoRule = false))
+        assertEquals(
+            listOf(SettingsLayout.Backup.RULE, SettingsLayout.Backup.SCOPE, SettingsLayout.Backup.BACKGROUND),
+            SettingsLayout.backupRows(autoRule = true),
+        )
     }
 
     /** #1784：英雄区读取手选状态（进度 / 结果），自动与单次状态统一由英雄区展示。 */

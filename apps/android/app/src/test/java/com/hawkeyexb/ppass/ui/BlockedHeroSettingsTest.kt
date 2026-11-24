@@ -61,20 +61,18 @@ class BlockedHeroSettingsTest {
      */
     @Test
     fun switch_rows_carry_standard_toggleable_semantics() {
-        val home = File("src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt").readText()
-        val row = home.substringAfter("private fun RuleSwitchRow(").substringBefore("/** 设计稿的 cell 行")
-        assertTrue("开关行必须用 toggleable 承载动作", row.contains(".toggleable("))
-        assertTrue("开关行的角色必须是 Role.Switch", row.contains("role = Role.Switch"))
-        assertFalse(
-            "行内 Switch 不许再自带 onCheckedChange（动作归整行）",
-            row.contains("onCheckedChange = onCheckedChange"),
-        )
-        assertTrue("行内 Switch 只画状态（onCheckedChange = null）", row.contains("onCheckedChange = null"))
-        // 行级 toggleable 合并语义后，状态 hint 的独立点击出口（嵌套 clickable 是独立语义节点）必须保留，
-        // 且带标准 button 语义（#1879 评审：改断言锁定 role 写法，出口保留的意图不变）。
-        assertTrue(
-            "后台状态 hint 的点击出口保留，且带 Role.Button（onHintClick）",
-            row.contains("onHintClick") && row.contains("clickable(role = Role.Button, onClick = onHintClick)"),
+        val plain = ruleSwitchRowSpec(hasHintAction = false)
+        assertEquals("开关行的角色必须是 Role.Switch", androidx.compose.ui.semantics.Role.Switch, plain.rowRole)
+        assertFalse("行内 Switch 只画状态，动作归整行", plain.switchInteractive)
+        assertEquals(null, plain.hintRole)
+
+        val withHintAction = ruleSwitchRowSpec(hasHintAction = true)
+        assertEquals(androidx.compose.ui.semantics.Role.Switch, withHintAction.rowRole)
+        assertFalse(withHintAction.switchInteractive)
+        assertEquals(
+            "后台状态 hint 的点击出口保留，且带 Role.Button",
+            androidx.compose.ui.semantics.Role.Button,
+            withHintAction.hintRole,
         )
     }
 

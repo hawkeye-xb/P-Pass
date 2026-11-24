@@ -9,6 +9,7 @@ import {
   serviceStateLabelKey,
   serviceStateActionKey,
   serviceStateAfterDataRefresh,
+  isServiceRecovery,
 } from "./serviceState.js";
 
 describe("DESK-63 服务状态", () => {
@@ -31,6 +32,14 @@ describe("DESK-63 服务状态", () => {
     for (const state of ["not_configured", "stopped", "starting", "unreachable"]) {
       expect(isServiceRunning(state)).toBe(false);
     }
+  });
+
+  it("只有从停止或失联转到运行才算恢复", () => {
+    expect(isServiceRecovery("stopped", "running")).toBe(true);
+    expect(isServiceRecovery("unreachable", "running")).toBe(true);
+    expect(isServiceRecovery("starting", "running")).toBe(false);
+    expect(isServiceRecovery("running", "running")).toBe(false);
+    expect(isServiceRecovery("stopped", "starting")).toBe(false);
   });
 
   it("开始 / 停止按钮跟着状态走", () => {
