@@ -91,68 +91,59 @@ def get_just_recipes(repo_root: Path) -> set[str]:
     return recipes
 
 
+FENCE_RE = re.compile(r'^[ ]{0,3}(`{3,}|~{3,})(.*)$')
+REFERENCE_TARGET_RE = re.compile(r'^[ ]{0,3}\[[^]\n]+\]:[ \t]*(<[^>]+>|\S+)')
+
+
+def prose_lines(text: str):
+    fence = None
+    for line_no, line in enumerate(text.splitlines(), 1):
+        match = FENCE_RE.match(line)
+        if fence:
+            if match and match[1][0] == fence[0] and len(match[1]) >= len(fence) and not match[2].strip():
+                fence = None
+            continue
+        if match and (match[1][0] == '~' or '`' not in match[2]):
+            fence = match[1]
+            continue
+        yield line_no, line
+
+
 def check_markdown_links(file_path: Path, repo_root: Path) -> list[str]:
-    errors = []
     try:
         text = file_path.read_text(encoding='utf-8', errors='replace')
-    except Exception as e:
-        return [f"{file_path}: cannot read file: {e}"]
+    except OSError as exc:
+        return [f"{file_path}: cannot read file: {exc}"]
 
-    lines = text.splitlines()
-    in_code_block = False
-
-    for line_no, line in enumerate(lines, 1):
-        stripped = line.strip()
-        if stripped.startswith('```'):
-            in_code_block = not in_code_block
-            continue
-        if in_code_block:
-            continue
-
-        for m in MARKDOWN_LINK_RE.finditer(line):
-            target = m.group(2).strip()
-            # Ignore anchors, external URLs, mailto
-            if (
-                target.startswith('#')
-                or target.startswith('http://')
-                or target.startswith('https://')
-                or target.startswith('mailto:')
-            ):
+    errors = []
+    rel = file_path.relative_to(repo_root)
+    is_site_doc = rel.parts[0] == 'site'
+    for line_no, line in prose_lines(text):
+        ref = REFERENCE_TARGET_RE.match(line)
+        targets = [ref[1]] if ref else [m[2].strip() for m in MARKDOWN_LINK_RE.finditer(line)]
+        for target in targets:
+            if target.startswith('<') and '>' in target:
+                target = target[1:target.index('>')]
+            elif target:
+                target = target.split(maxsplit=1)[0]
+            if target.startswith(('#', '//', 'http://', 'https://', 'mailto:')):
                 continue
-
-            target_path = target.split('#')[0].split('?')[0].strip()
+            target_path = target.split('#')[0].split('?')[0]
             if not target_path:
                 continue
 
-            # Check if this file is under site/
-            is_site_doc = False
-            try:
-                rel = file_path.resolve().relative_to(repo_root)
-                if rel.parts and rel.parts[0] == 'site':
-                    is_site_doc = True
-            except Exception:
-                pass
-
-            if is_site_doc:
-                # If target is web absolute (e.g. /blog/..., /icons/...), check against site/public or ignore web route
-                if target_path.startswith('/'):
-                    # Check if it exists in site/public/
-                    public_target = repo_root / 'site' / 'public' / target_path.lstrip('/')
-                    if public_target.exists():
+            if target_path.startswith('/'):
+                if is_site_doc:
+                    # Astro owns site routes; icons and videos are served from public/.
+                    if not target_path.startswith(('/icons/', '/video/')):
                         continue
-                    # Common site routes like /blog/, /zh/blog/ are Astro dynamic routes
-                    if target_path.startswith('/blog') or target_path.startswith('/zh/blog'):
-                        continue
-                    # Other web-root references
-                    continue
-
-            resolved = (file_path.parent / target_path).resolve()
-            # Also check if it's meant relative to repo root if starts with a repo root dir
-            resolved_root = (repo_root / target_path.lstrip('/')).resolve()
-
-            if not resolved.exists() and not resolved_root.exists():
-                rel_f = file_path.relative_to(repo_root) if file_path.is_relative_to(repo_root) else file_path
-                errors.append(f"{rel_f}:{line_no}: broken link -> {target}")
+                    resolved = repo_root / 'site' / 'public' / target_path.lstrip('/')
+                else:
+                    resolved = repo_root / target_path.lstrip('/')
+            else:
+                resolved = file_path.parent / target_path
+            if not resolved.exists():
+                errors.append(f"{rel}:{line_no}: broken link -> {target}")
 
     return errors
 
@@ -166,17 +157,7 @@ def check_tier1_anchors(
     except Exception as e:
         return [f"{file_path}: cannot read file: {e}"]
 
-    lines = text.splitlines()
-    in_code_block = False
-
-    for line_no, line in enumerate(lines, 1):
-        stripped = line.strip()
-        if stripped.startswith('```'):
-            in_code_block = not in_code_block
-            continue
-        if in_code_block:
-            continue
-
+    for line_no, line in prose_lines(text):
         for m in CODE_SPAN_RE.finditer(line):
             code = m.group(1).strip()
 

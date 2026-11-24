@@ -215,9 +215,56 @@ for rc in 0 1; do
     fi
 done
 
+# Each false green must report its own missing target.
+cat > "$FIXTURE/docs/runbook/links.md" <<'EOF'
+[Wrong relative target](AGENTS.md)
+[Valid root target](/AGENTS.md)
+[Valid titled link](target.md "Guide title")
+[Reference][guide]
+[guide]: missing-reference.md
+
+````markdown
+```
+[Example only](missing-example.md)
+````
+[After fence](missing-after-fence.md)
+Run `just missing-after-fence`.
+
+~~~markdown
+[Example only](missing-tilde-example.md)
+~~~
+EOF
+if python3 "$CHECKER" --tier 1 --root "$FIXTURE" >"$TMP/links.log" 2>&1; then
+    fail "场景 13: 正文中的失效链接和命令被放行"
+else
+    for diagnostic in 'broken link -> AGENTS.md' 'broken link -> missing-reference.md' 'broken link -> missing-after-fence.md' 'unknown just recipe `missing-after-fence`'; do
+        if grep -Fq "$diagnostic" "$TMP/links.log"; then
+            pass "场景 13: $diagnostic"
+        else
+            fail "场景 13: 没有报告 $diagnostic"
+        fi
+    done
+    if grep -Eq 'missing-(example|tilde-example)\.md|broken link -> (/AGENTS\.md|target\.md)' "$TMP/links.log"; then
+        fail "场景 13: 误报合法链接或代码示例"
+    fi
+fi
+
+cat > "$FIXTURE/site/src/content/blog/post.md" <<'EOF'
+![Missing image](/icons/missing.svg)
+[Blog route](/blog/other/)
+EOF
+if python3 "$CHECKER" --tier 3 --root "$FIXTURE" >"$TMP/public.log" 2>&1; then
+    fail "场景 14: 网站静态资源不存在却通过"
+elif grep -Fq 'broken link -> /icons/missing.svg' "$TMP/public.log" && ! grep -Fq 'broken link -> /blog/other/' "$TMP/public.log"; then
+    pass "场景 14: 缺失静态资源报错，不把站点路由当文件"
+else
+    cat "$TMP/public.log"
+    fail "场景 14: 静态资源与路由没有正确区分"
+fi
+
 if [ "$fail_count" -gt 0 ]; then
     echo "❌ $fail_count 个场景失败"
     exit 1
 fi
 
-echo "✅ 全部 12 个反证与自测场景全绿！"
+echo "✅ 全部 14 个反证与自测场景全绿！"
