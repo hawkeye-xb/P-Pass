@@ -110,25 +110,37 @@ classify() {
 # PR 自己加进来的方案文件不算（没合进 main 就不是已采纳）。
 adopted_in_body() { (cd "$REPO" && adopted_adrs "$(cat "$BODY_F")"); }
 
-# 反假考卷门禁：彻底拒绝在 PR 改动里新增或保留任何 exam_* 一次性考卷文件（物理 git rm 删除旧 exam_* 的提交合法放行）。
+# 反假考卷门禁：彻底拒绝在 PR 改动里新增/保留任何 exam_* 一次性考卷，或新增读取业务源码字符串充当断言的假测试（物理删除存量旧文件合法放行）。
 check_no_exam_files() {
-  local f bad_exams=()
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    case "$f" in
-      exam_* | */exam_*)
-        # 仅当目标检出树（HEAD_DIR）中该文件依然存在时才属新增/保留违规；删除旧考卷时文件已不在 HEAD_DIR 中。
-        if [ -e "${HEAD_DIR}/${f}" ]; then
-          bad_exams+=("$f")
-        fi
-        ;;
-    esac
-  done <"$FILES_F"
-  if [ "${#bad_exams[@]}" -gt 0 ]; then
-    echo "acceptance gate ❌：禁止提交一次性 exam_* 考卷文件（请直接写在各端正式测试套件里）：" >&2
-    printf '  - %s\n' "${bad_exams[@]}" >&2
-    exit 1
-  fi
+  python3 -B -I - "$HEAD_DIR" "$FILES_F" "$TEST_RE" <<'PY' || exit 1
+import os, pathlib, re, sys
+head_dir, files_f, test_re = pathlib.Path(sys.argv[1]), sys.argv[2], re.compile(sys.argv[3])
+fake_src_re = re.compile(r"""(\.(?:rs|kt|swift|svelte)\b[^\n]{0,120}read_text|open\([^)\n]*\.(?:rs|kt|swift|svelte)["'])""")
+bad_exams, bad_fakes = [], []
+for raw in pathlib.Path(files_f).read_text(encoding="utf-8", errors="ignore").splitlines():
+    f = raw.strip()
+    if not f:
+        continue
+    target = head_dir / f
+    if not target.exists():
+        continue
+    if re.search(r"(^|/)exam_[^/]*$", f):
+        bad_exams.append(f)
+    elif test_re.search(f) and f.endswith(".py") and target.is_file():
+        txt = target.read_text(encoding="utf-8", errors="ignore")
+        if fake_src_re.search(txt):
+            bad_fakes.append(f)
+if bad_exams or bad_fakes:
+    if bad_exams:
+        print("acceptance gate ❌：禁止提交一次性 exam_* 考卷文件（请直接写在各端正式测试套件里）：", file=sys.stderr)
+        for x in bad_exams:
+            print(f"  - {x}", file=sys.stderr)
+    if bad_fakes:
+        print("acceptance gate ❌：禁止提交通过读取业务源码字符串充当断言的假测试：", file=sys.stderr)
+        for x in bad_fakes:
+            print(f"  - {x}", file=sys.stderr)
+    sys.exit(1)
+PY
 }
 
 case "$MODE" in

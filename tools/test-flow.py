@@ -203,14 +203,10 @@ class CleanFlowEngineTests(unittest.TestCase):
                 self.assertEqual(rc4, 0)
                 self.assertEqual(len(infos), 2)
 
-                # 5) triage 读取方案文件里的 **影响** × **时间性** 合成优先级，缺字段拒绝
-                bad_plan = Path(tmp) / "bad_plan.md"
-                bad_plan.write_text("**做法**：x\n", encoding="utf-8")
-                self.assertNotEqual(flow.cmd_triage(["15", str(bad_plan)], str(ROOT)), 0)
-                good_plan = Path(tmp) / "good_plan.md"
-                good_plan.write_text("**影响**：不可挽回\n**时间性**：截止日\n", encoding="utf-8")
-                write_issue(16, "OPEN", "status:inbox", "Task", "")
-                self.assertEqual(flow.cmd_triage(["16", str(good_plan)], str(ROOT)), 0)
+                # 5) 极简 triage：拒绝方案文件参数，直接用 --priority/--mode 或卡面字段合成优先级
+                self.assertNotEqual(flow.cmd_triage(["15", "some_plan.md"], str(ROOT)), 0)
+                write_issue(16, "OPEN", "status:inbox", "Task", "**影响**：不可挽回\n**时间性**：截止日\n")
+                self.assertEqual(flow.cmd_triage(["16", "--mode", "fix"], str(ROOT)), 0)
                 self.assertIn("P1", gh_log.read_text(encoding="utf-8"))
 
                 # 6) owner-stuck 真实建 blocked issue / 评论指定卡

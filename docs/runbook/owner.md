@@ -24,7 +24,7 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 | 步骤 | 命令 | 通过时最后一行 |
 |---|---|---|
 | 记想法（任何会话） | `just idea "<原话>" [--discuss] [--from <来源>]` | `IDEA DISCUSSION #N` 或 `IDEA ISSUE #N status:inbox Feature` |
-| 分拣新诉求 | `just triage <号> <方案文件>` | `TRIAGE <号> ready \| needs:product \| blocked`，下一行 `PRIORITY <号> P0–P3` |
+| 分拣新诉求 | `just triage <号> [--priority P0..P3] [--mode fix\|feature\|verify] [--needs-product]` | `TRIAGE #<号> status:ready mode=…`，下一行 `PRIORITY #<号> P0–P3` |
 | 出 test 包 | `just release-test <端...>` | `RELEASE-TEST OK v<X.Y.Z>-test.N <端...>` |
 | 数自上个 test 包以来的用户可见 PR（每日同步报给产品负责人） | `just release-scope --since <上个 test 包 tag>` | `验收范围 …：N 个 PR 里 M 个用户看得见` |
 | 出 test 包后更新验收台账 | `just release-scope --ledger <台账号> --pkg <test 包 tag>` | `台账 #N（…）：新增 a，待重验 b，仍待验 c，沿用 d` |
@@ -64,44 +64,10 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 **idea**：默认建 Discussions 的 Ideas 帖，正文是原话（一字不改）加来源和日期，不进看板。`--discuss` 建
 `status:inbox` 的 issue，类型设成 Feature。同标题已有打开的帖子或 issue 时，追加评论，不重复建。
 
-**triage**：方案由模型写进一个 markdown 文件，去向由脚本判。方案必须有这些字段：`**做法**`、`**涉及端**`、
-`**数据**`、`**用户可见行为**`、`**隐私**`、`**风险**`、`**影响**`、`**时间性**`、`**范围**`（后面跟 ``` 代码块）、`**验收场景**`、
-`**复现路径**`（Bug 卡必填：100% 复现的步骤/命令，复现不了写「无」并转 blocked 找人对齐；Feature/Task 写「无」）；
-可选字段 `**产品定案**`、`**owner 定案**`、`**标准依据**`，没有的写「无」。缺必填字段就拒绝。分流规则：
-
-1. 范围命中核心：方案要有 `**ADR**：docs/decisions/<文件>.md`，而且在 `origin/main` 上是「已采纳」，
-   否则打 `status:blocked`，写明先定 ADR。有就打 `core` 标签，接着往下判。
-   `**产品定案**` 的评论链接不能替代 ADR；核心卡仍要引用已采纳方案。
-   纯桌面升版可填 `**桌面升版**：0.12.0`。范围逐行列出 `tools/bump-version.sh --platform desktop` 生成的全部文件，
-   不用通配或混入说明等改动。分拣在 `origin/main` 的隔离副本中离线生成差异；只有范围完全一致且通过现有版本行判定，
-   才不算核心。生成失败（包括本机缺 Cargo 缓存）或范围不符仍按路径判，提交和 PR 仍独立检查实际改动。
-2. 用户可见行为、隐私、数据任一项不是「无」，或者范围碰到界面与文案路径（i18n、设计 token、
-   Android `res/` 与 `ui/`、桌面前端、iOS 界面、站点、更新说明），即使方案写了「无」，也打 `needs:product`。
-   这时方案必须有 `**选项一**` 和 `**选项二**`，各写做法与影响，否则拒绝。
-   例外（产品取向已经定过）：
-   - `**产品定案**` 可以写两种依据，任一成立即可：
-     - `docs/decisions/<文件>.md，产品负责人 <日期> 已确认`：引用的方案必须全部在 `origin/main` 上是「已采纳」，
-       字段里必须写明产品负责人确认；
-     - 本仓 issue/PR 评论链接 `https://github.com/<repo>/issues/<号>#issuecomment-<id>`（`pull` 同理）：
-       `gh api` 核对评论存在，链接里的 issue/PR 号必须与评论实际所属一致；作者必须是产品负责人
-       （对本仓有 admin 权限的 User）。字段里出现外仓评论链接就拒绝，不静默忽略。评论链接本身就是
-       拍板依据，不要求另写「已确认」。
-     两种依据同时出现时，所有方案引用都要已采纳、所有评论链接都要属于本仓且作者是产品负责人、编号一致；
-     任一不满足就拒绝。满足就不打 `needs:product`、不要选项，按第 4 条走。写「无」等于没写。
-     非核心卡的产品定案可以用评论链接，不要求另开一份方案文档；核心卡仍按第 1 条引用已采纳 ADR。
-   - `**owner 定案**：AGENTS.md「<逐字原文>」` 和/或仓库 owner 账号的评论链接。原文必须在 `origin/main` 的
-     AGENTS.md 里逐字出现（至少 8 个字）；评论用 `gh api` 核对存在、作者是仓库 owner。任一依据不成立就拒绝。
-   - `**标准依据**`：写明 WAI-ARIA/WCAG/ARIA APG、Android 权限规范、NN/g、Google 或 Microsoft 写作指南、
-     Apple HIG、Material Design 等业界标准。链接只认完整主机和适用路径：w3.org 的 `/WAI/` 或 `/TR/`、
-     nngroup.com、developer.android.com、developers.google.com/style、learn.microsoft.com/…style、
-     developer.apple.com/design、m3.material.io；其他主机或路径直接拒绝。没有链接时按标准名校验，
-     写不认识的出处也拒绝，不静默放行。
-   owner 定案或标准依据合格，且隐私、数据都是「无」、卡类型不是 Feature：不打 `needs:product`、不要选项，
-   打 `decided:owner`，依据写进「实施方案」。隐私或数据不是「无」、或 Feature 卡，owner 定案 / 标准依据都不顶用，
-   照常 `needs:product`。
-   不带这些字段，行为与之前一样。
-3. Bug 卡缺「复现路径」（写「无」或空）→ 打 `status:blocked`，写明先补复现，或转 `needs:product` 找人对齐。
-4. 其余打 `status:ready`。
+**triage**：极简立项（不再要求另写 18 字段方案文件）：
+- 直接指定 `--priority P0..P3`（或从卡面 `**影响**` × `**时间性**` 自动计算；`[MAIN-RED]` 标题自动 `P0`）与 `--mode fix|feature|verify`；
+- 涉及用户可见取向、隐私或数据去留未定案时传 `--needs-product` 打 `needs:product` 等产品负责人二选一拍板；
+- 核心路径改动仍由本地 hook、`just done` 与远端 `acceptance gate` 强校验 `core` 标签及 `origin/main` 已采纳方案引用。
 
 **优先级**（P0–P3，口径见 `AGENTS.md`「优先级口径」）也由脚本按 `**影响**`（不可挽回 / 面广 / 局部）×
 `**时间性**`（停线 / 截止日 / 线性 / 无）算，三种去向都打：

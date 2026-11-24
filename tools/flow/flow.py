@@ -221,8 +221,8 @@ def cmd_doctor(cwd: str) -> int:
 
 def cmd_triage(argv: list[str], cwd: str) -> int:
     if not argv or not argv[0].isdigit():
-        return die("用法: just triage <issue号> [<方案文件>] [--mode fix|feature|verify] [--priority P0..P3] [--needs-product]", 2)
-    num, mode, prio, needs_prod, plan_file, i = argv[0], "fix", "", False, "", 1
+        return die("用法: just triage <issue号> [--mode fix|feature|verify] [--priority P0..P3] [--needs-product]", 2)
+    num, mode, prio, needs_prod, i = argv[0], "fix", "", False, 1
     while i < len(argv):
         if argv[i] == "--mode" and i + 1 < len(argv):
             mode, i = argv[i + 1], i + 2
@@ -230,26 +230,15 @@ def cmd_triage(argv: list[str], cwd: str) -> int:
             prio, i = argv[i + 1], i + 2
         elif argv[i] == "--needs-product":
             needs_prod, i = True, i + 1
-        elif not argv[i].startswith("-") and not plan_file:
-            plan_file, i = argv[i], i + 1
         else:
-            return die(f"未知参数: {argv[i]}", 2)
+            return die(f"未知参数: {argv[i]}（已废除方案文件填表，直接用 --priority/--mode）", 2)
     if mode not in ("fix", "feature", "verify"):
         return die("mode 仅限 fix/feature/verify", 2)
     repo = repo_slug(cwd)
     info = gh_issue(repo, num, cwd)
-    src_text = ""
-    if plan_file:
-        if not os.path.isfile(plan_file):
-            return die(f"找不到方案文件 {plan_file}", 2)
-        src_text = Path(plan_file).read_text(encoding="utf-8")
-    else:
-        src_text = info["body"]
     if not prio:
-        imp = extract_field(src_text, "影响").splitlines()[0].strip() if extract_field(src_text, "影响") else ""
-        urg = extract_field(src_text, "时间性").splitlines()[0].strip() if extract_field(src_text, "时间性") else ""
-        if plan_file and (imp, urg) not in PRIO_MATRIX:
-            return die(f"方案文件必须提供合法的 **影响**（不可挽回/面广/局部）与 **时间性**（停线/截止日/线性/无），实得: {imp!r} / {urg!r}", 2)
+        imp = extract_field(info["body"], "影响").splitlines()[0].strip() if extract_field(info["body"], "影响") else ""
+        urg = extract_field(info["body"], "时间性").splitlines()[0].strip() if extract_field(info["body"], "时间性") else ""
         prio = PRIO_MATRIX.get((imp, urg), "P2")
     if prio not in ("P0", "P1", "P2", "P3"):
         return die("priority 仅限 P0..P3", 2)
