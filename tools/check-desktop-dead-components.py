@@ -57,11 +57,80 @@ def resolve_import(source_file: Path, spec: str, src_dir: Path) -> Path | None:
     return None
 
 
-COMMENT_RE = re.compile(r"//.*?$|/\*.*?\*/|<!--.*?-->", re.MULTILINE | re.DOTALL)
+def extract_valid_imports(src: str, is_svelte: bool = False) -> set[str]:
+    """词法状态机：精确提取真实 import 与动态 import(...)，跳过注释与普通字符串字面量。"""
+    imports = set()
+    i = 0
+    n = len(src)
+    while i < n:
+        # Svelte HTML 注释
+        if is_svelte and src.startswith("<!--", i):
+            j = src.find("-->", i + 4)
+            if j == -1:
+                break
+            i = j + 3
+            continue
 
+        c = src[i]
+        nxt = src[i + 1] if i + 1 < n else ""
 
-def strip_code_comments(text: str) -> str:
-    return COMMENT_RE.sub("", text)
+        # JS 单行注释 //
+        if c == "/" and nxt == "/":
+            j = src.find("\n", i)
+            if j == -1:
+                break
+            i = j + 1
+            continue
+
+        # JS 块注释 /* ... */
+        if c == "/" and nxt == "*":
+            j = src.find("*/", i + 2)
+            if j == -1:
+                break
+            i = j + 2
+            continue
+
+        # 普通字符串字面量（跳过字符串内部，不产生依赖边）
+        if c in ('"', "'", "`"):
+            quote = c
+            i += 1
+            while i < n:
+                if src[i] == "\\":
+                    i += 2
+                    continue
+                if src[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+
+        # 匹配语句层 import
+        if src.startswith("import", i) and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] in "_$")):
+            rem = src[i + 6 :]
+            # 1. 动态 import( ... )
+            m_dyn = re.match(r"""^\s*\(\s*["']([^"']+)["']\s*\)""", rem)
+            if m_dyn:
+                imports.add(m_dyn.group(1))
+                i += 6 + m_dyn.end()
+                continue
+            # 2. 静态 import ... from "..." 或 import "..."（支持跨行绑定列表）
+            m_stat = re.match(r"""^(?:\s+[\s\S]*?\s+from\s+|\s+)["']([^"']+)["']""", rem)
+            if m_stat:
+                imports.add(m_stat.group(1))
+                i += 6 + m_stat.end()
+                continue
+
+        # 匹配 export ... from "..." 重新导出（支持跨行绑定列表）
+        if src.startswith("export", i) and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] in "_$")):
+            rem = src[i + 6 :]
+            m_exp = re.match(r"""^(?:\s+[\s\S]*?\s+from\s+|\s+from\s+)["']([^"']+)["']""", rem)
+            if m_exp:
+                imports.add(m_exp.group(1))
+                i += 6 + m_exp.end()
+                continue
+
+        i += 1
+    return imports
 
 
 def build_dependency_graph(src_dir: Path) -> tuple[dict[Path, set[Path]], list[Path]]:
@@ -73,14 +142,9 @@ def build_dependency_graph(src_dir: Path) -> tuple[dict[Path, set[Path]], list[P
     imports: dict[Path, set[Path]] = {}
     for f in files:
         raw_content = f.read_text(encoding="utf-8", errors="ignore")
-        content = strip_code_comments(raw_content)
-        raw_imports = re.findall(
-            r"""(?:from\s+["']([^"']+)["']|import\s+["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\))""",
-            content,
-        )
+        raw_specs = extract_valid_imports(raw_content, is_svelte=(f.suffix == ".svelte"))
         resolved = set()
-        for match in raw_imports:
-            spec = match[0] or match[1] or match[2]
+        for spec in raw_specs:
             res = resolve_import(f, spec, src_dir)
             if res:
                 resolved.add(res)
@@ -93,19 +157,17 @@ def find_html_entries(root: Path, src_dir: Path) -> set[Path]:
     index_html = root / "apps/desktop/index.html"
     if index_html.is_file():
         content = index_html.read_text(encoding="utf-8", errors="ignore")
-        # 匹配 <script> 标签中 type="module" 与 src="..."，无论属性顺序为何
+        # 匹配 <script ...> 标签，并按标签属性字典提取 type="module" 与 src
         for tag in re.findall(r"""<script\s+[^>]*>""", content):
-            if re.search(r"""type=["']module["']""", tag):
-                m_src = re.search(r"""src=["']([^"']+)["']""", tag)
-                if m_src:
-                    raw_src = m_src.group(1).strip()
-                    # 处理相对路径或绝对路径 /src/xxx, ./src/xxx, src/xxx
-                    cleaned = raw_src.lstrip("./").lstrip("/")
-                    if cleaned.startswith("src/"):
-                        cleaned = cleaned[4:]
-                    cand = (src_dir / cleaned).resolve()
-                    if cand.is_file():
-                        entries.add(cand)
+            attrs = dict(re.findall(r"""(?:\b([a-zA-Z0-9_-]+)\s*=\s*["']([^"']+)["'])""", tag))
+            if attrs.get("type") == "module" and "src" in attrs:
+                raw_src = attrs["src"].strip()
+                cleaned = raw_src.lstrip("./").lstrip("/")
+                if cleaned.startswith("src/"):
+                    cleaned = cleaned[4:]
+                cand = (src_dir / cleaned).resolve()
+                if cand.is_file():
+                    entries.add(cand)
     return entries
 
 
@@ -201,10 +263,11 @@ def run_self_test() -> int:
             print(f"Self-test failed after cleanup: {clean_errs}", file=sys.stderr)
             return 1
 
-        # 4. 验证带空白和换行的动态 import 以及无空白写法
+        # 4. 验证带空白和换行的动态 import 以及无空白动态 import
         (src_dir / "lib/Dynamic.svelte").write_text('<p>Dynamic</p>\n', encoding="utf-8")
+        (src_dir / "lib/Dynamic2.svelte").write_text('<p>Dynamic2</p>\n', encoding="utf-8")
         (src_dir / "App.svelte").write_text(
-            '<script>\nimport Photo from "./lib/Photo.svelte";\nconst load1 = () => import(  \n  "./lib/Dynamic.svelte"  \n);\nconst load2 = () => import("./lib/Photo.svelte");\n</script>\n',
+            '<script>\nimport Photo from "./lib/Photo.svelte";\nconst load1 = () => import(  \n  "./lib/Dynamic.svelte"  \n);\nconst load2 = () => import("./lib/Dynamic2.svelte");\n</script>\n',
             encoding="utf-8"
         )
         dynamic_errs = scan(tmppath)
@@ -212,9 +275,9 @@ def run_self_test() -> int:
             print(f"Self-test failed on dynamic import with whitespace/newline: {dynamic_errs}", file=sys.stderr)
             return 1
 
-        # 5. 验证 index.html 模块入口作为可达性根（含 src 在前 type 在后与 ./src 路径）
+        # 5. 验证 index.html 模块入口作为可达性根（含 src 在前 type = "module" 带空格与 ./src 路径）
         (tmppath / "apps/desktop/index.html").write_text(
-            '<!doctype html><html><body><script src="./src/secondary.js" type="module"></script></body></html>',
+            '<!doctype html><html><body><script data-src="ignored.js" src = "./src/secondary.js"  type = "module" ></script></body></html>',
             encoding="utf-8"
         )
         (src_dir / "secondary.js").write_text('import HtmlComp from "./lib/HtmlComp.svelte";\n', encoding="utf-8")
@@ -224,7 +287,19 @@ def run_self_test() -> int:
             print(f"Self-test failed on index.html entry module: {html_entry_errs}", file=sys.stderr)
             return 1
 
-        # 6. 反例：注释中的 import 不能产生依赖边 -> 孤立组件必须判红
+        # 6. 反例：普通字符串里的 import(...) 不能产生依赖边 -> 孤立组件必须判红
+        (src_dir / "lib/FakeString.svelte").write_text('<p>Fake</p>\n', encoding="utf-8")
+        (src_dir / "App.svelte").write_text(
+            '<script>\nimport Photo from "./lib/Photo.svelte";\nconst tip = \'import("./lib/FakeString.svelte")\';\nconst tip2 = "https://example.com//not-a-comment";\n</script>\n',
+            encoding="utf-8"
+        )
+        str_errs = scan(tmppath)
+        if not any("FakeString.svelte" in e for e in str_errs):
+            print("Self-test failed: import inside normal string literal wrongly kept component alive", file=sys.stderr)
+            return 1
+
+        # 7. 反例：注释中的 import 不能产生依赖边 -> 孤立组件必须判红
+        (src_dir / "lib/FakeString.svelte").unlink()
         (src_dir / "App.svelte").write_text(
             '<script>\n// import Photo from "./lib/Photo.svelte";\n/* import Photo from "./lib/Photo.svelte"; */\n</script>\n',
             encoding="utf-8"
@@ -236,6 +311,7 @@ def run_self_test() -> int:
 
         # 清理动态与 index.html 额外文件
         (src_dir / "lib/Dynamic.svelte").unlink()
+        (src_dir / "lib/Dynamic2.svelte").unlink()
         (src_dir / "secondary.js").unlink()
         (src_dir / "lib/HtmlComp.svelte").unlink()
         (src_dir / "App.svelte").write_text('<script>\nimport Photo from "./lib/Photo.svelte";\n</script>\n', encoding="utf-8")

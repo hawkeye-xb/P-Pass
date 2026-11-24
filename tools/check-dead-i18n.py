@@ -288,8 +288,10 @@ def run_self_test() -> int:
         (tmppath / "apps/desktop/src/i18n/en.json").write_text('{"ui.test_desk": "Desk", "ui.test": "Dead"}', encoding="utf-8")
         (tmppath / "apps/desktop/src/i18n/zh.json").write_text('{"ui.test_desk": "桌面", "ui.test": "死"}', encoding="utf-8")
         errs = scan(tmppath)
-        if not any("ui.test" in e for e in errs):
-            print("Self-test failed: prefix substring wrongly kept key alive", file=sys.stderr)
+        # 精确断言死词条列表包含 ui.test，且存活词条 ui.test_desk 不被误报
+        dead_list_str = " ".join(e for e in errs if "apps/desktop/src/i18n" in e)
+        if "'ui.test'" not in dead_list_str or "'ui.test_desk'" in dead_list_str:
+            print("Self-test failed: prefix substring wrongly kept key alive or misreported alive key", file=sys.stderr)
             return 1
 
         # 还原
