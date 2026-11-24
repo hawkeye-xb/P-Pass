@@ -29,6 +29,12 @@
 #         无白名单，零容忍。
 #   G3  — 核心 crate 只依赖「平台能力」trait（PlatformAdapter），不许引用
 #         「托管」trait（HostingAdapter / platform::hosting）（#1043，S-9）。
+#   M.1 — iOS UI 目录（apps/ios/PPass/{App,Home,Photos,Pairing,Diagnostics,Design}/**）
+#         不得导入 Photos 或调用 PHPhotoLibrary/PHAsset，必须走统一媒体抽象层
+#         （Live/ / PPassMedia，#1990-1）。无白名单，零容忍。
+#   M.2 — Android UI 目录（apps/android/**/ui/**）不得导入或使用
+#         android.provider.MediaStore 与 android.content.ContentResolver，必须走
+#         统一媒体/备份层（com.hawkeyexb.ppass.backup.*，#1990-1）。无白名单，零容忍。
 #   G1/G5 是「存量不增」的锁：现有越界登记在 tools/arch-allowlist.txt，
 #   登记数必须与命中数精确相等，且登记相对基线分支只许降、不许升。
 #   迁移卡做完后该文件清零。自测：tools/test-arch-check.sh。
@@ -625,6 +631,61 @@ elif [ "$G3_MODE" = "enforce" ]; then
 else
   printf '%s\n' "$G3_HITS" | awk -F'\t' '{print "   ⚠️  G3（只报告）：" $1 " 行 " $2}'
   echo "   ℹ️  G3 处于只报告模式（ARCH_G3_MODE=report）"
+fi
+
+# ── M.1: iOS UI layer PhotoKit isolation (#1990-1) ─────────────────
+#
+# iOS 界面目录（App, Home, Photos, Pairing, Diagnostics, Design）不得直调系统
+# PhotoKit 底层（import Photos、PHPhotoLibrary、PHAsset）。所有系统相册操作必须
+# 经端口（MediaLibrary / Ports.swift）下沉到媒体实现层（Live/ / PPassMedia）。
+#
+# 注释行不计（strip=1）。允许 PhotosUI（进程外 PHPickerViewController 选择器，无需相册权限）。
+# 无白名单，零容忍。
+echo "==> M.1: iOS UI PhotoKit isolation (apps/ios/PPass/{App,Home,Photos,Pairing,Diagnostics,Design})"
+M1_RE='(?:^|\n)\s*import\s+Photos\b|\bPHPhotoLibrary\b|\bPHAsset\w*\b'
+M1_DIRS=()
+for d in App Home Photos Pairing Diagnostics Design; do
+  [ -d "$ROOT/apps/ios/PPass/$d" ] && M1_DIRS+=("$ROOT/apps/ios/PPass/$d")
+done
+M1_HITS=""
+if [ ${#M1_DIRS[@]} -gt 0 ]; then
+  M1_HITS=$(list_files "${M1_DIRS[@]}" -- '*.swift' \
+    | scan_files "$M1_RE" 1 '' | sort || true)
+fi
+
+if [ -z "$M1_HITS" ]; then
+  echo "   ✅ M.1: clean"
+else
+  printf '%s\n' "$M1_HITS" | awk -F'\t' '{print "❌ M.1 VIOLATION（iOS UI 目录直接调用 PhotoKit 底层，改调媒体抽象层）：" $1 " 行 " $2}'
+  FAIL=1
+fi
+
+# ── M.2: Android UI layer MediaStore / ContentResolver isolation (#1990-1) ──
+#
+# Android UI 目录（apps/android/**/src/main/**/ui/**）不得直接导入或使用
+# android.provider.MediaStore 或 android.content.ContentResolver。所有相册查询、
+# 保存、缩略图解码必须下沉到媒体/备份层（com.hawkeyexb.ppass.backup.*），UI 只调上层抽象接口。
+#
+# 注释行不计（strip=1）。无白名单，零容忍。
+echo "==> M.2: Android UI MediaStore/ContentResolver isolation (apps/android/**/ui/**)"
+M2_RE='(?:^|\n)\s*import\s+android\.(?:provider\.MediaStore|content\.ContentResolver)\b|\bandroid\.(?:provider\.MediaStore|content\.ContentResolver)\b|\bMediaStore\b|\bContentResolver\b'
+M2_DIRS=()
+if [ -d "$ROOT/apps/android" ]; then
+  while IFS= read -r -d '' udir; do
+    M2_DIRS+=("$udir")
+  done < <(find "$ROOT/apps/android" -path "*/src/main/*" -type d -name "ui" -print0)
+fi
+M2_HITS=""
+if [ ${#M2_DIRS[@]} -gt 0 ]; then
+  M2_HITS=$(list_files "${M2_DIRS[@]}" -- '*.kt' '*.java' \
+    | scan_files "$M2_RE" 1 '' | sort || true)
+fi
+
+if [ -z "$M2_HITS" ]; then
+  echo "   ✅ M.2: clean"
+else
+  printf '%s\n' "$M2_HITS" | awk -F'\t' '{print "❌ M.2 VIOLATION（Android UI 目录直接调用 MediaStore/ContentResolver，改调媒体抽象层）：" $1 " 行 " $2}'
+  FAIL=1
 fi
 
 # ── Result ──────────────────────────────────────────

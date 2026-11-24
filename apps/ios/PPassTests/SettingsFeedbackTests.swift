@@ -97,6 +97,7 @@ final class SettingsFeedbackTests: XCTestCase {
         func saveScope(_ selected: Set<String>, known: Set<String>, since: BackupSince) async throws {
             if failSave { throw Boom() }; disk = selected; self.since = since
         }
+        func saveToGallery(fileURL: URL, isVideo: Bool, hash: String) async throws -> SaveToGalleryOutcome { .saved }
     }
 
     private func make(onboarded: Bool = true) -> (AppModel, StubEngine, StubMedia) {

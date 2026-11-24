@@ -74,6 +74,10 @@ import androidx.compose.ui.unit.dp
 import com.hawkeyexb.ppass.R
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.hawkeyexb.ppass.backup.AndroidOriginalReader
+import com.hawkeyexb.ppass.backup.LocalFirstLoader
+import com.hawkeyexb.ppass.backup.LocalFirstOriginals
+import com.hawkeyexb.ppass.backup.readLocalSourceIndex
 import com.hawkeyexb.ppass.proto.AssetMeta
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.ProtoJson
@@ -804,9 +808,7 @@ private fun PhotoViewer(
                 when (op) {
                     ViewerOp.Save -> {
                         val saved = saveToGallery(context, file, asset)
-                        file.delete() // 保存走 MediaStore，临时文件即用即清
-                        // MOB-24: 存过就直说，别让用户以为没生效又点一次
-                        // （那正是相册里多出 "xxx (1).jpg" 的来源）。
+                        file.delete()
                         notice = context.getString(
                             if (saved.alreadyExisted) R.string.already_in_gallery
                             else R.string.saved_to_gallery

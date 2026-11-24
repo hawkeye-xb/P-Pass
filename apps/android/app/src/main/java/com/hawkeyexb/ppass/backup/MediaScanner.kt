@@ -11,9 +11,12 @@ package com.hawkeyexb.ppass.backup
 
 import android.content.ContentResolver
 import android.content.ContentUris
+import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import android.util.Size
 import com.hawkeyexb.ppass.io.atomicReplace
 import com.hawkeyexb.ppass.backup.order.mediaStoreScopeTimeSelection
 import java.io.File
@@ -41,6 +44,18 @@ data class ScanResult(
 
 /** MediaStore may omit or blank an album name; preserve that missing metadata. */
 internal fun bucketNameOrNull(name: String?): String? = name?.takeIf { it.isNotBlank() }
+
+fun decodeBucketCover(
+    context: Context,
+    uri: Uri,
+    size: Size,
+): Bitmap? = runCatching {
+    if (Build.VERSION.SDK_INT >= 29) {
+        context.contentResolver.loadThumbnail(uri, size, null)
+    } else {
+        null
+    }
+}.getOrNull()
 
 class MediaScanner(private val resolver: ContentResolver?) {
     // FIX-T6: resolver 可空——空集守卫路径（scanSince/countAll 的空集

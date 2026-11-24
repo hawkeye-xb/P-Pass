@@ -1,29 +1,24 @@
 import AVKit
-import Photos
 import PPassCore
 import SwiftUI
 
-/// 查看器（对位 Android MediaViewer / VideoScreen；iOS 形态对齐「照片」App）：系统背景色，左右滑翻页
-/// （页序 = 打开时的筛选结果快照）。导航栏：左上关闭、标题 = 归属行、副标题 = 「宽×高」；
-/// 底部系统工具栏：保存到相册 / 分享（点了才按需取原图）。视频页：只显示封面和标着文件大小的播放按钮，
-/// 点了才取原图（显示进度）、取完才播放；失败说「视频没取到」。保存结果用材质 toast 提示。
 struct MediaViewer: View {
     let session: ViewerSession
     let timeline: TimelineSource
+    let media: MediaLibrary
     @Environment(\.dismiss) private var dismiss
     @StateObject private var state: ViewerState
     @State private var toast: String?
     @State private var share: URL?
     @State private var dragY: CGFloat = 0
     @State private var busy = false
-    /// 保存 / 分享的取回任务：关掉大图时取消，FFI 取回随之中止（#953）。
     @State private var work: Task<Void, Never>?
-    /// 当前分享面板里那份原图；面板关闭后立即删（手机不留原图副本）。
     @State private var sharedFile: URL?
 
-    init(session: ViewerSession, timeline: TimelineSource) {
+    init(session: ViewerSession, timeline: TimelineSource, media: MediaLibrary) {
         self.session = session
         self.timeline = timeline
+        self.media = media
         _state = StateObject(wrappedValue: ViewerState(index: session.start))
     }
 
@@ -68,8 +63,6 @@ struct MediaViewer: View {
         }
     }
 
-    /// 翻页交给系统 `UIPageViewController`（照片 App 同款：跟手、半屏出两页、按速度与位移判定、回弹曲线都是系统的）。
-    /// 下拉关闭是另一条竖向手势；放大状态下两者都让给缩放视图。
     private var pager: some View {
         PageViewer(count: session.items.count, state: state) { i in
             AnyView(PageSlot(state: state, index: i, item: session.items[i], timeline: timeline))
@@ -102,11 +95,6 @@ struct MediaViewer: View {
         busy = true
         defer { busy = false }
         let item = current
-        // 已存过且那张还在相册里 → 不再存第二份（Android MOB-24）。
-        if SavedToGallery.stillExists(hash: item.id) {
-            toast = L.s("already_in_gallery")
-            return
-        }
         let url: URL
         do { url = try await timeline.original(item, progress: { _ in }) } catch {
             if error is CancellationError || Task.isCancelled { return }
@@ -115,21 +103,18 @@ struct MediaViewer: View {
             Haptics.failure()
             return
         }
-        // 存相册完成（成功或失败）后原图即删：照片库已有自己的一份，不在 tmp 里再留。
         defer { if !item.isVideo { LiveTimeline.discardShared(url) } }
         do {
-            var placeholder: String?
-            try await PHPhotoLibrary.shared().performChanges {
-                let request = item.isVideo
-                    ? PHAssetCreationRequest.creationRequestForAssetFromVideo(atFileURL: url)
-                    : PHAssetCreationRequest.creationRequestForAssetFromImage(atFileURL: url)
-                placeholder = request?.placeholderForCreatedAsset?.localIdentifier
+            let outcome = try await media.saveToGallery(fileURL: url, isVideo: item.isVideo, hash: item.id)
+            switch outcome {
+            case .alreadyExists:
+                toast = L.s("already_in_gallery")
+            case .saved:
+                toast = L.s("saved_to_gallery")
+                Haptics.success()
             }
-            if let placeholder { SavedToGallery.remember(hash: item.id, localIdentifier: placeholder) }
-            toast = L.s("saved_to_gallery")
-            Haptics.success()
         } catch {
-            AppLog.log("viewer save: photo library failed: \(error)")
+            AppLog.log("viewer save: media library failed: \(error)")
             toast = L.s("share_download_failed")
             Haptics.failure()
         }
@@ -142,7 +127,7 @@ struct MediaViewer: View {
         do {
             let url = try await timeline.original(current, progress: { _ in })
             if Task.isCancelled { if !current.isVideo { LiveTimeline.discardShared(url) }; return }
-            sharedFile = current.isVideo ? nil : url // 视频是缓存目录里的复用文件，不删
+            sharedFile = current.isVideo ? nil : url
             share = url
         } catch {
             if error is CancellationError || Task.isCancelled { return }
@@ -153,8 +138,6 @@ struct MediaViewer: View {
     }
 }
 
-/// 视频页的取回与播放（对位 Android `VideoPlayback`）：建出来只有封面，用户点了播放（[play]）才取原图。
-/// 取回前的大小 / 空间检查和超过声明大小即中止都在 `LiveTimeline.original` 里，保存 / 分享视频同样经过。
 @MainActor
 final class VideoPlaybackModel: ObservableObject {
     enum Phase: Equatable { case cover, fetching(Double), ready(URL), noRoom, failed }
@@ -169,7 +152,6 @@ final class VideoPlaybackModel: ObservableObject {
         self.timeline = timeline
     }
 
-    /// 用户点了播放。正在取或已就绪时忽略重复点击。
     func play() {
         guard task == nil else { return }
         if case .ready = phase { return }
@@ -178,7 +160,6 @@ final class VideoPlaybackModel: ObservableObject {
         task = Task { await fetch() }
     }
 
-    /// 翻走 / 关闭：取消还在进行的取回，回到封面。
     func stop() {
         task?.cancel()
         task = nil
@@ -200,7 +181,7 @@ final class VideoPlaybackModel: ObservableObject {
         } catch is CancellationError {
             if case .fetching = phase { phase = .cover }
         } catch LiveTimeline.Failure.noRoom {
-            phase = .noRoom // 原因已由 original() 记进日志
+            phase = .noRoom
         } catch {
             AppLog.log("viewer video failed: \(LiveTimeline.category(error))")
             phase = .failed
@@ -211,7 +192,6 @@ final class VideoPlaybackModel: ObservableObject {
 private struct ViewerPage: View {
     let item: TimelineItem
     let timeline: TimelineSource
-    /// 翻离视频页时取消还在进行的取回（Android 同：页面离开即取消）。
     var active = true
     var onZoom: (Bool) -> Void = { _ in }
     @State private var image: UIImage?
@@ -240,7 +220,6 @@ private struct ViewerPage: View {
         if let image {
             ZoomableImage(image: image, onZoom: onZoom)
         } else if photoError != nil {
-            // 原始错误只进日志（load() 里已记），界面只说人话（tokens.json rules：报错不出现代码）。
             VStack(spacing: 10) {
                 Image(systemName: "photo").font(.largeTitle).foregroundStyle(PPColor.paperDim)
                 Text(L.s(photoRejected ? "preview_unavailable" : "photos_unreachable")).font(PPFont.body).foregroundStyle(PPColor.paperDim).padding(.horizontal, 24)
@@ -272,9 +251,7 @@ private struct ViewerPage: View {
         }
     }
 
-    /// 照片取预览，视频取封面——都是电脑生成的缩略图，不取原片。
     private func load() async {
-        // 同 Android：1024 取不到时退回网格里已缓存的 256，都没有才报失败（并写明原因）。
         do { image = try await timeline.thumbnail(item, large: true) } catch {
             AppLog.log("viewer 1024 thumb failed: \(LiveTimeline.category(error))")
             do { image = try await timeline.thumbnail(item, large: false) } catch {
@@ -286,7 +263,6 @@ private struct ViewerPage: View {
     }
 }
 
-/// 视频页的初始样子（对位 Android `VideoCover`）：封面 + 居中的播放按钮，按钮上是原片大小。没点之前只有这些。
 private struct VideoCover: View {
     let image: UIImage?
     let bytes: Int64?
@@ -340,7 +316,6 @@ struct ShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
-/// 捏合缩放 + 双击放大 / 还原（系统 `UIScrollView` 的缩放，和「照片」App 同一套手势）。
 private struct ZoomableImage: UIViewRepresentable {
     let image: UIImage
     var onZoom: (Bool) -> Void
@@ -413,7 +388,6 @@ final class ViewerState: ObservableObject {
     init(index: Int) { self.index = index }
 }
 
-/// 一页：只有当前页算「活跃」（视频只在活跃页取原图）。
 private struct PageSlot: View {
     @ObservedObject var state: ViewerState
     let index: Int
@@ -491,23 +465,5 @@ private struct PageViewer: UIViewControllerRepresentable {
             parent.state.index = i
             trim(around: i)
         }
-    }
-}
-
-/// 「保存到相册」去重：记下 内容哈希 → 相册里那张的 localIdentifier；再点保存时若那张还在就不再存。
-/// 记录在存储根里的文件（`SavedToGalleryStore`，#1152）：不进备份，断开配对时由断开清单清掉。
-enum SavedToGallery {
-    private static let store: SavedToGalleryStore? = {
-        guard let root = try? LiveBackend.resolveRoot(logger: NoopLogger()) else { return nil }
-        return SavedToGalleryStore(directory: root.url)
-    }()
-
-    static func remember(hash: String, localIdentifier: String) {
-        try? store?.remember(hash: hash, localIdentifier: localIdentifier)
-    }
-
-    static func stillExists(hash: String) -> Bool {
-        guard let id = store?.localIdentifier(for: hash) else { return false }
-        return PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).count > 0
     }
 }

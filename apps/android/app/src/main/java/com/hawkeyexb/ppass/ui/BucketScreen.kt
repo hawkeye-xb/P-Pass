@@ -1,13 +1,5 @@
-// M5（全页面状态稿）：选相册——2 列封面卡片网格。#1797：相册卡、文件夹卡与
-// 「添加文件夹」改用 #1796 的 Material 3 标准组件（SourceCard / AddSourceCard），
-// 勾选、菜单与触控语义由组件承载，不再自绘角标、点击和描边；同一网格同一尺寸。
-// 单个主按钮（取代旧的竖排复选框列表 + "取消/备份N个相册"两按钮）。共用入口：
-// onboarding 配对成功后 与 设置页"备份哪些照片"重选，都是这一个 composable。
-// #1263：标题「备份哪些照片」；相册之外加一行时间二选一（从今天起 / 全部）；删掉底部汇总句（每个相册有张数，
-// Wi-Fi 条件在设置里）；按钮首次叫「开始备份」，编辑时叫「保存」，其余完全相同。不显示大小（iOS 没有公开接口，两端对齐）。
 package com.hawkeyexb.ppass.ui
 
-import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
@@ -67,6 +59,7 @@ import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.backup.MediaScanner
 import com.hawkeyexb.ppass.backup.ScopeTime
+import com.hawkeyexb.ppass.backup.decodeBucketCover
 import com.hawkeyexb.ppass.backup.newAlbumIds
 import com.hawkeyexb.ppass.ui.components.AddSourceCard
 import com.hawkeyexb.ppass.ui.components.SourceCard
@@ -75,39 +68,14 @@ import com.hawkeyexb.ppass.ui.components.SourceMenuAction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/**
- * UX-10: 相册封面缩略图——来源是手机本机 MediaStore（不是家庭云端
- * 数据），不受 MOB-04 红线约束（那条红线管的是"别把家人照片在手机上
- * 存第二份"，这里解码的图本来就已经在手机本地）；但仍复用 PhotosScreen
- * 的全 App 唯一内存缓存（CacheRedlineTest 断言只准一处 LruCache 声明），
- * key 加 `"bucket:"` 前缀避免和远端缩略图的 hash key 撞车。
- */
 private fun bucketCoverCacheKey(bucketId: Long, displaySize: IntSize) =
     "bucket:$bucketId:${displaySize.width}x${displaySize.height}"
-
-/** API 29+ 用官方 loadThumbnail（图片/视频统一接口）；更早的 API 让
- *  封面留空——这是纯视觉锚点，不是必需功能，不为老设备多维护一条
- *  解码路径。 */
-private fun decodeBucketCover(
-    resolver: ContentResolver,
-    uri: Uri,
-    displaySize: IntSize,
-): Bitmap? = runCatching {
-    if (Build.VERSION.SDK_INT >= 29) {
-        resolver.loadThumbnail(uri, Size(displaySize.width, displaySize.height), null)
-    } else {
-        null
-    }
-}.getOrNull()
 
 @Composable
 private fun BucketCoverImage(bucketId: Long, coverUri: Uri?, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var displaySize by remember { mutableStateOf(IntSize.Zero) }
     val cacheKey = bucketCoverCacheKey(bucketId, displaySize)
-    // LINT-01: ProduceStateDoesNotAssignValue 误报——`value = ...` 裹在
-    // `if (value == null && ...)` 条件分支里，lint 的静态检查器看不出
-    // 条件分支内的赋值（缓存命中时本来就不该重新赋值，这是有意为之）。
     @Suppress("ProduceStateDoesNotAssignValue")
     val bmp by produceState(
         initialValue = thumbCache.get(cacheKey),
@@ -116,9 +84,7 @@ private fun BucketCoverImage(bucketId: Long, coverUri: Uri?, modifier: Modifier 
     ) {
         if (value == null && coverUri != null && displaySize != IntSize.Zero) {
             value = withContext(Dispatchers.IO) {
-                runCatching {
-                    decodeBucketCover(context.contentResolver, coverUri, displaySize)
-                }.getOrNull()
+                decodeBucketCover(context, coverUri, Size(displaySize.width, displaySize.height))
             }?.also { thumbCache.put(cacheKey, it) }
         }
     }
