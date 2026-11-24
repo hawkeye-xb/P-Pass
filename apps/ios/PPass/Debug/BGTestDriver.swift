@@ -963,15 +963,26 @@ private final class FolderPickBox: NSObject, UIDocumentPickerDelegate {
             let sourceId = try registry.addFolder(at: url, displayName: display)
             var staged: [String: Any] = [:]
             if stage {
-                // 目录里最小的媒体文件拷进 seed（相册+目录同内容去重用例）；在回调作用域内读取。
-                let mediaExts = ["jpg", "jpeg", "png", "heic", "mov", "mp4", "m4v"]
-                let files = (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]))?
-                    .filter { mediaExts.contains($0.pathExtension.lowercased()) }
-                    .compactMap { child -> (URL, Int)? in
-                        let size = (try? child.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? -1
-                        return size >= 0 ? (child, size) : nil
+                // 目录里最小的媒体文件拷进 seed（相册+目录同内容去重用例）；在回调作用域内递归读取（与 FolderMediaSource 同口径：跳过 symlink / alias，支持 Blackmagic Cam/Media 等子目录结构）。
+                let mediaExts: Set<String> = ["jpg", "jpeg", "png", "heic", "mov", "mp4", "m4v"]
+                var candidates: [(URL, Int)] = []
+                if let enumerator = FileManager.default.enumerator(
+                    at: url, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey], options: []) {
+                    for case let child as URL in enumerator {
+                        let values = try? child.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
+                        if values?.isSymbolicLink == true { continue }
+                        if let head = try? FileHandle(forReadingFrom: child) {
+                            defer { try? head.close() }
+                            let magic = try? head.read(upToCount: 8)
+                            if magic?.count == 8, String(decoding: magic!, as: UTF8.self).hasPrefix("book") { continue }
+                        }
+                        guard values?.isRegularFile == true,
+                              mediaExts.contains(child.pathExtension.lowercased()),
+                              let size = values?.fileSize, size >= 0 else { continue }
+                        candidates.append((child, size))
                     }
-                if let smallest = files?.min(by: { $0.1 < $1.1 }) {
+                }
+                if let smallest = candidates.min(by: { $0.1 < $1.1 }) {
                     let seedDir = status.url.deletingLastPathComponent().appendingPathComponent("seed", isDirectory: true)
                     try FileManager.default.createDirectory(at: seedDir, withIntermediateDirectories: true)
                     let dest = seedDir.appendingPathComponent("\(BGTestDriver.stagedDedupPrefix)\(smallest.0.pathExtension.lowercased())")
