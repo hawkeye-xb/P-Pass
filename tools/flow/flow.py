@@ -230,7 +230,7 @@ def cmd_start(argv: list[str], cwd: str) -> int:
 
 
 def verify_real_tests_and_counterproof(wt: str, main_root: str, base_sha: str, files: list[str], mode: str) -> tuple[bool, str]:
-    exam_hits = [f for f in files if re.search(r"(^|/)exam_[^/]*$", f)]
+    exam_hits = [f for f in files if re.search(r"(^|/)exam_[^/]*$", f) and os.path.exists(os.path.join(wt, f))]
     if exam_hits:
         return False, f"FAKE_TEST_BLOCKED: 严禁新增一次性考卷文件 {exam_hits}"
     test_files = [f for f in files if TEST_RE.search(f) and os.path.isfile(os.path.join(wt, f))]

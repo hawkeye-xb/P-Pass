@@ -136,9 +136,14 @@ cp "${TMP}/gate.uibak" "$G"
 # 用法错误
 bash "$G" check >/dev/null 2>&1; [ $? = 2 ] && ok "缺参数 → 退出码 2" || bad "缺参数退出码不对"
 
-# 反假考卷门禁：彻底拒绝任何 exam_* 一次性考卷文件入库
-gate 1 "反假考卷：PR 含 exam_1927.py 一次性考卷 → acceptance gate 判红拒绝" "crates/daemon/tests/v3/exam_1927.py" "closes #1"
+# 反假考卷门禁：彻底拒绝任何新增/留存的 exam_* 一次性考卷文件入库；物理删除存量 exam_*（HEAD 中已不存在）放行
+mkdir -p "${TMP}/repo/crates/daemon/tests/v3"
+printf 'x = 1\n' >"${TMP}/repo/crates/daemon/tests/v3/exam_1927.py"
+printf 'echo 1\n' >"${TMP}/repo/exam_foo.sh"
+gate 1 "反假考卷：PR 含新增/留存的 exam_1927.py 一次性考卷 → acceptance gate 判红拒绝" "crates/daemon/tests/v3/exam_1927.py" "closes #1"
 gate 1 "反假考卷：PR 含顶层 exam_foo.sh 考卷 → acceptance gate 判红拒绝" "exam_foo.sh" "closes #1"
+rm -f "${TMP}/repo/crates/daemon/tests/v3/exam_1927.py" "${TMP}/repo/exam_foo.sh"
+gate 0 "反证：物理 git rm 删除旧 exam_1927.py（工作区已不存在）→ 合法放行" "crates/daemon/tests/v3/exam_1927.py" "closes #1"
 gate 0 "反证：正式测试目录 crates/daemon/tests/reparse_test.rs → 绿" "crates/daemon/tests/reparse_test.rs" "closes #1"
 
 echo

@@ -110,13 +110,23 @@ classify() {
 # PR 自己加进来的方案文件不算（没合进 main 就不是已采纳）。
 adopted_in_body() { (cd "$REPO" && adopted_adrs "$(cat "$BODY_F")"); }
 
-# 反假考卷门禁：彻底拒绝在 PR 改动里新增任何 exam_* 一次性考卷文件（如无必要，勿增实体）。
+# 反假考卷门禁：彻底拒绝在 PR 改动里新增或保留任何 exam_* 一次性考卷文件（物理 git rm 删除旧 exam_* 的提交合法放行）。
 check_no_exam_files() {
-  local bad_exams
-  bad_exams="$(grep -E '(^|/)exam_[^/]*$' "$FILES_F" || true)"
-  if [ -n "$bad_exams" ]; then
+  local f bad_exams=()
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in
+      exam_* | */exam_*)
+        # 仅当目标检出树（HEAD_DIR）中该文件依然存在时才属新增/保留违规；删除旧考卷时文件已不在 HEAD_DIR 中。
+        if [ -e "${HEAD_DIR}/${f}" ]; then
+          bad_exams+=("$f")
+        fi
+        ;;
+    esac
+  done <"$FILES_F"
+  if [ "${#bad_exams[@]}" -gt 0 ]; then
     echo "acceptance gate ❌：禁止提交一次性 exam_* 考卷文件（请直接写在各端正式测试套件里）：" >&2
-    printf '  - %s\n' $bad_exams >&2
+    printf '  - %s\n' "${bad_exams[@]}" >&2
     exit 1
   fi
 }

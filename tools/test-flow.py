@@ -27,10 +27,15 @@ class CleanFlowEngineTests(unittest.TestCase):
     def test_2_blocks_exam_files_and_source_string_fake_tests(self) -> None:
         tmp = tempfile.mkdtemp(prefix="v3_ft_")
         try:
-            # 1) 拦截 exam_* 假考卷
+            # 1) 拦截新增/留存的 exam_* 假考卷；而物理删除旧 exam_*（工作区已不存在）允许放行
+            os.makedirs(os.path.join(tmp, "crates/daemon/tests/v3"), exist_ok=True)
+            Path(tmp, "crates/daemon/tests/v3/exam_1927.py").write_text("x = 1\n", encoding="utf-8")
             ok1, msg1 = flow.verify_real_tests_and_counterproof(tmp, tmp, "HEAD", ["crates/daemon/tests/v3/exam_1927.py"], "fix")
             self.assertFalse(ok1)
             self.assertIn("FAKE_TEST_BLOCKED", msg1)
+            os.unlink(os.path.join(tmp, "crates/daemon/tests/v3/exam_1927.py"))
+            ok_del, _ = flow.verify_real_tests_and_counterproof(tmp, tmp, "HEAD", ["crates/daemon/tests/v3/exam_1927.py"], "feature")
+            self.assertTrue(ok_del, "物理删除存量 exam_* 文件应当合法放行")
             # 2) 拦截读取业务源码字符串的假单测
             os.makedirs(os.path.join(tmp, "tests"), exist_ok=True)
             fake_t = Path(tmp) / "tests" / "fake_check.py"
@@ -122,25 +127,27 @@ class CleanFlowEngineTests(unittest.TestCase):
     def test_5_doctor_auto_cleans_disk_below_threshold(self) -> None:
         tmp = tempfile.mkdtemp(prefix="v3_doc_")
         marker = os.path.join(tmp, "cleaned.ok")
-        wl = (ROOT / ".github/allowed-identities.txt").read_text(encoding="utf-8").splitlines()
-        ident = next((x for x in wl if "<" in x and not x.startswith("#")), "lizhaowen <lizhaowen0722@gmail.com>")
-        uname = ident.split(" <")[0]
-        env = {
-            "PPASS_DOCTOR_FAKE_FREE_GB": "12",
-            "PPASS_DOCTOR_FAKE_AFTER_CLEAN_GB": "40",
-            "PPASS_DOCTOR_CLEAN_CMD": f"touch '{marker}'",
-            "GIT_AUTHOR_NAME": uname,
-            "GIT_COMMITTER_NAME": uname,
-        }
+        repo = os.path.join(tmp, "repo")
+        os.makedirs(os.path.join(repo, ".github"), exist_ok=True)
         try:
+            subprocess.run(["git", "init", "--template=", "-q", "-b", "main", repo], check=True)
+            subprocess.run(["git", "-C", repo, "config", "user.name", "Flow Test"], check=True)
+            subprocess.run(["git", "-C", repo, "config", "user.email", "flow@test.invalid"], check=True)
+            Path(repo, ".github/allowed-identities.txt").write_text("Flow Test <flow@test.invalid>\n", encoding="utf-8")
+            env = {
+                "PPASS_DOCTOR_FAKE_FREE_GB": "12",
+                "PPASS_DOCTOR_FAKE_AFTER_CLEAN_GB": "40",
+                "PPASS_DOCTOR_CLEAN_CMD": f"touch '{marker}'",
+            }
             r = subprocess.run(
                 [sys.executable, "-B", "-I", str(ROOT / "tools/flow/flow.py"), "doctor"],
-                cwd=str(ROOT),
+                cwd=repo,
                 env={**os.environ, **env},
                 capture_output=True,
                 text=True,
                 timeout=30,
             )
+            self.assertEqual(r.returncode, 0, f"doctor exit={r.returncode}: {r.stdout} {r.stderr}")
             self.assertTrue(os.path.exists(marker), f"磁盘低于阈值必须自动触发清理：{r.stdout} {r.stderr}")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
