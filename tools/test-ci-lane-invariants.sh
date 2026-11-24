@@ -19,6 +19,11 @@
 #   5. #1556：release.yml 有 workflow 级 concurrency——tag 含 `-test.` 的 test 发布固定到
 #      key `test-channel`、cancel-in-progress: false（新 run 排队等前一个跑完，不取消）；
 #      stable 发布用另一个 key。两个 test tag 必须同组，test 与 stable 必须不同组。
+#   6. #2019：release.yml 调本地可复用 workflow（`uses: ./.github/workflows/*.yml`）时，
+#      被调方（workflow 顶层与每个子 job）申请的权限等级不得超过 caller 授予的等级
+#      （none < read < write）。GitHub 在 run 启动前静态校验，越级时整次 run 直接
+#      startup_failure——0 个 job、没有任何日志。反证：给 ci-docs.yml 的 acceptance-gate
+#      加回 `issues: read`，必须判红。
 # YAML 1.1 把键 `on` 读成布尔 True，取触发表按 d.get('on', d.get(True)) 两头都认。
 # 缺 PyYAML 一律判红（exit 1），不 SKIP。
 # 反证：在临时目录里复制 workflows 与 desktop-checks action 造变异（去掉 Windows job 的 pull_request 条件 / 某条 lane 的
@@ -224,6 +229,57 @@ if isinstance(release, dict):
             if release_key("v1.2.3") == release_key("v1.2.3-test.1"):
                 bad.append("release.yml: test 与 stable 落在同一个 concurrency 组（会互相阻塞）")
 
+    # #2019：可复用 workflow 的权限天花板。caller job 的 permissions 决定上限（job 没写就
+    # 继承 workflow 级），被调 workflow 的顶层与每个子 job 都只能等于或低于它；越级时
+    # GitHub 在启动前就把整次 run 判成 startup_failure，不会留下任何 job 日志。
+    LEVEL = {"none": 0, "read": 1, "write": 2}
+    LEVEL_NAME = {v: k for k, v in LEVEL.items()}
+
+    def perms_of(p):
+        if p is None:
+            return None
+        if isinstance(p, str):
+            # read-all / write-all 是每个 scope 都取该等级；其它写法按 none 处理。
+            return {"*": p[:-4]} if p in ("read-all", "write-all") else {"*": "none"}
+        if isinstance(p, dict):
+            return {str(k): str(v) for k, v in p.items()}
+        return {}
+
+    def level_of(p, scope):
+        if p is None:
+            return 0
+        raw = p[scope] if scope in p else p.get("*", "none")
+        return LEVEL.get(raw, 0)
+
+    for caller_key, caller_job in (release.get("jobs") or {}).items():
+        uses = caller_job.get("uses") if isinstance(caller_job, dict) else None
+        if not isinstance(uses, str) or not uses.startswith("./.github/workflows/"):
+            continue
+        callee_name = uses.rsplit("/", 1)[-1]
+        try:
+            with open(os.path.join(wf, callee_name), encoding="utf-8") as f:
+                callee = yaml.safe_load(f)
+        except Exception as e:
+            bad.append(f"release.yml: job「{caller_key}」调用的 {callee_name} 读不出 YAML（{e}）")
+            continue
+        if not isinstance(callee, dict):
+            bad.append(f"release.yml: job「{caller_key}」调用的 {callee_name} 顶层不是映射")
+            continue
+        caller_perms = perms_of(caller_job.get("permissions", release.get("permissions")))
+        for callee_key, callee_job in (callee.get("jobs") or {}).items():
+            if not isinstance(callee_job, dict):
+                continue
+            callee_perms = perms_of(callee_job.get("permissions", callee.get("permissions")))
+            scopes = set(caller_perms or {}) | set(callee_perms or {})
+            for scope in sorted(scopes):
+                granted, asked = level_of(caller_perms, scope), level_of(callee_perms, scope)
+                if asked > granted:
+                    bad.append(
+                        f"release.yml: job「{caller_key}」调用 {callee_name} 的 job「{callee_key}」"
+                        f"申请 {scope}: {LEVEL_NAME[asked]}，超过 caller 授予的 {LEVEL_NAME[granted]}"
+                        f"（GitHub 启动校验会判 startup_failure：删掉被调方的越级权限，不给 caller 扩权）"
+                    )
+
 for b in bad:
     print(b)
 sys.exit(1 if bad else 0)
@@ -307,6 +363,8 @@ mutant "release.yml 的 test 匹配条件改成 stable" .github/workflows/releas
   "s/'-test.'/'-stable.'/"
 mutant "release.yml 的 stable 也并进 test-channel 组" .github/workflows/release.yml \
   "s/format\('release-stable-.*inputs\.tag\)/'test-channel'/"
+mutant "ci-docs 的 acceptance-gate 加回越级的 issues: read" .github/workflows/ci-docs.yml \
+  "/^  acceptance-gate:\$/,/^    steps:\$/ s/^      contents: read\$/      contents: read\n      issues: read/"
 
 if [ "$fail" -eq 0 ]; then
   echo "== ci-lane-invariants: green ✅ =="
