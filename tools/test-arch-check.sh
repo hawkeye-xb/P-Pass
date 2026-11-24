@@ -598,6 +598,15 @@ expect_green "M.3 Swift case 换行不误报" "$(sample apps/ios/PPass/Diagnosti
         return false
     }
 }')"
+expect_green "M.3 Swift case 后换行到枚举分支不误报" "$(sample apps/ios/PPass/Diagnostics/DiagnosticsScreen.swift 'func f(state: ConnectionState) -> Bool {
+    switch state {
+    case
+        .pairingLost:
+        return true
+    default:
+        return false
+    }
+}')"
 
 # ── M.4: 移动端业务视图禁写裸字号（#1990-4）──────────────
 echo "== M.4 正样例（业务视图写裸字号，必须报红）"
@@ -639,6 +648,8 @@ expect_green "M.4 存量文件命中数等于上限（1）→ 通过" "$(sample 
 expect_red "M.4 存量文件超出上限（2 > 1）→ 报新增" "$(sample "$M4_STOCK_ONE" 'Text("x", fontSize = 14.sp)
 Text("y", fontSize = 15.sp)')" "存量文件新增裸字号"
 expect_red "M.4 存量文件少于上限（0 < 1，未收紧棘轮）→ 报未收紧" "$(sample "$M4_STOCK_ONE" 'Text("x")')" "存量已下降"
+expect_red "M.4 同一行两处裸字号按次数计（2 > 1）→ 报新增" \
+  "$(sample "$M4_STOCK_ONE" 'Text("a", fontSize = 14.sp); Text("b", fontSize = 15.sp)')" "存量文件新增裸字号"
 expect_green "M.4 存量文件多处命中数等于上限（6）→ 通过" "$(sample "$M4_STOCK_SIX" "$M4_SIX")"
 expect_red "M.4 存量文件多处超一处（7 > 6）→ 报新增" "$(sample "$M4_STOCK_SIX" "$M4_SIX
 Text(\"g\", fontSize = 14.sp)")" "存量文件新增裸字号"
@@ -691,6 +702,8 @@ M5_ANDROID_NATIVE='import androidx.compose.material3.TopAppBar
     TopAppBar(title = {}, navigationIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) })
 }'
 expect_green "M.5 Android TopAppBar + ArrowBack" "$(sample "$M4_ANDROID_FILE" "$M5_ANDROID_NATIVE")"
+expect_green "M.5 Android CenterAlignedTopAppBar + ArrowBack" \
+  "$(sample "$M4_ANDROID_FILE" '@Composable fun Header(){ CenterAlignedTopAppBar(title = {}, navigationIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) }) }')"
 expect_green "M.5 Android 没有返回图标" "$(sample "$M4_ANDROID_FILE" '@Composable fun Header() { Text("hi") }')"
 expect_green "M.5 Android 全屏预览 PhotosScreen.kt 豁免" "$(sample apps/android/app/src/main/java/com/example/ui/PhotosScreen.kt "$M5_ANDROID_HAND")"
 expect_green "M.5 Android 全屏预览 VideoScreen.kt 豁免" "$(sample apps/android/app/src/main/java/com/example/ui/VideoScreen.kt "$M5_ANDROID_HAND")"

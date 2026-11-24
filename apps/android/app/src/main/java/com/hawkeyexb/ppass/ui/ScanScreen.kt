@@ -89,7 +89,7 @@ private fun decodeQr(image: ImageProxy, reader: MultiFormatReader): String? {
 fun ScanScreen(
     onQr: (String) -> Unit,
     onCancel: () -> Unit,
-    // #421：直接以手动输入子页起步（没有摄像头权限 / 欢迎页点「无法扫码？」）。
+    // 直接以手动输入子页起步（没有摄像头权限 / 欢迎页点「无法扫码？」）。
     // 此时手动页返回 = 离开扫码流程（onCancel），不退回会开相机的取景页。
     startManual: Boolean = false,
 ) {
@@ -229,7 +229,7 @@ fun ScanScreen(
 /** M3（全页面状态稿）：独立子页——说明段 + 单行粘贴框 + 提示 + 主按钮。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ManualPairScreen(
+internal fun ManualPairScreen(
     input: String,
     onInputChange: (String) -> Unit,
     error: Boolean,
@@ -288,7 +288,7 @@ private fun ManualPairScreen(
                     // 真实可编辑输入框——之前误用 Text 纯展示，既打不了字也
                     // 长按不出系统粘贴菜单（用户实机反馈的真 bug）；
                     // BasicTextField 自带长按选择/粘贴工具条，不用自己接。
-                    // #1149：配对串不进输入法词库——关闭联想（textNoSuggestions）与个性化学习
+                    // 配对串不进输入法词库——关闭联想（textNoSuggestions）与个性化学习
                     // （IME_FLAG_NO_PERSONALIZED_LEARNING）。
                     NoPersonalizedLearning {
                     androidx.compose.foundation.text.BasicTextField(
@@ -363,7 +363,7 @@ private fun ManualPairScreen(
     }
 }
 
-/** #1149：给 [EditorInfo] 打上「不联想、不做个性化学习」的标记（手输配对串用）。 */
+/** 给 [EditorInfo] 打上「不联想、不做个性化学习」的标记（手输配对串用）。 */
 internal fun markNoSuggestionsNoLearning(outAttrs: android.view.inputmethod.EditorInfo) {
     outAttrs.inputType = outAttrs.inputType or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
     outAttrs.imeOptions =
