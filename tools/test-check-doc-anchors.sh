@@ -206,9 +206,9 @@ printf '#!/bin/bash\nexit "${FAKE_JUST_EXIT:-0}"\n' > "$TMP/fake-bin/just"
 chmod +x "$TMP/fake-bin/just"
 for rc in 0 1; do
     if FAKE_JUST_EXIT="$rc" PATH="$TMP/fake-bin:$PATH" python3 "$CHECKER" --tier 1 --root "$FIXTURE" >"$TMP/just-summary.log" 2>&1; then
-        fail "场景 12: 无法取得 just 命令清单时错误放行（just 退出 $rc）"
+        fail "场景 12: 无法取得 just 命令清单时错误放行（just 退出 ${rc}）"
     elif grep -Fq 'cannot validate just recipes' "$TMP/just-summary.log"; then
-        pass "场景 12: 无法取得 just 命令清单时报错（just 退出 $rc）"
+        pass "场景 12: 无法取得 just 命令清单时报错（just 退出 ${rc}）"
     else
         cat "$TMP/just-summary.log"
         fail "场景 12: 没有说明 just 命令清单读取失败"
