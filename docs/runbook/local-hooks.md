@@ -27,8 +27,8 @@
 `git rebase` 过程中解冲突不触发 pre-commit，不受影响。
 
 **有人 / 无人模式交卡与自动变基重验（#1955）**：
-- 本机专属安全层（`~/.git-allowed-identities`、个人/公司隔离钩子、`gitleaks`、`.claude/settings.local.json`）永远只留在本机并经 `dispatch.sh` 优先执行；远端守身份白名单、基线核心禁区、`v3-seal` 哈希锁与 `review/agent`。
-- 无人模式（`just done --unattended` 或 `--rebase`）在推送前若检测到 `origin/main` 前进，会自动执行 `git rebase origin/main` 并重跑 V3 封条门禁、路径门禁与 `just verify`（使用 `--force-with-lease` 安全更新已推过的卡分支）；发生行冲突时立即 `git rebase --abort` 零残留退出（`SUSPENDED_CONFLICT`）；连续 2 轮未过门禁触发 `SUSPENDED_CIRCUIT_BREAK` 熔断跳过。
+- 本机专属安全层（`~/.git-allowed-identities`、个人/公司隔离钩子、`gitleaks`、`.claude/settings.local.json`）永远只留在本机并经 `dispatch.sh` 优先执行；远端守身份白名单、基线核心禁区、正式单测反假考卷检查与全量 diff `review/agent`。
+- 无人模式（`just done --unattended` 或 `--rebase`）在推送前若检测到 `origin/main` 前进，会自动执行 `git rebase origin/main` 并重跑门禁与基线反证（使用 `--force-with-lease` 安全更新已推过的卡分支）；发生行冲突时立即 `git rebase --abort` 零残留退出（`SUSPENDED_CONFLICT`）；连续 2 轮未过门禁触发 `SUSPENDED_CIRCUIT_BREAK` 熔断跳过。
 
 **推送（pre-push）**：推送卡分支前，hook 会现取一次远端的 `main`。卡分支与它有冲突时拒绝
 （`git merge-tree --write-tree` 判），并提示 `git rebase origin/main`；只是落后、没有冲突，只提示落后几个提交，照推。

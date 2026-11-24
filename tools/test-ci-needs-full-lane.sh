@@ -84,11 +84,11 @@ expect_lane "$SUT" rust-workspace false "#1066：同目录其他手机文件仍�
 
 # #1467：按依赖面补进的无害路径（两个 lane 都可跳）
 INERT_1467=(
-  tools/flow/worker-done.sh
+  tools/flow/flow.py
   tools/flow/review-prompt.md
   tools/e3/verify
   tools/hooks/pre-commit
-  tools/test-flow-worker.sh
+  tools/test-flow.py
   tools/test-acceptance-gate.sh
   tools/test-ci-review.sh
   tools/test-e3.sh
@@ -316,15 +316,15 @@ fi
 echo
 echo "==> 7c. 变异反证丁（#1467）：去掉新补的无害条目，「可跳」断言必须变红"
 MUT4="$TMP/mutated4.sh"
-grep -v '^    tools/flow/\* | tools/e3/\*\|^    release/notes/\*) return 0\|^    tools/test-flow-\*' "$SUT" >"$MUT4"
+grep -v '^    tools/flow/\* | tools/e3/\*\|^    release/notes/\*) return 0\|^    tools/test-flow\.py' "$SUT" >"$MUT4"
 if [ "$(wc -l <"$SUT")" -ne "$(( $(wc -l <"$MUT4") + 3 ))" ]; then
   echo "  ❌ 变异没生效（锚点没匹配上 3 行）—— 这一节等于没跑，判失败"
   FAIL=$((FAIL + 1))
 else
   before=$FAIL
-  expect "$MUT4" false "【变异后应失败】只改 tools/flow"        tools/flow/worker-done.sh
+  expect "$MUT4" false "【变异后应失败】只改 tools/flow"        tools/flow/flow.py
   expect "$MUT4" false "【变异后应失败】只改 release/notes"     release/notes/android/0.11.0.zh.txt
-  expect "$MUT4" false "【变异后应失败】只改 tools/test-flow-*" tools/test-flow-worker.sh
+  expect "$MUT4" false "【变异后应失败】只改 tools/test-flow.py" tools/test-flow.py
   gained=$((FAIL - before))
   if [ "$gained" -eq 3 ]; then
     echo "  ✅ 三条断言在变异后全部变红 ⇒ 新清单真的在起作用，不是恒假式"

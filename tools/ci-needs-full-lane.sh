@@ -115,7 +115,7 @@ static_inert() {
     *.md) return 0 ;;
     # #1467：流程与发布说明，两个 lane 都惰性（核实依据见上方清单注释）。
     tools/flow/* | tools/e3/* | tools/hooks/*) return 0 ;;
-    tools/test-flow-*.sh | tools/test-acceptance-gate.sh | tools/test-ci-review.sh) return 0 ;;
+    tools/test-flow.py | tools/test-flow-*.sh | tools/test-acceptance-gate.sh | tools/test-ci-review.sh) return 0 ;;
     tools/test-e3.sh | tools/test-local-hooks.sh | tools/test-release-acceptance.sh) return 0 ;;
     tools/ci-paths.sh | tools/test-ci-paths.sh) return 0 ;;
     release/notes/*) return 0 ;;
