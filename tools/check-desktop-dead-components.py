@@ -65,31 +65,40 @@ def blank_preserve_newlines(s: str) -> str:
 
 
 def blank_comments_1to1(code: str, is_svelte: bool = False) -> str:
-    """词法状态机：将 // 与 /* */ 注释替换为等长空格，保持 1:1 字符偏移并避免截断代码。"""
+    """词法状态机：将 // 与 /* */ 注释替换为等长空格，支持模板字面量及其 ${...} 表达式，保持 1:1 字符偏移。"""
     out: list[str] = []
     i = 0
     n = len(code)
+    tpl_stack: list[int] = []
+
     while i < n:
-        if is_svelte and code.startswith("<!--", i):
+        if is_svelte and not tpl_stack and code.startswith("<!--", i):
             j = code.find("-->", i + 4)
             end = n if j == -1 else j + 3
             out.append(blank_preserve_newlines(code[i:end]))
             i = end
             continue
+
         c = code[i]
         nxt = code[i + 1] if i + 1 < n else ""
+
+        # 单行注释 //
         if c == "/" and nxt == "/":
             j = code.find("\n", i)
             end = n if j == -1 else j
             out.append(" " * (end - i))
             i = end
             continue
+
+        # 块注释 /* ... */
         if c == "/" and nxt == "*":
             j = code.find("*/", i + 2)
             end = n if j == -1 else j + 2
             out.append(blank_preserve_newlines(code[i:end]))
             i = end
             continue
+
+        # 普通单双引号字符串
         if c in ('"', "'"):
             q = c
             out.append(q)
@@ -109,6 +118,67 @@ def blank_comments_1to1(code: str, is_svelte: bool = False) -> str:
                     break
                 i += 1
             continue
+
+        # 模板字面量 `
+        if c == "`":
+            out.append("`")
+            i += 1
+            while i < n:
+                ch = code[i]
+                if ch == "\\":
+                    out.append(ch)
+                    if i + 1 < n:
+                        out.append(code[i + 1])
+                        i += 2
+                    else:
+                        i += 1
+                    continue
+                if ch == "$" and i + 1 < n and code[i + 1] == "{":
+                    out.append("${")
+                    tpl_stack.append(1)
+                    i += 2
+                    break
+                if ch == "`":
+                    out.append("`")
+                    i += 1
+                    break
+                out.append(ch)
+                i += 1
+            continue
+
+        # 模板表达式花括号深度追踪
+        if tpl_stack:
+            if c == "{":
+                tpl_stack[-1] += 1
+            elif c == "}":
+                tpl_stack[-1] -= 1
+                if tpl_stack[-1] == 0:
+                    tpl_stack.pop()
+                    out.append("}")
+                    i += 1
+                    while i < n:
+                        ch = code[i]
+                        if ch == "\\":
+                            out.append(ch)
+                            if i + 1 < n:
+                                out.append(code[i + 1])
+                                i += 2
+                            else:
+                                i += 1
+                            continue
+                        if ch == "$" and i + 1 < n and code[i + 1] == "{":
+                            out.append("${")
+                            tpl_stack.append(1)
+                            i += 2
+                            break
+                        if ch == "`":
+                            out.append("`")
+                            i += 1
+                            break
+                        out.append(ch)
+                        i += 1
+                    continue
+
         out.append(c)
         i += 1
     return "".join(out)
@@ -181,8 +251,8 @@ def extract_valid_imports(raw_src: str, is_svelte: bool = False) -> set[str]:
                         i += 1
                     continue
 
-        # 匹配语句层 import
-        if src.startswith("import", i) and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] in "_$")):
+        # 匹配语句层 import（排除 obj.import() 等方法调用）
+        if src.startswith("import", i) and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] in "_$.")):
             rem = src[i + 6 :]
             # 1. 动态 import( ... )
             m_dyn = re.match(r"""^\s*\(\s*["']([^"']+)["']\s*\)""", rem)
@@ -190,8 +260,8 @@ def extract_valid_imports(raw_src: str, is_svelte: bool = False) -> set[str]:
                 imports.add(m_dyn.group(1))
                 i += 6 + m_dyn.end()
                 continue
-            # 2. 静态 import ... from "..." 或 import "..."（支持 * as、默认、解构、混合组合与跨行）
-            m_stat = re.match(r"""^(?:\s+(?:(?:\*\s+as\s+[\w$]+|\{[^}]*\}|[\w$]+(?:,\s*(?:\*\s+as\s+[\w$]+|\{[^}]*\}))?)\s+from\s+)?|\s+)["']([^"']+)["']""", rem)
+            # 2. 静态 import ... from "..." 或 import"..."（支持 * as、默认、解构、混合组合、无空白副作用导入与跨行）
+            m_stat = re.match(r"""^(?:\s*(?:(?:\*\s+as\s+[\w$]+|\{[^}]*\}|[\w$]+(?:,\s*(?:\*\s+as\s+[\w$]+|\{[^}]*\}))?)\s+from\s+)|\s*)["']([^"']+)["']""", rem)
             if m_stat:
                 imports.add(m_stat.group(1))
                 i += 6 + m_stat.end()
@@ -210,9 +280,11 @@ def extract_valid_imports(raw_src: str, is_svelte: bool = False) -> set[str]:
     return imports
 
 
-def build_dependency_graph(src_dir: Path) -> tuple[dict[Path, set[Path]], list[Path]]:
+def build_dependency_graph(desktop_dir: Path, src_dir: Path) -> tuple[dict[Path, set[Path]], list[Path]]:
     files = (
-        list(src_dir.rglob("*.js"))
+        list(desktop_dir.glob("*.js"))
+        + list(desktop_dir.glob("*.ts"))
+        + list(src_dir.rglob("*.js"))
         + list(src_dir.rglob("*.ts"))
         + list(src_dir.rglob("*.svelte"))
     )
@@ -230,41 +302,74 @@ def build_dependency_graph(src_dir: Path) -> tuple[dict[Path, set[Path]], list[P
 
 
 def find_html_entries(root: Path, src_dir: Path) -> set[Path]:
-    entries = set()
+    entries: set[Path] = set()
     index_html = root / "apps/desktop/index.html"
     if index_html.is_file():
         from html.parser import HTMLParser
 
+        html_dir = index_html.parent
+
         class ScriptModuleParser(HTMLParser):
             def __init__(self):
                 super().__init__()
-                self.srcs = []
+                self.srcs: list[str] = []
+                self.in_inline_module = False
+                self.inline_data: list[str] = []
 
             def handle_starttag(self, tag, attrs):
                 if tag == "script":
                     d = dict(attrs)
-                    if d.get("type") == "module" and "src" in d:
-                        self.srcs.append(d["src"].strip())
+                    if d.get("type") == "module":
+                        if "src" in d:
+                            self.srcs.append(d["src"].strip())
+                        else:
+                            self.in_inline_module = True
+
+            def handle_endtag(self, tag):
+                if tag == "script" and self.in_inline_module:
+                    self.in_inline_module = False
+
+            def handle_data(self, data):
+                if self.in_inline_module:
+                    self.inline_data.append(data)
 
         parser = ScriptModuleParser()
         parser.feed(index_html.read_text(encoding="utf-8", errors="ignore"))
+
+        # 1. 外部 script 模块：同时支持相对 html_dir 与相对 src_dir
         for raw_src in parser.srcs:
+            # 优先从 index.html 所在目录解析相对路径
+            cand1 = (html_dir / raw_src).resolve()
+            if cand1.is_file():
+                entries.add(cand1)
+                continue
             cleaned = raw_src.lstrip("./").lstrip("/")
             if cleaned.startswith("src/"):
                 cleaned = cleaned[4:]
-            cand = (src_dir / cleaned).resolve()
-            if cand.is_file():
-                entries.add(cand)
+            cand2 = (src_dir / cleaned).resolve()
+            if cand2.is_file():
+                entries.add(cand2)
+
+        # 2. 内联 script 模块：提取其 import 并解析相对说明符
+        if parser.inline_data:
+            inline_code = "".join(parser.inline_data)
+            inline_specs = extract_valid_imports(inline_code)
+            for spec in inline_specs:
+                res = resolve_import(index_html, spec, src_dir)
+                if res:
+                    entries.add(res)
+
     return entries
 
 
 def scan(root: Path) -> list[str]:
     root = root.resolve()
+    desktop_dir = (root / "apps/desktop").resolve()
     src_dir = (root / "apps/desktop/src").resolve()
     if not src_dir.is_dir():
         return [f"目录不存在：{src_dir}"]
 
-    imports, all_files = build_dependency_graph(src_dir)
+    imports, all_files = build_dependency_graph(desktop_dir, src_dir)
 
     entry = (src_dir / "main.js").resolve()
     html_entries = find_html_entries(root, src_dir)
@@ -279,7 +384,7 @@ def scan(root: Path) -> list[str]:
     while queue:
         curr = queue.pop(0)
         for neighbor in imports.get(curr, []):
-            if neighbor not in visited and str(src_dir) in str(neighbor):
+            if neighbor not in visited and (str(src_dir) in str(neighbor) or str(desktop_dir) in str(neighbor)):
                 visited.add(neighbor)
                 queue.append(neighbor)
 
@@ -367,21 +472,29 @@ def run_self_test() -> int:
         (src_dir / "lib/Dynamic2.svelte").unlink()
         (src_dir / "App.svelte").write_text('<script>\nimport Photo from "./lib/Photo.svelte";\n</script>\n', encoding="utf-8")
 
-        # 5. 验证 index.html 模块入口作为可达性根（含 src 在前 type = "module" 带空格与 ./src 路径）
+        # 5. 验证 index.html 外部相对路径模块与内联 script type="module" 均作为可达性根
         (tmppath / "apps/desktop/index.html").write_text(
-            '<!doctype html><html><body><script data-src="ignored.js" src = "./src/secondary.js"  type = "module" ></script></body></html>',
-            encoding="utf-8"
+            '<!doctype html><html><body>\n'
+            '<!-- <script type="module" src="./src/ignored_comment.js"></script> -->\n'
+            '<script data-src="ignored.js" src = "./bootstrap.js"  type = "module" ></script>\n'
+            '<script type="module">\n'
+            '  import InlineComp from "./src/lib/InlineComp.svelte";\n'
+            '</script>\n'
+            '</body></html>',
+            encoding="utf-8",
         )
-        (src_dir / "secondary.js").write_text('import HtmlComp from "./lib/HtmlComp.svelte";\n', encoding="utf-8")
+        (tmppath / "apps/desktop/bootstrap.js").write_text('import HtmlComp from "./src/lib/HtmlComp.svelte";\n', encoding="utf-8")
         (src_dir / "lib/HtmlComp.svelte").write_text('<p>HtmlComp</p>\n', encoding="utf-8")
+        (src_dir / "lib/InlineComp.svelte").write_text('<p>InlineComp</p>\n', encoding="utf-8")
         html_entry_errs = scan(tmppath)
         if html_entry_errs:
             print(f"Self-test failed on index.html entry module: {html_entry_errs}", file=sys.stderr)
             return 1
 
         # 清理 index.html 额外文件
-        (src_dir / "secondary.js").unlink()
+        (tmppath / "apps/desktop/bootstrap.js").unlink()
         (src_dir / "lib/HtmlComp.svelte").unlink()
+        (src_dir / "lib/InlineComp.svelte").unlink()
         (tmppath / "apps/desktop/index.html").unlink()
 
         # 6. 反例：普通字符串里的 import(...) 与 export from 不能产生依赖边 -> 孤立组件必须判红（同时阳性验证 Photo.svelte 仍存活）
@@ -414,18 +527,30 @@ def run_self_test() -> int:
         (src_dir / "lib/ExportStar.svelte").unlink()
         (src_dir / "lib/ExportStarAs.svelte").unlink()
 
-        # 8. 反例：注释中的 export/import 与混淆长注释不能产生依赖边 -> 孤立组件必须判红（同时验证长注释后真实 import 仍存活）
-        (src_dir / "lib/LiveTarget.svelte").write_text('<p>LiveTarget</p>\n', encoding="utf-8")
+        # 8. 反例：注释中的 export/import 与混淆长注释不能产生依赖边 -> 孤立组件必须判红（分别验证重导出与静态导入）
+        (src_dir / "lib/LiveExport.svelte").write_text('<p>LiveExport</p>\n', encoding="utf-8")
+        (src_dir / "lib/LiveImport.svelte").write_text('<p>LiveImport</p>\n', encoding="utf-8")
         (src_dir / "App.svelte").write_text(
-            '<script>\n// import Photo from "./lib/Photo.svelte";\n/* import Photo from "./lib/Photo.svelte"; */\nexport { /* \n } from "./lib/Photo.svelte"\n */ };\nexport { /* xxxxxxxxxxxxxxxxxxxxxxxx import("./lib/Photo.svelte") */ } from "./lib/LiveTarget.svelte";\nimport { /* } from "./lib/Photo.svelte" */ } from "./lib/LiveTarget.svelte";\n</script>\n',
-            encoding="utf-8"
+            '<script>\n// import Photo from "./lib/Photo.svelte";\n/* import Photo from "./lib/Photo.svelte"; */\n'
+            'export { /* \n } from "./lib/Photo.svelte"\n */ };\n'
+            'export { /* xxxxxxxxxxxxxxxxxxxxxxxx import("./lib/Photo.svelte") */ } from "./lib/LiveExport.svelte";\n'
+            'import { /* } from "./lib/Photo.svelte" */ } from "./lib/LiveImport.svelte";\n'
+            'import"./lib/LiveImport.svelte";\n'
+            'logger.import("./lib/Photo.svelte");\n'
+            '</script>\n',
+            encoding="utf-8",
         )
         comment_errs = scan(tmppath)
-        if not any("Photo.svelte" in e for e in comment_errs) or any("LiveTarget.svelte" in e for e in comment_errs):
-            print("Self-test failed: comment import wrongly kept component alive or killed real import after comment", file=sys.stderr)
+        if (
+            not any("Photo.svelte" in e for e in comment_errs)
+            or any("LiveExport.svelte" in e for e in comment_errs)
+            or any("LiveImport.svelte" in e for e in comment_errs)
+        ):
+            print("Self-test failed: comment import wrongly kept component alive or killed real import/export", file=sys.stderr)
             return 1
 
-        (src_dir / "lib/LiveTarget.svelte").unlink()
+        (src_dir / "lib/LiveExport.svelte").unlink()
+        (src_dir / "lib/LiveImport.svelte").unlink()
 
         # 还原干净 App.svelte
         (src_dir / "App.svelte").write_text('<script>\nimport Photo from "./lib/Photo.svelte";\n</script>\n', encoding="utf-8")
