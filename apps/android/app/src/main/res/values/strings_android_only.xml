@@ -66,10 +66,6 @@
          happened, not what is about to happen. -->
     <string name="state_background_budget_paused">Background backup time is used up. Keep P-Pass on screen to continue, or it resumes on its own once the time is restored.</string>
     <string name="state_background_protection_unknown">The system didn\'t allow background backup. Keep P-Pass open on screen to continue.</string>
-    <!-- #1263: home card offering background backup (onboarding no longer asks). -->
-    <string name="background_backup_offer">Background backup is off. Turn it on to back up automatically.</string>
-    <string name="background_backup_offer_action">Turn on</string>
-    <string name="background_backup_offer_close">Close</string>
     <string name="background_backup_needs_authorization">System hasn\'t allowed background backup</string>
     <string name="background_backup_system_stopped">The system stopped background backup</string>
     <string name="background_backup_action_allow">Allow</string>
@@ -92,7 +88,6 @@
     <string name="share_to">Share to…</string>
     <!-- #1762 素材文件夹：设置入口 + 最小二级页（添加 / 查看 / 移除 / 重新授权）。只在 Android。 -->
     <string name="folder_settings_title">Media folders</string>
-    <string name="folder_settings_entry_subtitle">Photos and videos in folders you add are backed up automatically</string>
     <string name="folder_add">Add a folder</string>
     <string name="folder_empty">No folders added yet</string>
     <string name="folder_status_ok">Authorized</string>

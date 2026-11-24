@@ -294,6 +294,10 @@ mobile-static-check:
   tools/ios/check-testflight-signing.sh --self-test > /dev/null
   tools/ios/check-testflight-signing.sh
   python3 tools/ios/gen-strings.py --check
+  python3 tools/check-dead-i18n.py --self-test > /dev/null
+  python3 tools/check-dead-i18n.py
+  python3 tools/check-desktop-dead-components.py --self-test > /dev/null
+  python3 tools/check-desktop-dead-components.py
   tools/ios/check-no-color-literals.sh --self-test > /dev/null
   tools/ios/check-no-color-literals.sh
   tools/check-ui-truth-table.sh --self-test > /dev/null
@@ -573,8 +577,14 @@ version-bump-i18n-test:
 bump-version-test:
   @bash tools/test-bump-version.sh
 
+dead-i18n-test:
+  @bash tools/test-check-dead-i18n.sh
+
+desktop-dead-components-test:
+  @bash tools/test-check-desktop-dead-components.sh
+
 # 流程与发版闸门禁的自测：本地 ci / ci-docs 与 CI（ci-docs.yml 的 flow-tests job）共用这一份清单。
-flow-tests: hooks-test flow-engine-test flow-ci-review-test flow-gate-status-test macos-runner-test main-red-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test
+flow-tests: hooks-test flow-engine-test flow-ci-review-test flow-gate-status-test macos-runner-test main-red-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test dead-i18n-test desktop-dead-components-test
   @echo "==> flow-tests: green ✅"
 
 flow-engine-test:

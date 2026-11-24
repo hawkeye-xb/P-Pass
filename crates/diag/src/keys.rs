@@ -369,7 +369,6 @@ msg_keys! {
     UI_RECENT_ACTIVITY => "ui.recent_activity",
     UI_NO_ACTIVITY => "ui.no_activity",
     UI_ALL_ACTIVITY => "ui.all_activity",
-    UI_REMOVED_DEVICES => "ui.removed_devices",
     UI_DEVICES_FOOTNOTE => "ui.devices_footnote",
     UI_PHOTOS_REFRESHING => "ui.photos_refreshing",
     UI_PHOTOS_REFRESH => "ui.photos_refresh",
@@ -391,7 +390,6 @@ msg_keys! {
     UI_DISK_ENCRYPTION_OFF => "ui.disk_encryption_off",
     UI_LIBRARY_CHANGE_HINT => "ui.library_change_hint",
     /// #557: Settings → interface language (follow system / zh / en).
-    UI_LANGUAGE => "ui.language",
     UI_LANGUAGE_SYSTEM => "ui.language_system",
     UI_LANGUAGE_ZH => "ui.language_zh",
     UI_LANGUAGE_EN => "ui.language_en",
@@ -737,7 +735,6 @@ mod tests {
             UI_RECENT_ACTIVITY,
             UI_NO_ACTIVITY,
             UI_ALL_ACTIVITY,
-            UI_REMOVED_DEVICES,
             UI_DEVICES_FOOTNOTE,
             UI_PHOTOS_REFRESHING,
             UI_PHOTOS_REFRESH,
@@ -755,7 +752,6 @@ mod tests {
             UI_DISK_ENCRYPTION,
             UI_DISK_ENCRYPTION_OFF,
             UI_LIBRARY_CHANGE_HINT,
-            UI_LANGUAGE,
             UI_LANGUAGE_SYSTEM,
             UI_LANGUAGE_ZH,
             UI_LANGUAGE_EN,
@@ -872,7 +868,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 371);
+        assert_eq!(ALL.len(), 369);
     }
 
     #[test]
