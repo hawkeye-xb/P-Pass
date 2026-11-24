@@ -28,11 +28,12 @@ private struct SimplePRNG {
 
     mutating func nextInt(upperBound: Int) -> Int {
         guard upperBound > 0 else { return 0 }
-        return Int(nextUInt64() % UInt64(upperBound))
+        // 取高 32 位，避免 LCG 低位奇偶交替与模 10 同相导致后续 nextBool 恒为单值
+        return Int((nextUInt64() >> 32) % UInt64(upperBound))
     }
 
     mutating func nextBool() -> Bool {
-        return (nextUInt64() & 1) == 1
+        return ((nextUInt64() >> 63) & 1) == 1
     }
 }
 
@@ -70,26 +71,30 @@ final class FlowStateMachineRandomFuzzTests: XCTestCase {
         // 固定运行 5 个独立 seed，每轮执行 40 步事件交错，总时长严格控制在 5 秒以内
         let baseSeeds: [UInt64] = [199201, 199202, 199203, 199204, 199205]
         let startTime = Date()
+        var totalDisabledEvents = 0
 
         for seed in baseSeeds {
-            try await runFuzzIteration(seed: seed, steps: 40)
+            totalDisabledEvents += try await runFuzzIteration(seed: seed, steps: 40)
         }
 
+        XCTAssertGreaterThan(totalDisabledEvents, 0, "Fuzz seeds must actually exercise setAutoBackup(false) at least once")
         let elapsed = Date().timeIntervalSince(startTime)
         XCTAssertLessThanOrEqual(elapsed, 5.0, "Fuzz test took too long: \(elapsed)s > 5.0s")
     }
 
-    private func runFuzzIteration(seed: UInt64, steps: Int) async throws {
+    private func runFuzzIteration(seed: UInt64, steps: Int) async throws -> Int {
         var prng = SimplePRNG(seed: seed)
         var trace: [String] = []
+        var disabledEventCount = 0
 
         let rig = try Rig("fuzz-\(seed)")
         await rig.start()
 
-        // 跟踪不变量 ①：用户关闭自动备份期间是否被违规触发自动备份
+        // 跟踪不变量 ①：用户关闭自动备份期间是否被违规触发自动备份（只捕获 autoRule，不强引用 rig）
         let illegalTransferDuringAutoDisabled = Locked<[String]>([])
+        let autoRuleBox = rig.autoRule
         rig.delivery.onStart.set { req in
-            let isAutoEnabled = rig.autoRule.get()
+            let isAutoEnabled = autoRuleBox.get()
             if !isAutoEnabled {
                 illegalTransferDuringAutoDisabled.update { $0.append(req.details.snapshot.mediaId) }
             }
@@ -144,6 +149,7 @@ final class FlowStateMachineRandomFuzzTests: XCTestCase {
 
             case 6: // 自动备份开关切换 (10%)
                 let on = prng.nextBool()
+                if !on { disabledEventCount += 1 }
                 rig.autoRule.set(on)
                 rig.conditions.update { $0.autoBackupEnabled = on }
                 event = .setAutoBackup(on)
@@ -152,6 +158,7 @@ final class FlowStateMachineRandomFuzzTests: XCTestCase {
 
             case 7: // 权限 Full (10%)
                 rig.media.scope = ["B7", "B8"]
+                rig.media.absenceTrusted.set(true)
                 rig.media.lookupThrows.set(nil)
                 rig.media.scanThrows.set(nil)
                 event = .setPermissionFull
@@ -160,6 +167,7 @@ final class FlowStateMachineRandomFuzzTests: XCTestCase {
 
             case 8: // 权限 Partial / 范围受限 (10%)
                 rig.media.scope = ["B7"]
+                rig.media.absenceTrusted.set(false)
                 rig.media.lookupThrows.set(nil)
                 rig.media.scanThrows.set(nil)
                 event = .setPermissionPartial
@@ -202,6 +210,7 @@ final class FlowStateMachineRandomFuzzTests: XCTestCase {
         rig.probe.result.set(.reachable(advertisedPairingId: "e1", health: nil, capabilities: []))
         rig.presence.unreachable.set(false)
         rig.media.scope = ["B7", "B8"]
+        rig.media.absenceTrusted.set(true)
         rig.media.lookupThrows.set(nil)
         rig.media.scanThrows.set(nil)
         rig.fakeControl?.pausedFlag = false
@@ -231,7 +240,14 @@ final class FlowStateMachineRandomFuzzTests: XCTestCase {
         // 检查所有当前还在 FakeMedia 且在 scope 内的照片
         let expectedPhotos = rig.media.photos.filter { rig.media.isInScope($0.bucket) }
         for photo in expectedPhotos {
-            guard let order = try rig.current(photo.n) else {
+            let order: Order?
+            do {
+                order = try rig.current(photo.n)
+            } catch {
+                XCTFail("Invariant 2 violated: reading order for photo \(photo.mediaId) threw error: \(error)! Seed: \(seed)\nTrace:\n\(trace.joined(separator: "\n"))")
+                continue
+            }
+            guard let order else {
                 XCTFail("Invariant 2 violated: photo \(photo.mediaId) was in scope but has no order! Seed: \(seed)\nTrace:\n\(trace.joined(separator: "\n"))")
                 continue
             }
@@ -255,6 +271,7 @@ final class FlowStateMachineRandomFuzzTests: XCTestCase {
             .idle,
             "Invariant 3 violated: engine did not settle to idle (current=\(view.state.rawValue))! Seed: \(seed)\nTrace:\n\(trace.joined(separator: "\n"))"
         )
+        return disabledEventCount
     }
 }
 

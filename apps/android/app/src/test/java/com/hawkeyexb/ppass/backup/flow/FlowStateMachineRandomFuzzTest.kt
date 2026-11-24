@@ -29,11 +29,11 @@ private class SimplePRNG(seed: Long) {
 
     fun nextInt(upperBound: Int): Int {
         if (upperBound <= 0) return 0
-        val v = (nextLong() ushr 1) % upperBound.toLong()
+        val v = (nextLong() ushr 32) % upperBound.toLong()
         return v.toInt()
     }
 
-    fun nextBoolean(): Boolean = (nextLong() and 1L) == 1L
+    fun nextBoolean(): Boolean = ((nextLong() ushr 63) and 1L) == 1L
 }
 
 class FlowStateMachineRandomFuzzTest {
@@ -74,16 +74,19 @@ class FlowStateMachineRandomFuzzTest {
     fun `random state machine interleaving preserves core invariants`() = runTest {
         val baseSeeds = listOf(199201L, 199202L, 199203L, 199204L, 199205L)
         val startNs = System.nanoTime()
+        var totalDisabledEvents = 0
         for (seed in baseSeeds) {
-            runFuzzIteration(seed)
+            totalDisabledEvents += runFuzzIteration(seed)
         }
+        assertTrue("Fuzz seeds must actually exercise SetAutoBackup(false) at least once", totalDisabledEvents > 0)
         val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
         assertTrue("Fuzz test took too long: ${elapsedMs}ms > 5000ms", elapsedMs <= 5000L)
     }
 
-    private fun kotlinx.coroutines.test.TestScope.runFuzzIteration(seed: Long) {
+    private fun kotlinx.coroutines.test.TestScope.runFuzzIteration(seed: Long): Int {
         val prng = SimplePRNG(seed)
         val trace = mutableListOf<String>()
+        var disabledEventCount = 0
 
         var autoRuleOn = true
         val baseMedia = com.hawkeyexb.ppass.backup.order.FakeMedia()
@@ -139,7 +142,6 @@ class FlowStateMachineRandomFuzzTest {
                 }
                 4 -> { // 网络断开 (10%)
                     rig.probeResult = ProbeResult.Unreachable
-                    rig.routeOk = false
                     event = FuzzEvent.NetworkDrop
                     trace += "Step $step: $event"
                     rig.trigger(TriggerReason.NETWORK_CHANGE)
@@ -153,6 +155,7 @@ class FlowStateMachineRandomFuzzTest {
                 }
                 6 -> { // 自动备份开关切换 (10%)
                     val on = prng.nextBoolean()
+                    if (!on) disabledEventCount++
                     autoRuleOn = on
                     rig.conditions = rig.conditions.copy(autoBackupEnabled = on)
                     event = FuzzEvent.SetAutoBackup(on)
@@ -161,13 +164,15 @@ class FlowStateMachineRandomFuzzTest {
                 }
                 7 -> { // 权限 Full / 范围扩充 (10%)
                     rig.media.scope = setOf(7L, 8L)
+                    rig.fullMediaAccess = true
                     fuzzSource.revoked = false
                     event = FuzzEvent.SetPermissionFull
                     trace += "Step $step: $event"
-                    rig.trigger(TriggerReason.MEDIA_CHANGE)
+                    rig.trigger(TriggerReason.SCOPE_ADDED)
                 }
                 8 -> { // 权限 Partial / 范围受限 (10%)
                     rig.media.scope = setOf(7L)
+                    rig.fullMediaAccess = false
                     fuzzSource.revoked = false
                     event = FuzzEvent.SetPermissionPartial
                     trace += "Step $step: $event"
@@ -207,6 +212,7 @@ class FlowStateMachineRandomFuzzTest {
         rig.probeResult = ProbeResult.Reachable()
         rig.routeOk = true
         rig.media.scope = setOf(7L, 8L)
+        rig.fullMediaAccess = true
         fuzzSource.revoked = false
         rig.control.pausedFlag = false
 
@@ -259,5 +265,6 @@ class FlowStateMachineRandomFuzzTest {
         )
 
         rig.close()
+        return disabledEventCount
     }
 }
