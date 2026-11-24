@@ -57,6 +57,13 @@ def resolve_import(source_file: Path, spec: str, src_dir: Path) -> Path | None:
     return None
 
 
+COMMENT_RE = re.compile(r"//.*?$|/\*.*?\*/|<!--.*?-->", re.MULTILINE | re.DOTALL)
+
+
+def strip_code_comments(text: str) -> str:
+    return COMMENT_RE.sub("", text)
+
+
 def build_dependency_graph(src_dir: Path) -> tuple[dict[Path, set[Path]], list[Path]]:
     files = (
         list(src_dir.rglob("*.js"))
@@ -65,7 +72,8 @@ def build_dependency_graph(src_dir: Path) -> tuple[dict[Path, set[Path]], list[P
     )
     imports: dict[Path, set[Path]] = {}
     for f in files:
-        content = f.read_text(encoding="utf-8", errors="ignore")
+        raw_content = f.read_text(encoding="utf-8", errors="ignore")
+        content = strip_code_comments(raw_content)
         raw_imports = re.findall(
             r"""(?:from\s+["']([^"']+)["']|import\s+["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\))""",
             content,
@@ -85,14 +93,19 @@ def find_html_entries(root: Path, src_dir: Path) -> set[Path]:
     index_html = root / "apps/desktop/index.html"
     if index_html.is_file():
         content = index_html.read_text(encoding="utf-8", errors="ignore")
-        for src in re.findall(r"""<script\s+[^>]*type=["']module["'][^>]*src=["']([^"']+)["']""", content):
-            # 如 src="/src/main.js" -> src_dir / "main.js"
-            cleaned = src.lstrip("/")
-            if cleaned.startswith("src/"):
-                cleaned = cleaned[4:]
-            cand = (src_dir / cleaned).resolve()
-            if cand.is_file():
-                entries.add(cand)
+        # 匹配 <script> 标签中 type="module" 与 src="..."，无论属性顺序为何
+        for tag in re.findall(r"""<script\s+[^>]*>""", content):
+            if re.search(r"""type=["']module["']""", tag):
+                m_src = re.search(r"""src=["']([^"']+)["']""", tag)
+                if m_src:
+                    raw_src = m_src.group(1).strip()
+                    # 处理相对路径或绝对路径 /src/xxx, ./src/xxx, src/xxx
+                    cleaned = raw_src.lstrip("./").lstrip("/")
+                    if cleaned.startswith("src/"):
+                        cleaned = cleaned[4:]
+                    cand = (src_dir / cleaned).resolve()
+                    if cand.is_file():
+                        entries.add(cand)
     return entries
 
 
@@ -188,20 +201,20 @@ def run_self_test() -> int:
             print(f"Self-test failed after cleanup: {clean_errs}", file=sys.stderr)
             return 1
 
-        # 4. 验证带空白的动态 import(  "./lib/Dynamic.svelte"  )
+        # 4. 验证带空白和换行的动态 import 以及无空白写法
         (src_dir / "lib/Dynamic.svelte").write_text('<p>Dynamic</p>\n', encoding="utf-8")
         (src_dir / "App.svelte").write_text(
-            '<script>\nimport Photo from "./lib/Photo.svelte";\nconst load = () => import(  "./lib/Dynamic.svelte"  );\n</script>\n',
+            '<script>\nimport Photo from "./lib/Photo.svelte";\nconst load1 = () => import(  \n  "./lib/Dynamic.svelte"  \n);\nconst load2 = () => import("./lib/Photo.svelte");\n</script>\n',
             encoding="utf-8"
         )
         dynamic_errs = scan(tmppath)
         if dynamic_errs:
-            print(f"Self-test failed on dynamic import with whitespace: {dynamic_errs}", file=sys.stderr)
+            print(f"Self-test failed on dynamic import with whitespace/newline: {dynamic_errs}", file=sys.stderr)
             return 1
 
-        # 5. 验证 index.html 模块入口作为可达性根
+        # 5. 验证 index.html 模块入口作为可达性根（含 src 在前 type 在后与 ./src 路径）
         (tmppath / "apps/desktop/index.html").write_text(
-            '<!doctype html><html><body><script type="module" src="/src/secondary.js"></script></body></html>',
+            '<!doctype html><html><body><script src="./src/secondary.js" type="module"></script></body></html>',
             encoding="utf-8"
         )
         (src_dir / "secondary.js").write_text('import HtmlComp from "./lib/HtmlComp.svelte";\n', encoding="utf-8")
@@ -209,6 +222,16 @@ def run_self_test() -> int:
         html_entry_errs = scan(tmppath)
         if html_entry_errs:
             print(f"Self-test failed on index.html entry module: {html_entry_errs}", file=sys.stderr)
+            return 1
+
+        # 6. 反例：注释中的 import 不能产生依赖边 -> 孤立组件必须判红
+        (src_dir / "App.svelte").write_text(
+            '<script>\n// import Photo from "./lib/Photo.svelte";\n/* import Photo from "./lib/Photo.svelte"; */\n</script>\n',
+            encoding="utf-8"
+        )
+        comment_errs = scan(tmppath)
+        if not any("Photo.svelte" in e for e in comment_errs):
+            print("Self-test failed: comment import wrongly kept component alive", file=sys.stderr)
             return 1
 
         # 清理动态与 index.html 额外文件

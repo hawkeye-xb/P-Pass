@@ -132,7 +132,8 @@ def scan(root: Path) -> list[str]:
     ]
     rust_text = "\n".join(strip_comments(p.read_text(encoding="utf-8", errors="ignore")) for p in rust_files)
     desk_corpus = desk_text + "\n" + desk_html + "\n" + rust_text
-    dotted_tokens = set(DOTTED_WORD.findall(desk_corpus)) | set(DOTTED_WORD.findall(mobile_corpus))
+    desktop_dotted_tokens = set(DOTTED_WORD.findall(desk_corpus))
+    global_dotted_tokens = desktop_dotted_tokens | set(DOTTED_WORD.findall(mobile_corpus))
 
     # 4. 判定死词条
     # (a) strings.xml：在 Android src/main 或 iOS 产品源码中出现即存活
@@ -150,13 +151,13 @@ def scan(root: Path) -> list[str]:
     if dead_ios:
         errors.append(f"apps/ios/.../IOS.strings 存在零引用死词条（{len(dead_ios)} 个）：{dead_ios[:10]}")
 
-    # (d) apps/desktop/src/i18n/*.json：必须在桌面前端产品源码或 Rust 中出现（按完整键匹配）
-    dead_desk = [k for k in sorted(desk_en_keys) if k not in dotted_tokens]
+    # (d) apps/desktop/src/i18n/*.json：必须在桌面前端产品源码或 Rust 中出现（按完整键匹配，不跨端借用移动端 token）
+    dead_desk = [k for k in sorted(desk_en_keys) if k not in desktop_dotted_tokens]
     if dead_desk:
         errors.append(f"apps/desktop/src/i18n/*.json 存在零引用死词条（{len(dead_desk)} 个）：{dead_desk[:10]}")
 
     # (e) assets/i18n/*.json：跨端词条，必须在全仓产品代码中出现
-    dead_shared = [k for k in sorted(shared_keys) if k not in dotted_tokens]
+    dead_shared = [k for k in sorted(shared_keys) if k not in global_dotted_tokens]
     if dead_shared:
         errors.append(f"assets/i18n/*.json 存在零引用死词条（{len(dead_shared)} 个）：{dead_shared[:10]}")
 
@@ -290,6 +291,24 @@ def run_self_test() -> int:
         if not any("ui.test" in e for e in errs):
             print("Self-test failed: prefix substring wrongly kept key alive", file=sys.stderr)
             return 1
+
+        # 还原
+        (tmppath / "apps/desktop/src/i18n/en.json").write_text('{"ui.test_desk": "Desk"}', encoding="utf-8")
+        (tmppath / "apps/desktop/src/i18n/zh.json").write_text('{"ui.test_desk": "桌面"}', encoding="utf-8")
+
+        # 9. 反例：桌面词条仅在移动端源码出现，不能被误判为存活 -> 必须红
+        (tmppath / "apps/desktop/src/i18n/en.json").write_text('{"ui.test_desk": "Desk", "ui.mobile_only": "Mobile"}', encoding="utf-8")
+        (tmppath / "apps/desktop/src/i18n/zh.json").write_text('{"ui.test_desk": "桌面", "ui.mobile_only": "移动"}', encoding="utf-8")
+        (tmppath / "apps/android/app/src/main/MobileOnly.kt").write_text('val s = "ui.mobile_only"\n', encoding="utf-8")
+        errs = scan(tmppath)
+        if not any("apps/desktop/src/i18n" in e and "ui.mobile_only" in e for e in errs):
+            print("Self-test failed: mobile-only reference wrongly kept desktop key alive", file=sys.stderr)
+            return 1
+
+        # 还原
+        (tmppath / "apps/desktop/src/i18n/en.json").write_text('{"ui.test_desk": "Desk"}', encoding="utf-8")
+        (tmppath / "apps/desktop/src/i18n/zh.json").write_text('{"ui.test_desk": "桌面"}', encoding="utf-8")
+        (tmppath / "apps/android/app/src/main/MobileOnly.kt").unlink()
 
     print("ok: check-dead-i18n self-test passed (all counter-proof cases red, clean pass)")
     return 0
