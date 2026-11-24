@@ -294,6 +294,10 @@ mobile-static-check:
   tools/ios/check-testflight-signing.sh --self-test > /dev/null
   tools/ios/check-testflight-signing.sh
   python3 tools/ios/gen-strings.py --check
+  python3 tools/check-dead-i18n.py --self-test > /dev/null
+  python3 tools/check-dead-i18n.py
+  python3 tools/check-desktop-dead-components.py --self-test > /dev/null
+  python3 tools/check-desktop-dead-components.py
   tools/ios/check-no-color-literals.sh --self-test > /dev/null
   tools/ios/check-no-color-literals.sh
   tools/check-ui-truth-table.sh --self-test > /dev/null
@@ -573,12 +577,18 @@ version-bump-i18n-test:
 bump-version-test:
   @bash tools/test-bump-version.sh
 
+dead-i18n-test:
+  @bash tools/test-check-dead-i18n.sh
+
+desktop-dead-components-test:
+  @bash tools/test-check-desktop-dead-components.sh
+
 # 流程门禁脚本的自测（#1493）：本地 ci / ci-docs 与 CI（ci-docs.yml 的 flow-tests job）共用这一份清单。
 # 只收别的 lane 都没跑的流程自测；md-check / token-check / shell-vars-check / identity-check / supply-chain-check
 # 已在 ci-docs.yml、ci-identity.yml 的其它 job 里跑，留在 ci-docs 的直接依赖里。
 # justfile 里每个 *-test recipe 要么在这里，要么登记在 tools/test-flow-tests-wired.sh 的例外表里（flow-tests-wired-test 会挡）。
 # heavy-lock-test 依赖 macOS 才有的 lockf，ubuntu 上会 SKIP 假绿，不进这里；登记为例外（#1502），本地 ci / ci-docs 直接依赖它。
-flow-tests: hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test flow-v3-harness-test macos-runner-test main-red-test flow-tests-wired-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test
+flow-tests: hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test flow-v3-harness-test macos-runner-test main-red-test flow-tests-wired-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test dead-i18n-test desktop-dead-components-test
   @echo "==> flow-tests: green ✅"
 
 # #1468 的 lane 不变量（#1489）：三个 Windows job 在 PR 上跳过、五条 lane 有 push: branches [main]、

@@ -59,10 +59,6 @@
          所以文案说的是「已经发生了什么」，不是「接下来会怎样」。 -->
     <string name="state_background_budget_paused">后台备份时间已用完。保持 P-Pass 在屏幕上可继续，时间恢复后也会自动继续。</string>
     <string name="state_background_protection_unknown">系统没有允许后台备份。打开 P-Pass 并保持在屏幕上可继续备份。</string>
-    <!-- #1263：首页「开启后台备份」卡片（onboarding 不再问）。 -->
-    <string name="background_backup_offer">后台备份已关闭，打开才会自动备份</string>
-    <string name="background_backup_offer_action">开启</string>
-    <string name="background_backup_offer_close">关闭</string>
     <string name="background_backup_needs_authorization">后台备份未获系统授权</string>
     <string name="background_backup_system_stopped">系统已停止后台备份</string>
     <string name="background_backup_action_allow">允许</string>
@@ -84,7 +80,6 @@
     <string name="share_to">分享到…</string>
     <!-- #1762 素材文件夹：设置入口 + 最小二级页（添加 / 查看 / 移除 / 重新授权）。只在 Android。 -->
     <string name="folder_settings_title">素材文件夹</string>
-    <string name="folder_settings_entry_subtitle">添加的文件夹里的照片和视频会自动备份</string>
     <string name="folder_add">添加文件夹</string>
     <string name="folder_empty">还没有添加文件夹</string>
     <string name="folder_status_ok">已授权</string>
