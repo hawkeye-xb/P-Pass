@@ -97,7 +97,7 @@ def scan(root: Path) -> list[str]:
     ios_files = [
         p for p in (root / "apps/ios").rglob("*")
         if p.is_file()
-        and not any(part in ("Tests", "PPassTests", "PPassCoreTests") for part in p.parts)
+        and not any(part in ("Tests", "PPassTests", "PPassCoreTests", "PPassUITests") for part in p.parts)
         and not p.name.endswith("Tests.swift")
         and p.suffix in (".swift", ".m", ".h", ".plist")
         and not p.name.endswith(".strings")
@@ -123,17 +123,31 @@ def scan(root: Path) -> list[str]:
     if index_html.is_file():
         desk_html = index_html.read_text(encoding="utf-8", errors="ignore")
 
+    keys_rs = (root / "crates/diag/src/keys.rs").resolve()
+    const_to_key: dict[str, str] = {}
+    if keys_rs.is_file():
+        for m in re.finditer(r"""^\s*([A-Z0-9_]+)\s*=>\s*["']([^"']+)["']""", keys_rs.read_text(encoding="utf-8"), re.MULTILINE):
+            const_to_key[m.group(1)] = m.group(2)
+
     rust_files = [
         p for p in list((root / "crates").rglob("*.rs")) + list((root / "apps/desktop/src-tauri").rglob("*.rs"))
         if p.is_file()
         and not any(part == "tests" for part in p.parts)
         and not p.name.endswith("_test.rs")
         and not p.name.endswith("test.rs")
+        and p.resolve() != keys_rs
     ]
     rust_text = "\n".join(strip_comments(p.read_text(encoding="utf-8", errors="ignore")) for p in rust_files)
     desk_corpus = desk_text + "\n" + desk_html + "\n" + rust_text
     desktop_dotted_tokens = set(DOTTED_WORD.findall(desk_corpus))
-    global_dotted_tokens = desktop_dotted_tokens | set(DOTTED_WORD.findall(mobile_corpus))
+
+    # 提取非 keys.rs 的 Rust 源码中实际引用的 keys 常量名，并映射回对应的 msg_key
+    rust_ident_tokens = set(WORD.findall(rust_text))
+    rust_active_const_keys = set(k for c, k in const_to_key.items() if c in rust_ident_tokens)
+
+    # 桌面端与跨端真实存活集合
+    desktop_live_keys = desktop_dotted_tokens | rust_active_const_keys
+    global_live_keys = desktop_live_keys | set(DOTTED_WORD.findall(mobile_corpus))
 
     # 4. 判定死词条
     # (a) strings.xml：在 Android src/main 或 iOS 产品源码中出现即存活
@@ -151,13 +165,17 @@ def scan(root: Path) -> list[str]:
     if dead_ios:
         errors.append(f"apps/ios/.../IOS.strings 存在零引用死词条（{len(dead_ios)} 个）：{dead_ios[:10]}")
 
-    # (d) apps/desktop/src/i18n/*.json：必须在桌面前端产品源码或 Rust 中出现（按完整键匹配，不跨端借用移动端 token）
-    dead_desk = [k for k in sorted(desk_en_keys) if k not in desktop_dotted_tokens]
+    # (d) apps/desktop/src/i18n/*.json：必须在桌面前端产品源码或 Rust 中出现（排除注册表自身字面量）
+    # UI-19 特例保护：设置页暂时隐藏但能力未删且受 languageSetting.test.js 保护的 ui.language
+    dead_desk = [
+        k for k in sorted(desk_en_keys)
+        if k not in desktop_live_keys and k != "ui.language"
+    ]
     if dead_desk:
         errors.append(f"apps/desktop/src/i18n/*.json 存在零引用死词条（{len(dead_desk)} 个）：{dead_desk[:10]}")
 
-    # (e) assets/i18n/*.json：跨端词条，必须在全仓产品代码中出现
-    dead_shared = [k for k in sorted(shared_keys) if k not in global_dotted_tokens]
+    # (e) assets/i18n/*.json：跨端词条，必须在全仓产品代码中出现（排除注册表自身字面量）
+    dead_shared = [k for k in sorted(shared_keys) if k not in global_live_keys]
     if dead_shared:
         errors.append(f"assets/i18n/*.json 存在零引用死词条（{len(dead_shared)} 个）：{dead_shared[:10]}")
 
@@ -311,6 +329,21 @@ def run_self_test() -> int:
         (tmppath / "apps/desktop/src/i18n/en.json").write_text('{"ui.test_desk": "Desk"}', encoding="utf-8")
         (tmppath / "apps/desktop/src/i18n/zh.json").write_text('{"ui.test_desk": "桌面"}', encoding="utf-8")
         (tmppath / "apps/android/app/src/main/MobileOnly.kt").unlink()
+
+        # 10. 反例：树上带 crates/diag/src/keys.rs 注册表时，未被实际使用的 key 仍必须判红 -> 必须红
+        (tmppath / "crates/diag/src").mkdir(parents=True, exist_ok=True)
+        (tmppath / "crates/diag/src/keys.rs").write_text('msg_keys! { UI_UNUSED => "ui.registry_only" }\n', encoding="utf-8")
+        (tmppath / "apps/desktop/src/i18n/en.json").write_text('{"ui.test_desk": "Desk", "ui.registry_only": "Reg"}', encoding="utf-8")
+        (tmppath / "apps/desktop/src/i18n/zh.json").write_text('{"ui.test_desk": "桌面", "ui.registry_only": "注册"}', encoding="utf-8")
+        errs = scan(tmppath)
+        if not any("apps/desktop/src/i18n" in e and "ui.registry_only" in e for e in errs):
+            print("Self-test failed: key registered in keys.rs but unused in code was wrongly kept alive", file=sys.stderr)
+            return 1
+
+        # 还原
+        (tmppath / "apps/desktop/src/i18n/en.json").write_text('{"ui.test_desk": "Desk"}', encoding="utf-8")
+        (tmppath / "apps/desktop/src/i18n/zh.json").write_text('{"ui.test_desk": "桌面"}', encoding="utf-8")
+        (tmppath / "crates/diag/src/keys.rs").unlink()
 
     print("ok: check-dead-i18n self-test passed (all counter-proof cases red, clean pass)")
     return 0

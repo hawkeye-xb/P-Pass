@@ -369,7 +369,6 @@ msg_keys! {
     UI_RECENT_ACTIVITY => "ui.recent_activity",
     UI_NO_ACTIVITY => "ui.no_activity",
     UI_ALL_ACTIVITY => "ui.all_activity",
-    UI_REMOVED_DEVICES => "ui.removed_devices",
     UI_DEVICES_FOOTNOTE => "ui.devices_footnote",
     UI_PHOTOS_REFRESHING => "ui.photos_refreshing",
     UI_PHOTOS_REFRESH => "ui.photos_refresh",
@@ -737,7 +736,6 @@ mod tests {
             UI_RECENT_ACTIVITY,
             UI_NO_ACTIVITY,
             UI_ALL_ACTIVITY,
-            UI_REMOVED_DEVICES,
             UI_DEVICES_FOOTNOTE,
             UI_PHOTOS_REFRESHING,
             UI_PHOTOS_REFRESH,
@@ -872,7 +870,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 371);
+        assert_eq!(ALL.len(), 370);
     }
 
     #[test]

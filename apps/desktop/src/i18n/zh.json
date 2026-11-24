@@ -277,7 +277,6 @@
   "ui.recent_activity": "最近活动",
   "ui.no_activity": "还没有活动记录。配对、备份或移除设备后，记录会显示在这里。",
   "ui.all_activity": "全部活动记录",
-  "ui.removed_devices": "已移除设备 {n} 台",
   "ui.devices_footnote": "「经中继」指直连不通时，数据经加密中转传输。中继看不到照片内容，速度可能较慢。移除设备后，该设备立即失去访问权限。",
   "ui.photos_refreshing": "刷新中…",
   "ui.photos_refresh": "刷新",

@@ -277,7 +277,6 @@
   "ui.recent_activity": "Recent activity",
   "ui.no_activity": "No activity yet. Pairing, backups and device removals will appear here.",
   "ui.all_activity": "All activity",
-  "ui.removed_devices": "{n} removed devices",
   "ui.devices_footnote": "\"Via relay\" means a direct connection isn't possible, so data goes through an encrypted relay. The relay can't see photo content, and transfers may be slower. A removed device loses access immediately.",
   "ui.photos_refreshing": "Refreshing…",
   "ui.photos_refresh": "Refresh",
