@@ -989,7 +989,7 @@ final class SettingsFeedbackTests: XCTestCase {
             c.timeZone = TimeZone(secondsFromGMT: 8 * 3600)!
             return c
         }(), locale: Locale(identifier: "zh_CN"))
-        XCTAssertEqual(bothWithSince, "\(L.p("backup_scope_n", 1)) · \(L.p("backup_scope_folder_n", 1)) · 10月29日起", "#1995: 指定日期后缀")
+        XCTAssertEqual(bothWithSince, L.f("backup_scope_with_time", "\(L.p("backup_scope_n", 1)) · \(L.p("backup_scope_folder_n", 1))", L.f("scope_value_since", "10月29日")), "#1995: 指定日期后缀")
         let foldersOnly = SettingsScreen.scopeValueText(unreadable: false, albumCount: nil, folderCount: 2, since: nil, now: Date())
         XCTAssertEqual(foldersOnly, L.p("backup_scope_folder_n", 2), "旧版目录也在同一行，不再说「未选相册」")
         XCTAssertEqual(SettingsScreen.scopeValueText(unreadable: false, albumCount: nil, folderCount: 0, since: nil, now: Date()), L.s("backup_scope_none"))
