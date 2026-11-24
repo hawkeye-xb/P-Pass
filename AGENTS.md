@@ -318,6 +318,19 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
 - **改 `assets/i18n/*.json`** 要同步全部消费者（diag 键注册表与计数、手机端副本），
   清单见 `apps/ios/PPass/I18n/DiagText.swift`，`just mobile-static-check` 兜底。
 - **shell 脚本**：macOS 自带 bash 3.2 下失败的裸 `[[ ]]` 不触发 `set -e`，断言写成 `[[ ... ]] || fail`。
+- **界面只做状态投影，裁决收口在模型层**：界面组件只做纯状态投影与事件上抛，不直读底层半成品
+  传输/连接字段（`pairingLost`、`liveState`、`timeline.state`）；状态裁决集中在模型/状态层，
+  `just arch-check` 的 M.3 会挡。
+- **界面依赖抽象数据端口（依赖倒置）**：界面层不直接耦合系统媒体框架（`PhotoKit`、`MediaStore`、
+  `ContentResolver`），只依赖抽象端口，由实现层下沉；`just arch-check` 的 M.1 / M.2 会挡。
+- **平台原生控件与品牌字号 token 优先**：列表行、次级页顶栏、返回导航用平台原生控件
+  （Android `ListItem`、`Scaffold` + `TopAppBar`；iOS `NavigationStack`、`List`、`.toolbar`），
+  字号走 `MaterialTheme.typography` / `PPFont`；不自建跨端组件库、不手搓顶栏、不写裸字号，
+  `just arch-check` 的 M.4 / M.5 会挡。注释只留机器指令与无法从代码读出的系统/硬件约束，
+  不留修单流水账、过期尺寸理由与复述型注释。
+- **生产源码文本匹配不算行为单测**：业务回归测试必须测真实状态或组件行为；静态结构约束放进
+  `tools/arch-check.sh` 等正式门禁，并用 `tools/test-arch-check.sh` 的正反例自测覆盖，
+  不把 grep 源码字符串当测试。
 - 平台分叉只许在 `crates/platform/`，iroh 只在 `crates/transport/`：`just arch-check` 会挡，
   规则全文见 `tools/arch-check.sh`。工具链版本唯一真相：`rust-toolchain.toml`、`.java-version`。
 - 构建产物、日志、证据不进 main。

@@ -26,10 +26,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,6 +53,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.hawkeyexb.ppass.R
 import androidx.compose.ui.unit.sp
@@ -216,6 +227,7 @@ fun ScanScreen(
 }
 
 /** M3（全页面状态稿）：独立子页——说明段 + 单行粘贴框 + 提示 + 主按钮。 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ManualPairScreen(
     input: String,
@@ -229,18 +241,39 @@ private fun ManualPairScreen(
         androidx.compose.material3.ProvideTextStyle(
             androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
         ) {
-        Column(Modifier.fillMaxSize().padding(24.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "‹", fontSize = 24.sp, color = PPColor.Ink,
-                    modifier = Modifier.clickable(onClick = onBack).padding(4.dp, 0.dp, 10.dp, 0.dp),
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            containerColor = PPColor.Paper,
+            contentColor = PPColor.Ink,
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Text(
+                            stringResource(R.string.scan_manual_title),
+                            style = MaterialTheme.typography.headlineSmall.copy(fontFamily = PPFont.Serif),
+                            color = PPColor.Ink,
+                            modifier = Modifier.semantics { heading() },
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = stringResource(R.string.back),
+                                tint = PPColor.Ink,
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = PPColor.Paper,
+                        scrolledContainerColor = PPColor.Paper,
+                        navigationIconContentColor = PPColor.Ink,
+                        titleContentColor = PPColor.Ink,
+                    ),
                 )
-                Text(
-                    stringResource(R.string.scan_manual_title),
-                    fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
-                )
-            }
-            Spacer(Modifier.height(18.dp))
+            },
+        ) { innerPadding ->
+        Column(Modifier.fillMaxSize().padding(innerPadding).padding(24.dp)) {
             Text(
                 stringResource(R.string.scan_manual_body),
                 fontSize = 14.5.sp, lineHeight = 24.sp, color = PPColor.Ink60,
@@ -324,6 +357,7 @@ private fun ManualPairScreen(
                     fontSize = 18.sp, fontWeight = FontWeight.Bold,
                 )
             }
+        }
         }
         }
     }

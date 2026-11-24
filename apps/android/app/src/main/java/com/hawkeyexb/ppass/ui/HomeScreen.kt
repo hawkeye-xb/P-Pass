@@ -24,16 +24,23 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -299,11 +306,12 @@ internal fun HomeScreen(
                     Column(Modifier.weight(1f)) {
                         if (busy) {
                             val slots = heroBusySlotsOf(line as StatusLine.Working, transferRow, transferProgress)
+                            val textMaxLines = heroBusyTextMaxLines(slots)
                             Text(
                                 slots.fileNameOverride ?: workingText(line),
                                 fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
                                 color = PPColor.Ink60,
-                                maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                                maxLines = textMaxLines, softWrap = false, overflow = TextOverflow.Ellipsis,
                             )
                             Text(
                                 when (slots.secondLine.kind) {
@@ -316,23 +324,25 @@ internal fun HomeScreen(
                                 },
                                 fontSize = 13.sp,
                                 color = slots.secondLineColor,
-                                maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                                maxLines = textMaxLines, softWrap = false, overflow = TextOverflow.Ellipsis,
                             )
                             Spacer(Modifier.height(8.dp))
                             val progress = transferProgress
+                            // 没有进度时也占住同高的槽，忙碌块换行时卡片不跳动。
+                            val barHeight = heroBusyProgressSlotHeight(slots)
                             if (progress != null) {
                                 // Material3 1.3 LinearProgressIndicator 默认带 gapSize=4.dp 与末端停靠圆点，必须清零才是连续直条
                                 val barColor = slots.progressColor
                                 androidx.compose.material3.LinearProgressIndicator(
                                     progress = { progress },
-                                    modifier = Modifier.fillMaxWidth().height(6.dp),
+                                    modifier = Modifier.fillMaxWidth().height(barHeight),
                                     color = barColor,
                                     trackColor = barColor.copy(alpha = 0.18f),
                                     gapSize = 0.dp,
                                     drawStopIndicator = {},
                                 )
                             } else {
-                                Spacer(Modifier.fillMaxWidth().height(6.dp))
+                                Spacer(Modifier.fillMaxWidth().height(barHeight))
                             }
                         } else {
                             val waitReason = visibleOutdatedSide(outdated, mediaAccess, connection.needsRepair)?.let(::outdatedTextRes)
@@ -683,6 +693,7 @@ internal fun HomeScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MorePage(
     onOpenStorage: () -> Unit,
@@ -690,21 +701,38 @@ private fun MorePage(
     updateRowValue: String?,
     onBack: () -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().background(PPColor.Paper).padding(20.dp, 14.dp, 20.dp, 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(R.string.back),
-                    tint = PPColor.Ink,
-                )
-            }
-            Text(
-                stringResource(R.string.more_label),
-                fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
-                modifier = Modifier.semantics { heading() },
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        containerColor = PPColor.Paper,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        stringResource(R.string.more_label),
+                        style = MaterialTheme.typography.headlineSmall.copy(fontFamily = PPFont.Serif),
+                        color = PPColor.Ink,
+                        modifier = Modifier.semantics { heading() },
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back),
+                            tint = PPColor.Ink,
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = PPColor.Paper,
+                    scrolledContainerColor = PPColor.Paper,
+                    navigationIconContentColor = PPColor.Ink,
+                    titleContentColor = PPColor.Ink,
+                ),
             )
-        }
+        },
+    ) { innerPadding ->
+    Column(Modifier.fillMaxSize().padding(innerPadding).padding(20.dp, 14.dp, 20.dp, 8.dp)) {
         Spacer(Modifier.height(16.dp))
         Surface(
             color = PPColor.Paper,
@@ -738,8 +766,10 @@ private fun MorePage(
             }
         }
     }
+    }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun StorageComputerDetail(
     storageName: String,
@@ -751,21 +781,38 @@ private fun StorageComputerDetail(
     onDisconnect: () -> Unit,
 ) {
     var armed by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().background(PPColor.Paper).padding(20.dp, 14.dp, 20.dp, 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(R.string.back),
-                    tint = PPColor.Ink,
-                )
-            }
-            Text(
-                stringResource(R.string.storage_computer),
-                fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
-                modifier = Modifier.semantics { heading() },
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        containerColor = PPColor.Paper,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        stringResource(R.string.storage_computer),
+                        style = MaterialTheme.typography.headlineSmall.copy(fontFamily = PPFont.Serif),
+                        color = PPColor.Ink,
+                        modifier = Modifier.semantics { heading() },
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.back),
+                            tint = PPColor.Ink,
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = PPColor.Paper,
+                    scrolledContainerColor = PPColor.Paper,
+                    navigationIconContentColor = PPColor.Ink,
+                    titleContentColor = PPColor.Ink,
+                ),
             )
-        }
+        },
+    ) { innerPadding ->
+    Column(Modifier.fillMaxSize().padding(innerPadding).padding(20.dp, 14.dp, 20.dp, 8.dp)) {
         Spacer(Modifier.height(16.dp))
         Surface(
             color = PPColor.Paper,
@@ -834,6 +881,7 @@ private fun StorageComputerDetail(
             ) { Text(stringResource(R.string.disconnect), fontSize = 15.sp, fontWeight = FontWeight.Bold) }
         }
         Spacer(Modifier.height(8.dp))
+    }
     }
 }
 
@@ -970,21 +1018,10 @@ private fun RuleSwitchRow(
     heading: Boolean = false,
 ) {
     val spec = ruleSwitchRowSpec(hasHintAction = onHintClick != null)
-    Row(
-        Modifier.fillMaxWidth()
-            .let { if (heading) it.semantics { heading() } else it }
-            .toggleable(
-                value = checked,
-                onValueChange = onCheckedChange,
-                role = spec.rowRole,
-            )
-            .heightIn(min = CellRowHeight)
-            .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(label, fontSize = 15.sp, color = PPColor.Ink)
-            if (hint != null) {
+    ListItem(
+        headlineContent = { Text(label, fontSize = 15.sp, color = PPColor.Ink) },
+        supportingContent = if (hint != null) {
+            {
                 Text(
                     hint,
                     fontSize = 12.sp, lineHeight = 17.sp, color = hintColor,
@@ -995,17 +1032,34 @@ private fun RuleSwitchRow(
                     },
                 )
             }
-        }
-        Switch(
-            checked = checked,
-            onCheckedChange = if (spec.switchInteractive) onCheckedChange else null,
-            colors = SwitchDefaults.colors(
-                checkedTrackColor = PPColor.Safe,
-                checkedThumbColor = PPColor.Paper,
-                checkedBorderColor = PPColor.Safe,
-            ),
-        )
-    }
+        } else {
+            null
+        },
+        trailingContent = {
+            Switch(
+                checked = checked,
+                onCheckedChange = if (spec.switchInteractive) onCheckedChange else null,
+                colors = SwitchDefaults.colors(
+                    checkedTrackColor = PPColor.Safe,
+                    checkedThumbColor = PPColor.Paper,
+                    checkedBorderColor = PPColor.Safe,
+                ),
+            )
+        },
+        colors = ListItemDefaults.colors(
+            containerColor = Color.Transparent,
+            headlineColor = PPColor.Ink,
+            supportingColor = hintColor,
+        ),
+        modifier = Modifier.fillMaxWidth()
+            .let { if (heading) it.semantics { heading() } else it }
+            .toggleable(
+                value = checked,
+                onValueChange = onCheckedChange,
+                role = spec.rowRole,
+            )
+            .heightIn(min = CellRowHeight),
+    )
 }
 
 internal fun cellRowStacks(
@@ -1023,15 +1077,12 @@ internal fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)
     val valueStyle = LocalTextStyle.current.copy(fontSize = 14.sp)
     val chevronStyle = LocalTextStyle.current.copy(fontSize = 16.sp)
     val gapPx = with(LocalDensity.current) { 4.dp.roundToPx() }
-    BoxWithConstraints(
-        Modifier.fillMaxWidth()
-            .let { if (heading) it.semantics { heading() } else it }
-            .let { if (onClick != null) it.clickable(role = Role.Button, onClick = onClick) else it }
-            .heightIn(min = CellRowHeight)
-            .padding(horizontal = 16.dp),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        val available = constraints.maxWidth
+    // ListItem 自己给左右各 16dp 内边距，尾部内容前再留 8dp：判定按真实可用宽算，避免长文案被裁。
+    val horizontalPaddingPx = with(LocalDensity.current) { 32.dp.roundToPx() }
+    val trailingPaddingPx = with(LocalDensity.current) { 8.dp.roundToPx() }
+    BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+        val available = constraints.maxWidth - horizontalPaddingPx -
+            if (value != null || clickable) trailingPaddingPx else 0
         val stacked = remember(label, value, available, clickable, measurer, labelStyle, valueStyle, chevronStyle) {
             if (value == null) {
                 false
@@ -1046,21 +1097,38 @@ internal fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)
                 cellRowStacks(labelWidth, valueWidth, available, trailing)
             }
         }
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            if (stacked) {
-                Column(Modifier.weight(1f)) {
-                    Text(label, fontSize = 15.sp, color = PPColor.Ink)
-                    Text(value!!, fontSize = 14.sp, color = PPColor.Ink40)
-                }
-                if (clickable) Text("›", fontSize = 16.sp, color = PPColor.Ink40)
+        ListItem(
+            headlineContent = { Text(label, fontSize = 15.sp, color = PPColor.Ink) },
+            supportingContent = if (stacked) {
+                { Text(value!!, fontSize = 14.sp, color = PPColor.Ink40) }
             } else {
-                Text(label, fontSize = 15.sp, color = PPColor.Ink, modifier = Modifier.weight(1f))
-                if (value != null) {
-                    Text(value, fontSize = 14.sp, color = PPColor.Ink40)
-                    if (clickable) Spacer(Modifier.width(4.dp))
+                null
+            },
+            trailingContent = if (!stacked && value == null && !clickable) {
+                null
+            } else {
+                {
+                    if (stacked) {
+                        if (clickable) Text("›", fontSize = 16.sp, color = PPColor.Ink40)
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (value != null) Text(value, fontSize = 14.sp, color = PPColor.Ink40)
+                            if (clickable) Spacer(Modifier.width(4.dp))
+                            if (clickable) Text("›", fontSize = 16.sp, color = PPColor.Ink40)
+                        }
+                    }
                 }
-                if (clickable) Text("›", fontSize = 16.sp, color = PPColor.Ink40)
-            }
-        }
+            },
+            colors = ListItemDefaults.colors(
+                containerColor = Color.Transparent,
+                headlineColor = PPColor.Ink,
+                supportingColor = PPColor.Ink40,
+                trailingIconColor = PPColor.Ink40,
+            ),
+            modifier = Modifier.fillMaxWidth()
+                .let { if (heading) it.semantics { heading() } else it }
+                .let { if (onClick != null) it.clickable(role = Role.Button, onClick = onClick) else it }
+                .heightIn(min = CellRowHeight),
+        )
     }
 }

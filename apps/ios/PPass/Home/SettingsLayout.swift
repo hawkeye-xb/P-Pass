@@ -1,7 +1,17 @@
 enum SettingsLayout {
     enum Group: Hashable { case backup, selection, conditions }
-    enum Backup: Hashable { case rule, scope, background }
-    enum Condition: Hashable { case wifi, notifications, more }
+    enum Backup: Hashable {
+        case rule, scope, background
+
+        /// 该行对应的二级路由；没有二级页的行（开关）返回 nil。
+        var route: SettingsScreen.Route? { self == .scope ? .bucket : nil }
+    }
+    enum Condition: Hashable {
+        case wifi, notifications, more
+
+        /// 该行对应的二级路由；开关行返回 nil。
+        var route: SettingsScreen.Route? { self == .more ? .more : nil }
+    }
 
     enum Selection: Hashable {
         case photos, files
@@ -25,10 +35,6 @@ enum SettingsLayout {
             case .photos: photos()
             case .files: files()
             }
-        }
-
-        func listRow(action: @escaping () -> Void) -> SingleTransferSelectionRow {
-            SingleTransferSelectionRow(title: L.s(labelKey), inList: true, action: action)
         }
     }
 
