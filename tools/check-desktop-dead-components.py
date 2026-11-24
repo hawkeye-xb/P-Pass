@@ -156,17 +156,19 @@ def extract_valid_imports(src: str, is_svelte: bool = False) -> set[str]:
                 imports.add(m_dyn.group(1))
                 i += 6 + m_dyn.end()
                 continue
-            # 2. 静态 import ... from "..." 或 import "..."（支持跨行绑定列表）
-            m_stat = re.match(r"""^(?:\s+(?:(?:\*\s+as\s+[\w$]+|\{[^}]*\}|[\w$]+(?:,\s*\{[^}]*\})?)\s+from\s+)?|\s+)["']([^"']+)["']""", rem)
+            # 2. 静态 import ... from "..." 或 import "..."（支持 * as、默认、解构、混合组合与跨行）
+            m_stat = re.match(r"""^(?:\s+(?:(?:\*\s+as\s+[\w$]+|\{[^}]*\}|[\w$]+(?:,\s*(?:\*\s+as\s+[\w$]+|\{[^}]*\}))?)\s+from\s+)?|\s+)["']([^"']+)["']""", rem)
             if m_stat:
                 imports.add(m_stat.group(1))
                 i += 6 + m_stat.end()
                 continue
 
-        # 匹配 export ... from "..." 重新导出（必须为真实声明语句）
+        # 匹配 export ... from "..." 重新导出（支持 export * from、export * as X from、export { X } from）
         if src.startswith("export", i) and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] in "_$")):
             rem = src[i + 6 :]
-            m_exp = re.match(r"""^(?:\s+(?:(?:\*\s+as\s+[\w$]+|\{[^}]*\}|[\w$]+)\s+from\s+)|\s+from\s+)["']([^"']+)["']""", rem)
+            # 在匹配子句前剔除内部可能混杂的行内注释，防止 export { /* } from "..." */ } 误匹配
+            cleaned_rem = re.sub(r"/\*.*?\*/|//.*?$", " ", rem, flags=re.MULTILINE)
+            m_exp = re.match(r"""^(?:\s+(?:(?:\*\s*(?:as\s+[\w$]+)?|\{[^}]*\})\s+from\s+)|\s+from\s+)["']([^"']+)["']""", cleaned_rem)
             if m_exp:
                 imports.add(m_exp.group(1))
                 i += 6 + m_exp.end()
@@ -363,22 +365,26 @@ def run_self_test() -> int:
 
         (src_dir / "lib/FakeString.svelte").unlink()
 
-        # 7. 模板字符串中的动态 import 仍可被识别
+        # 7. 验证 export * from 与模板字符串中动态 import 均可被识别
         (src_dir / "lib/InsideTpl.svelte").write_text('<p>InsideTpl</p>\n', encoding="utf-8")
+        (src_dir / "lib/ExportStar.svelte").write_text('<p>ExportStar</p>\n', encoding="utf-8")
+        (src_dir / "lib/ExportStarAs.svelte").write_text('<p>ExportStarAs</p>\n', encoding="utf-8")
         (src_dir / "App.svelte").write_text(
-            '<script>\nimport Photo from "./lib/Photo.svelte";\nconst loadTpl = `${import("./lib/InsideTpl.svelte")}`;\n</script>\n',
+            '<script>\nimport Photo from "./lib/Photo.svelte";\nexport * from "./lib/ExportStar.svelte";\nexport * as MyStar from "./lib/ExportStarAs.svelte";\nconst loadTpl = `${import("./lib/InsideTpl.svelte")}`;\n</script>\n',
             encoding="utf-8"
         )
         tpl_errs = scan(tmppath)
         if tpl_errs:
-            print(f"Self-test failed: import inside template expression failed to be recognized: {tpl_errs}", file=sys.stderr)
+            print(f"Self-test failed: export * from or import inside template failed to be recognized: {tpl_errs}", file=sys.stderr)
             return 1
 
         (src_dir / "lib/InsideTpl.svelte").unlink()
+        (src_dir / "lib/ExportStar.svelte").unlink()
+        (src_dir / "lib/ExportStarAs.svelte").unlink()
 
-        # 8. 反例：注释中的 import 不能产生依赖边 -> 孤立组件必须判红
+        # 8. 反例：注释中的 export/import 不能产生依赖边 -> 孤立组件必须判红
         (src_dir / "App.svelte").write_text(
-            '<script>\n// import Photo from "./lib/Photo.svelte";\n/* import Photo from "./lib/Photo.svelte"; */\n</script>\n',
+            '<script>\n// import Photo from "./lib/Photo.svelte";\n/* import Photo from "./lib/Photo.svelte"; */\nexport { /* } from "./lib/Photo.svelte" */ };\n</script>\n',
             encoding="utf-8"
         )
         comment_errs = scan(tmppath)
