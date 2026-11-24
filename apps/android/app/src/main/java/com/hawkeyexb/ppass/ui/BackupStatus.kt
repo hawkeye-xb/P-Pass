@@ -1,46 +1,26 @@
-// T-080: 备份页状态条的裁决逻辑——纯函数、零 Android 依赖，JVM 直接可测。
-// 两条铁律（真机确认过的缺陷，各自有单测锁死）：
-//   (a) 待备份 K > 0 时，永不允许「照片都存好了」类文案；
-//   (b) 从未成功备份（时间戳 <= 0）时，永不把 epoch 0 交给日期格式化
-//       （真机曾渲染出「01-01 08:00」假话），必须走「还没有成功备份过」。
 package com.hawkeyexb.ppass.ui
 
-/** 状态条只可能是这几种裁决之一；UI 只负责把裁决映射到字符串资源。 */
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import com.hawkeyexb.ppass.R
+import com.hawkeyexb.ppass.backup.BackgroundBackupState
+import com.hawkeyexb.ppass.backup.BackupTriplet
+import com.hawkeyexb.ppass.backup.MediaAccess
+import com.hawkeyexb.ppass.backup.flow.TransferPace
+import com.hawkeyexb.ppass.backup.flow.TransferRow
+import com.hawkeyexb.ppass.backup.flow.WaitReason
+
 sealed class StatusLine {
-    /** 没有在跑、也没有欠账、也没有可报告的成功——「随时可以备份」。 */
     data object Ready : StatusLine()
-
-    /** 备份进行中（找照片 / 读取 / 传输）——把原始态透传给 UI 显示进度。 */
     data class Working(val state: BackupUiState) : StatusLine()
-
-    /** 缺陷 (a) 的出口：还有 K 张待备份——即使刚跑完一轮成功，也说欠账。 */
     data class Pending(val k: Long) : StatusLine()
-
-    /** 只有欠账为 0 且确有成功运行时，才允许「照片都存好了」。 */
     data object AllSafe : StatusLine()
-
-    /** FIX-T6: 一个相册都没选（空集 = 一个都不备）——「没有可备份的
-     *  相册」。与 AllSafe 区分：空集不是「都存好了」，是「没东西可备」。 */
     data object NoAlbums : StatusLine()
-
-    /** 失败才说话。 */
     data object Trouble : StatusLine()
-
-    /** #413：等待中（条件不满足 / 桌面不可达或不健康），具体那句由等待原因给出。 */
     data object Waiting : StatusLine()
-
-    /** #413：用户暂停——只有用户能解除，状态行要说出来，不与空闲同档。 */
     data object Paused : StatusLine()
 }
 
-/**
- * 状态条裁决。[pendingK] = 恒真三元组的 K（待备份张数；三元组不可用时
- * 传 0，退化为按运行态判定）。
- *
- * 优先级：失败 > 进行中 > 欠账 > 成功 > 就绪。
- * 缺陷 (a)：`pendingK > 0` 拦在 AllSafe 之前——一轮成功运行（增量扫完）
- * 不代表账清了，三元组说了算。
- */
 fun statusLineOf(state: BackupUiState, pendingK: Long): StatusLine = when (state) {
     is BackupUiState.Trouble -> StatusLine.Trouble
     is BackupUiState.Scanning,
@@ -50,7 +30,6 @@ fun statusLineOf(state: BackupUiState, pendingK: Long): StatusLine = when (state
     -> StatusLine.Working(state)
     is BackupUiState.NoAlbums -> StatusLine.NoAlbums
     is BackupUiState.Waiting -> StatusLine.Waiting
-    // #413：已暂停有自己的一句（待备份 K 仍在英雄区上一行），不再与空闲同档。
     is BackupUiState.Paused -> StatusLine.Paused
     is BackupUiState.Idle,
     is BackupUiState.AllSafe,
@@ -61,22 +40,6 @@ fun statusLineOf(state: BackupUiState, pendingK: Long): StatusLine = when (state
     }
 }
 
-/**
- * UX-13 → #413: 英雄区次级按钮的裁决——**同一个位置**在两种文案之间切换。
- * 「暂停」只在备份中（含检查 / 准备阶段），「继续」只在已暂停（#413 §5）。
- *
- * `null` = 不显示（空闲、都存好了、没相册、出错了：出路在别处的卡上；
- * 配对失效时也收起，出路在红卡的「重新扫码」）。
- *
- * 两个分支的点击**走同一条路**（`onBackupNow` → `BackupUiStateHolder
- * .backupNow`）：进行中 = 暂停，被暂停 = 续传（重新 offer 全部候选，
- * dedup 收敛缺 0）。MOB-19 红线：不新增第二条管线，所以这里只裁决**文案**，
- * 不裁决动作。
- *
- * 为什么 [HeroAction.Resume] **不加「待备份 K > 0」这道门**：`Paused` 只来自
- * 引擎的全局暂停标志（#413 §4：只有用户能解除），与剩余张数无关；「取消剩余」
- * 会把标志一并清掉回到空闲，所以不会再出现「没活可干却挂着继续」。
- */
 enum class HeroAction { Pause, Resume }
 
 fun heroActionOf(state: BackupUiState, pairingLost: Boolean): HeroAction? = when {
@@ -86,37 +49,186 @@ fun heroActionOf(state: BackupUiState, pairingLost: Boolean): HeroAction? = when
     else -> null
 }
 
-// #418：MOB-89 的 `cancelAffordanceVisible`（英雄区「取消当前轮」的出场判据）随取消轮一起删掉了。
-// 取消的唯一入口是设置卡里的「取消剩余 N 张」，带确认框（见 HomeScreen / cancelRemainingRowCount）。
+internal fun heroActionOf(state: BackupUiState, connection: ConnectionState): HeroAction? =
+    heroActionOf(state, connection.needsRepair)
 
-/**
- * 「这一刻有一轮备份在跑」——**点击的裁决也用它**：只有进行中那一下算
- * 暂停，其余（含被暂停态下的「继续」）一律落到 `triggerManualBackup`
- * 那一条管线（MOB-19 红线：不许有第二条）。
- *
- * `Paused` 刻意**不算**在跑：那正是「再点一次 = 续传」得以成立的判据。
- */
 fun isBackupRunning(state: BackupUiState): Boolean =
     state is BackupUiState.Scanning ||
         state is BackupUiState.Hashing ||
         state is BackupUiState.Preparing ||
         state is BackupUiState.Sending
 
-/** 「最后成功时间」的裁决；UI 把每个分支映射到字符串资源。 */
+enum class HeroRender {
+    AccessBlocked,
+    CountsUnreadable,
+    NoAlbums,
+    Unreadable,
+    Unreconciled,
+    Triplet,
+}
+
+internal fun backupScopeRowCount(selectedBucketCount: Int?): Int? = selectedBucketCount?.takeIf { it > 0 }
+
+internal fun selectedExistingCount(selected: Set<Long>?, existing: Set<Long>?): Int? = when {
+    selected == null -> null
+    existing == null -> selected.size
+    else -> selected.count { it in existing }
+}
+
+fun heroRenderOf(
+    mediaAccess: MediaAccess,
+    triplet: BackupTriplet?,
+    countsReadable: Boolean = true,
+    scopeSaved: Boolean = true,
+    hasUsableSource: Boolean = false,
+    hasSelectedAlbum: Boolean = true,
+): HeroRender = when {
+    mediaAccess != MediaAccess.FULL && !hasUsableSource && hasSelectedAlbum -> HeroRender.AccessBlocked
+    !countsReadable -> HeroRender.CountsUnreadable
+    triplet == null -> if (scopeSaved) HeroRender.Unreadable else HeroRender.NoAlbums
+    triplet.confirmedRaw > triplet.n -> HeroRender.Unreconciled
+    else -> HeroRender.Triplet
+}
+
+fun heroNumberIsSafe(
+    mediaAccess: MediaAccess,
+    triplet: BackupTriplet?,
+    pairingLost: Boolean,
+): Boolean =
+    mediaAccess == MediaAccess.FULL &&
+        triplet != null &&
+        !pairingLost &&
+        !triplet.hasFailedNeedsUser &&
+        !triplet.pausedByUser
+
+internal fun heroNumberColor(
+    mediaAccess: MediaAccess,
+    triplet: BackupTriplet?,
+    connection: ConnectionState,
+): Color = if (heroNumberIsSafe(mediaAccess, triplet, connection.needsRepair)) PPColor.Safe else PPColor.Ink
+
+internal data class HeroBusySecondLine(
+    val kind: Kind,
+    val quietSeconds: Int = 0,
+    val bytesText: String? = null,
+    val done: Int = 0,
+    val total: Int = 0,
+) {
+    enum class Kind { EMPTY, SLOW, DETAIL, COUNT_ONLY }
+}
+
+internal data class HeroBusySlots(
+    val fileNameOverride: String?,
+    val secondLine: HeroBusySecondLine,
+    val secondLineColor: Color,
+    val progress: Float?,
+    val progressColor: Color,
+    val singleLineCount: Int = 2,
+    val progressSlotHeightDp: Int = 6,
+)
+
+internal fun heroBusySlotsOf(
+    line: StatusLine.Working,
+    transferRow: TransferRow?,
+    transferProgress: Float?,
+): HeroBusySlots {
+    val sending = line.state as? BackupUiState.Sending
+    val row = transferRow?.takeIf { sending != null }
+    val slow = row?.pace == TransferPace.SLOW
+    val secondLine = when {
+        row == null || sending == null -> HeroBusySecondLine(HeroBusySecondLine.Kind.EMPTY)
+        slow -> HeroBusySecondLine(HeroBusySecondLine.Kind.SLOW, quietSeconds = row.quietSeconds)
+        row.bytesText != null -> HeroBusySecondLine(
+            HeroBusySecondLine.Kind.DETAIL,
+            bytesText = row.bytesText,
+            done = sending.done,
+            total = sending.total,
+        )
+        else -> HeroBusySecondLine(HeroBusySecondLine.Kind.COUNT_ONLY, done = sending.done, total = sending.total)
+    }
+    return HeroBusySlots(
+        fileNameOverride = row?.fileName,
+        secondLine = secondLine,
+        secondLineColor = if (slow) PPColor.Waiting else PPColor.Ink60,
+        progress = transferProgress,
+        progressColor = if (slow) PPColor.Waiting else PPColor.Safe,
+    )
+}
+
+internal data class RuleSwitchRowSpec(
+    val rowRole: Role = Role.Switch,
+    val switchInteractive: Boolean = false,
+    val hintRole: Role? = null,
+)
+
+internal fun ruleSwitchRowSpec(hasHintAction: Boolean): RuleSwitchRowSpec =
+    RuleSwitchRowSpec(
+        rowRole = Role.Switch,
+        switchInteractive = false,
+        hintRole = if (hasHintAction) Role.Button else null,
+    )
+
+fun allSafeTextAllowed(
+    mediaAccess: MediaAccess,
+    triplet: BackupTriplet?,
+    pairingLost: Boolean,
+    missingSourceCount: Int,
+): Boolean =
+    heroNumberIsSafe(mediaAccess, triplet, pairingLost) &&
+        heroRenderOf(mediaAccess, triplet) != HeroRender.Unreconciled &&
+        missingSourceCount == 0 &&
+        (triplet?.skippedByUser ?: 0L) == 0L
+
+internal fun heroIdleLineColor(waitReason: Int?, line: StatusLine, allSafeAllowed: Boolean): Color =
+    when {
+        waitReason != null -> PPColor.Waiting
+        line is StatusLine.AllSafe && allSafeAllowed -> PPColor.Safe
+        else -> PPColor.Ink60
+    }
+
+internal fun showsFromTodayEmpty(
+    render: HeroRender,
+    triplet: BackupTriplet?,
+    scopeHasStart: Boolean,
+): Boolean = render == HeroRender.Triplet && triplet != null && triplet.n == 0L && triplet.m == 0L && scopeHasStart
+
+fun visibleWaitReasonRes(
+    state: BackupUiState,
+    mediaAccess: MediaAccess,
+    pairingLost: Boolean,
+    reasonRes: Int?,
+    wifiOnly: Boolean = true,
+    hasUsableSource: Boolean = false,
+    pickedOpen: Boolean = false,
+): Int? {
+    if (mediaAccess != MediaAccess.FULL && !hasUsableSource && !pickedOpen) return null
+    if (pairingLost) return null
+    if (state !is BackupUiState.Waiting) return null
+    if (state.reason == WaitReason.WIFI && !wifiOnly) return R.string.backup_waiting_constraints
+    return reasonRes
+}
+
+fun desktopLowSpaceHintVisible(lowSpace: Boolean, mediaAccess: MediaAccess, pairingLost: Boolean): Boolean =
+    lowSpace && mediaAccess == MediaAccess.FULL && !pairingLost
+
+internal fun idleHintRes(backgroundBackupState: BackgroundBackupState, wifiOnly: Boolean): Int = when (backgroundBackupState) {
+    BackgroundBackupState.NeedsSystemAuthorization -> R.string.background_backup_needs_authorization
+    BackgroundBackupState.SystemStoppedWatcher -> R.string.background_backup_system_stopped
+    BackgroundBackupState.Armed, BackgroundBackupState.OffByUser ->
+        if (wifiOnly) R.string.idle_auto_hint else R.string.idle_auto_hint_any_network
+}
+
+internal fun blockedHeroOffersSettings(ruleOn: Boolean, access: MediaAccess, hasSelectedAlbum: Boolean = true): Boolean =
+    ruleOn && access != MediaAccess.FULL && hasSelectedAlbum
+
 sealed class LastSuccess {
-    /** 缺陷 (b) 的出口：从未成功备份过——绝不渲染日期。 */
     data object Never : LastSuccess()
     data object JustNow : LastSuccess()
     data class MinutesAgo(val mins: Long) : LastSuccess()
     data class HoursAgo(val hours: Long) : LastSuccess()
-    /** 超过一天——渲染日期。此分支的 ts 保证 > 0。 */
     data class At(val ts: Long) : LastSuccess()
 }
 
-/**
- * 缺陷 (b)：`ts <= 0`（ConfirmedStore 约定 0 = 从未成功）必须返回
- * [LastSuccess.Never]，日期格式化分支永远拿不到 epoch 0。
- */
 fun lastSuccessOf(ts: Long, now: Long): LastSuccess {
     if (ts <= 0L) return LastSuccess.Never
     val mins = (now - ts) / 60_000
@@ -128,28 +240,13 @@ fun lastSuccessOf(ts: Long, now: Long): LastSuccess {
     }
 }
 
-// ── T-083 目标 3：失败红卡渲染闸门（设计红线「报错永远不出现代码，
-// 先说『照片没丢』」）——纯函数、零 Android 依赖，JVM 直接可测。 ──
-
-/** 红卡文案的两个去处：[main] = 人话正文（来自字符串资源，进红卡正文）；
- *  [detail] = 完整原始错误串（只进默认收起的「查看技术详情」折叠区，
- *  完整原文同时由 BackupUiStateHolder 走 Log.e 进 logcat 诊断导出路径）。 */
 data class TroubleText(val main: String, val detail: String)
 
-/**
- * 唯一允许把原始错误串（`IrohError { kind: ... }` / 异常 toString dump）
- * 变成可渲染文案的地方：原文只落 [TroubleText.detail]；[TroubleText.main]
- * 恒等于传入的人话正文——任何代码碎片都不经此进入主文案（有单测锁死）。
- */
 fun troubleTextOf(rawError: String, humanBody: String): TroubleText =
     TroubleText(main = humanBody, detail = rawError.trim())
 
-/** 照片页轻过滤器（设计稿：全部 / 仅本机 / 家人的）。
- *  proto 无 owner 字段（本卡不准动 proto），用「这台手机已确认备份的
- *  hash 集合」近似归属：在集合内 = 本机备份的；不在 = 家人设备的。 */
 enum class TimelineFilter { All, LocalOnly, Family }
 
-/** 纯过滤函数——[mine] = 本机确认缓存的 hash 集合。 */
 fun <T> filterTimeline(
     items: List<T>,
     filter: TimelineFilter,

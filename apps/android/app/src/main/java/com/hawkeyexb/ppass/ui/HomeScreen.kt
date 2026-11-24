@@ -1,12 +1,7 @@
-// T-080 Backup tab — 恒真三元组英雄卡（M / N 张已回家 + 最近成功 + 待备份 K）+ 进行中可暂停
-// + 失败才说话（Trouble/配对失效红卡）+ 备份规则卡 + 底部红字断开。
-// 状态条文案由纯函数 statusLineOf / lastSuccessOf 裁决（BackupStatus.kt，
-// 有单测锁死缺陷 a/b），本文件只做裁决 → 字符串资源的映射。
 package com.hawkeyexb.ppass.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,6 +42,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
@@ -56,361 +56,98 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.res.pluralStringResource
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.BuildConfig
-import com.hawkeyexb.ppass.backup.MediaAccess
-import com.hawkeyexb.ppass.backup.BackupTriplet
+import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.backup.BackgroundBackupState
+import com.hawkeyexb.ppass.backup.BackupTriplet
+import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.backup.flow.WaitReason
-import com.hawkeyexb.ppass.update.UpdateChannel
-import kotlinx.coroutines.launch
 
-/** What the user sees: exactly one of the design's meaning states. */
 sealed class BackupUiState {
     data object Idle : BackupUiState()
     data class Scanning(val found: Int) : BackupUiState()
     data class Hashing(val done: Int, val total: Int) : BackupUiState()
-    /** #413：备份中、还没轮到具体哪一张（检查条件 / 探测桌面 / 准备）。不许显示成空闲。 */
     data object Preparing : BackupUiState()
-    // 2026-08-17：currentFile——设计稿"正在备份 {文件名}（第 x / y 张）"
-    // 要求展示当前文件名，不只是计数；默认空串（还没传完第一个文件时）。
     data class Sending(val done: Int, val total: Int, val currentFile: String = "") : BackupUiState()
     data class AllSafe(val ingested: Int, val duplicates: Int) : BackupUiState()
-    /** UX-13 → #413: 用户暂停（引擎的全局暂停标志）——只有用户能解除，与 Idle 不是一回事：
-     *  英雄区给「继续」，状态行说「已暂停」。 */
     data object Paused : BackupUiState()
-    /** #413：等待中——条件不满足 / 桌面不可达或不健康，由引擎自动恢复；[reason] 决定状态行那句话。 */
     data class Waiting(val reason: WaitReason) : BackupUiState()
-    /** FIX-T6: 一个相册都没选（空集 = 一个都不备）——显式「没有可
-     *  备份的相册」，绝不显示假话「照片都存好了」。 */
     data object NoAlbums : BackupUiState()
     data class Trouble(val text: String) : BackupUiState()
 }
 
-// ── UI-16：英雄卡的绿色是承诺 ──────────────────────────────────
-// 事实源：docs/design/2026-09-22-home-notice-priority.md §2.2 规则 G、
-// §2.3 规则 H、§2.3b 规则 S。三条判据全部提纯成纯函数（与
-// shouldShowWifiDeferredHint / heroActionOf 同一条路），JVM 直接可测；
-// 本文件只做「裁决 → 颜色/字符串资源」的映射。
-//
-// 为什么判据的输入是 triplet 而不是新参数：HomeScreen 的调用方是
-// MainActivity，本卡范围不含它；加一个带默认值的新参数会让测试全绿而生产
-// 依旧恒绿——那是假修。G4/G5 两票因此随三元组从 BackupUiStateHolder 走
-// 同一个 tick 过来（见 tripletOf 的注释）。
-
-/** 规则 H：英雄卡主位六选一，互斥（与 iOS `HeroRender` 同一组；CountsUnreadable、NoAlbums 由 #1038 补上）。 */
-enum class HeroRender {
-    /** H-A：相册权限不足，引导卡顶替整块三元组。 */
-    AccessBlocked,
-
-    /** #1038：账本（order 表）读不出来——不给任何完成度结论。与 H-B「读不到相册数量」是两件事，分开说。 */
-    CountsUnreadable,
-
-    /** #1038：没选相册（范围从未保存或读不到）——说「未选相册」，不说成读取失败。 */
-    NoAlbums,
-
-    /** H-B：读不到手机相册的数量（范围已保存，三元组为 null）。 */
-    Unreadable,
-
-    /** H-C：两个数对不上（clamp 前的原始已确认数 > N）——不渲染任何 m/n
-     *  分数，改说「正在重新清点」。L0：数据不可信压过一切完成度结论。
-     *  #401：新模型里只在引擎第一次算出待办之前出现（见 visibleEngineView），
-     *  由手机本地重算收敛，不靠连上电脑。 */
-    Unreconciled,
-
-    /** H-D：三元组，配色由规则 G 决定。 */
-    Triplet,
-}
-
-/**
- * #541：设置页「备份哪些相册」那一行显示几个相册；null = 显示「未选相册」。
- *
- * 与引擎同源：范围从未保存（null）和保存了空集，引擎都当成「一张都不在范围内」
- * （AndroidFlowRuntime 的 `inScope` 要求 `== true`，MediaSnapshotSource 对 `isNullOrEmpty` 返回空）。
- * 此前 null 显示「全部相册」——那是 MOB-40 之前「没选过 = 全量」的旧语义，实际一张都不会备份。
- */
-internal fun backupScopeRowCount(selectedBucketCount: Int?): Int? = selectedBucketCount?.takeIf { it > 0 }
-
-/**
- * 「已选相册」口径：已选且当前系统相册中实际存在的相册。
- * 被选的相册文件夹删掉后，存储里的 id 保留（同路径重建后 bucket id 相同，可继续备份），但不再计数。
- * [existing] 为 null = 读不到相册（如没有照片权限），无从判断哪些还在：沿用已选个数。
- */
-internal fun selectedExistingCount(selected: Set<Long>?, existing: Set<Long>?): Int? = when {
-    selected == null -> null
-    existing == null -> selected.size
-    else -> selected.count { it in existing }
-}
-
-/**
- * 顺序同 iOS `HomeProjection.heroRender`：权限 → 账本读不到 → 三元组为 null 时看有效范围是否非空
- * （非空 = 相册数量读不到，空 = 未选定自动备份范围；#1794：已登记目录也算来源）→ 对不上 → 三元组。
- * [countsReadable] / [scopeSaved] 由 [com.hawkeyexb.ppass.backup.BackupUiStateHolder] 给，
- * HomeScreen 必须把它们传进来（默认值只为旧测试的调用形状）。
- */
-fun heroRenderOf(
-    mediaAccess: MediaAccess,
-    triplet: BackupTriplet?,
-    countsReadable: Boolean = true,
-    scopeSaved: Boolean = true,
-    // #1789 接线（#1788 判定）：有可用来源（folder-only / 混合里的目录）时权限不全不再顶替进度——
-    // 目录仍在传，真实数字照常显示（#1784 验收 5，iOS `HomeProjection.heroRender` 同一条）。
-    hasUsableSource: Boolean = false,
-    // #1788 评审定案（同判据接线）：空范围缺的是**来源**不是权限——「自动备份已停止」只给真的选了
-    // 相册的范围；空范围落到下面的正常分支，与权限完整时空范围显示的是同一种状态。
-    hasSelectedAlbum: Boolean = true,
-): HeroRender = when {
-    mediaAccess != MediaAccess.FULL && !hasUsableSource && hasSelectedAlbum -> HeroRender.AccessBlocked
-    !countsReadable -> HeroRender.CountsUnreadable
-    triplet == null -> if (scopeSaved) HeroRender.Unreadable else HeroRender.NoAlbums
-    // clamp 后的 m 恒 ≤ n，所以这里必须读 confirmedRaw：真机「23 / 23」那一例
-    // m == n，clamp 是恒等变换，一行代码都没执行，英雄卡照样撒谎。
-    triplet.confirmedRaw > triplet.n -> HeroRender.Unreconciled
-    else -> HeroRender.Triplet
-}
-
-/**
- * 规则 G：主数字与 `hero_of_n` 用 `PPColor.Safe`，**当且仅当**五条同时成立。
- * 任一条不成立 → 不得为绿（R-GREEN：绿色只表示已确认成功或数据已安全存好）。
- */
-fun heroNumberIsSafe(
-    mediaAccess: MediaAccess,
-    triplet: BackupTriplet?,
-    pairingLost: Boolean,
-): Boolean =
-    mediaAccess == MediaAccess.FULL &&        // G1 权限完整
-        triplet != null &&                    // G2 三元组可用
-        !pairingLost &&                       // G3 未失联
-        !triplet.hasFailedNeedsUser &&        // G4 账本无 FAILED_NEEDS_USER
-        !triplet.pausedByUser                 // G5 未被用户暂停
-
-/**
- * 规则 S：状态行「照片都存好了」用**文字**说的是和主数字同一件事，所以受
- * 同一组闸门约束（S1 = G1–G5），外加两条「还有事没了结」的事实：
- * S2 无 SKIP-MISS、S3 范围内没有用户取消过的照片（#418：取消轮没了，S3 改读
- * [BackupTriplet.skippedByUser]——用户说了「剩下的不要了」，那几张确实没存到电脑上）。
- *
- * S2 在投影层也堵了一道（`flowIsAllDone` 不再把 `SKIPPED_SOURCE_MISSING`
- * 当完成），这里是同一条规则在渲染层的闸门——两道门各自可测，且都不许松。
- *
- * 还多一条 H-C：主位在说「两个数对不上、正在核对」时，状态行不许在它正下方
- * 说「照片都存好了」。这个组合是可达的、而且是最普通的漂移场景——备份成功后
- * 用户把照片从手机相册删掉（终态 `CONFIRMED` 不会被改写成
- * `SKIPPED_SOURCE_MISSING`），于是账本 51 项全部 CONFIRMED、相册只剩 10 张：
- * `confirmedRaw > n` 走 H-C，而 `flowIsAllDone` 照样为真。L0「数据不可信压过
- * 一切完成度结论」就是为这一格写的。
- */
-fun allSafeTextAllowed(
-    mediaAccess: MediaAccess,
-    triplet: BackupTriplet?,
-    pairingLost: Boolean,
-    missingSourceCount: Int,
-): Boolean =
-    heroNumberIsSafe(mediaAccess, triplet, pairingLost) &&
-        heroRenderOf(mediaAccess, triplet) != HeroRender.Unreconciled &&
-        missingSourceCount == 0 &&
-        (triplet?.skippedByUser ?: 0L) == 0L
-
-internal fun heroIdleLineColor(waitReason: Int?, line: StatusLine, allSafeAllowed: Boolean): Color =
-    when {
-        waitReason != null -> PPColor.Waiting
-        line is StatusLine.AllSafe && allSafeAllowed -> PPColor.Safe
-        else -> PPColor.Ink60
-    }
-
-internal fun showsFromTodayEmpty(
-    render: HeroRender,
-    triplet: BackupTriplet?,
-    scopeHasStart: Boolean,
-): Boolean = render == HeroRender.Triplet && triplet != null && triplet.n == 0L && triplet.m == 0L && scopeHasStart
-
-/**
- * 规则 P（事实源 §2.5，#361 步骤 2）→ #418 → #413：等待中把**为什么在等**说出来——**不新增横幅**，
- * 它是英雄卡状态行（A7）的替换文案。每个等待原因一句（Wi‑Fi、电量、后台额度 / 被拒、连不上电脑、
- * 电脑空间满、照片库打不开、电脑存储出错……），由投影给出（[com.hawkeyexb.ppass.backup.flow.waitReasonTextRes]）。
- *
- * `null` = 状态行不替换，退回 idleStatusText 既有的分支。闸门：
- *
- * - **ACCESS 压制**：`mediaAccess != FULL` 时英雄卡内部整块被权限引导卡顶替，挂载点不在场。
- * - **PAIR 压制**：配对已断时说什么等待都是误导，出路在红卡。
- * - **只在等待态说**：其它状态（在传、暂停、出错、都存好了）一律不说。
- * - **Wi‑Fi 过期压制**（接替 MOB-71）：用户已经关掉「仅 Wi‑Fi」，引擎还没重新检查时，
- *   不许再说「将在连上 Wi‑Fi 后进行」——退回通用的「正在等待备份条件满足」。
- */
-fun visibleWaitReasonRes(
-    state: BackupUiState,
-    mediaAccess: MediaAccess,
-    pairingLost: Boolean,
-    reasonRes: Int?,
-    wifiOnly: Boolean = true,
-    // #1789 接线（#1788 判定）：folder-only 时英雄卡在显示真实进度（挂载点在场），等待原因照常说。
-    hasUsableSource: Boolean = false,
-    // #1789（评审 A4）：手选的传输不依赖相册权限——还有未结束的单次项时，ACCESS 不压制等待原因，
-    // 用户看得到文件传输为什么没开始（进程中断留在 pending/transferring 的行同样算 open）。
-    pickedOpen: Boolean = false,
-): Int? {
-    if (mediaAccess != MediaAccess.FULL && !hasUsableSource && !pickedOpen) return null
-    if (pairingLost) return null
-    if (state !is BackupUiState.Waiting) return null
-    if (state.reason == WaitReason.WIFI && !wifiOnly) return R.string.backup_waiting_constraints
-    return reasonRes
-}
-
-/**
- * #413 §7：桌面剩余空间不足 5 GiB 的预警行。[lowSpace] 由投影给出（已因桌面存满而等待时投影就不报）；
- * 权限引导卡顶替英雄卡、或配对已断时不说。
- */
-fun desktopLowSpaceHintVisible(lowSpace: Boolean, mediaAccess: MediaAccess, pairingLost: Boolean): Boolean =
-    lowSpace && mediaAccess == MediaAccess.FULL && !pairingLost
-
 @Composable
 internal fun HomeScreen(
-    // T-083 目标 1：副标题「已连接 …」已删（连接状态是桌面设备行的职责，
-    // 手机页头只有「备份」）。参数位暂留——调用方仍传入，后续卡可能复用。
     storageName: String,
     state: BackupUiState,
     onBackupNow: () -> Unit,
-    // DOG-01: 恒真三元组（持久缓存，断网/失败时仍显示）
     triplet: BackupTriplet? = null,
-    // UX-03: 极简设置——仅 WiFi（写 WorkManager 约束）。
-    // MOB-10: 「仅充电」开关整个删掉，后台档改用「电量不低」硬约束
-    // （见 TriggerPolicy.constraintsFor）——它在开着电池保护的设备上
-    // 等于「永不备份」，且局域网传照片的能耗根本不是瓶颈。
     wifiOnly: Boolean = true,
     onWifiOnlyChange: (Boolean) -> Unit = {},
-    // M10（全页面状态稿）：通知开关——真实开关，不是摆设，默认开，落地到 NotifyOnFailurePrefs。
-    // #130：它管确定事件通知（配对失效 / 相册权限收回 / 系统停止后台备份），发之前由
-    // SystemDefinitiveEventNotifier 读；临时失败与单张失败本来就不发（#418）。
     notifyOnFailure: Boolean = true,
     onNotifyOnFailureChange: (Boolean) -> Unit = {},
-    // MOB-65: 自动触发策略开关；它不表示当前 Flow 轮次是否暂停。
     autoBackupEnabled: Boolean = true,
     onToggleAutoBackup: (Boolean) -> Unit = {},
     backgroundBackupState: BackgroundBackupState = BackgroundBackupState.OffByUser,
     onResolveBackgroundBackup: () -> Unit = {},
     onDisconnect: () -> Unit = {},
-    // #1883：唯一的连接状态（[connectionStateOf] 合成）——本页的「配对已失效」判断与
-    // 「存储电脑」详情页的连接表述都从这一份取，跟照片页同一个事实源。
     connection: ConnectionState = ConnectionState(ConnectionState.Status.Unknown),
     onRepair: () -> Unit = {},
-    // 存储电脑详情是二级页——打开/关闭时告知调用方，好让底部 Photos/
-    // 设置 tab 栏跟大图查看页一样整体隐藏（用户实机反馈：进了二级页
-    // 底部 tab 还杵在那，不该在）。
     onStorageDetailOpenChange: (Boolean) -> Unit = {},
-    // M11（全页面状态稿）"存储电脑"详情页富文本用——配对日期（0=未知，
-    // 老 pairing 升级上来的存量数据，不倒推瞎编）。
     pairedAt: Long = 0L,
-    // T6: 备份范围（选了几个相册）——「选择相册」与「发起备份」分离。null = 从未保存过范围，
-    // 引擎按「一个都不在范围内」处理（#541，见 [backupScopeRowCount]）。
     selectedBucketCount: Int? = null,
     selectedFolderCount: Int = 0,
-    // #1020：存了范围但读不出来——设置行说「读不到已保存的选择」，不说「未选相册」。
     scopeUnreadable: Boolean = false,
-    // #1263：范围的时间那一档（从今天起 / 从 10月29日 起 / 全部），接在相册数后面。
     scopeTimeLabel: String? = null,
-    // #1038：账本读不到 / 范围存没存——英雄区据此在「读不到」「未选相册」「相册数量读取失败」之间选（[heroRenderOf]）。
     countsReadable: Boolean = true,
     scopeSaved: Boolean = true,
     onOpenBucketPicker: () -> Unit = {},
-    /** #1272：「挑几张传」——系统照片选择器，不需要照片权限。 */
     onPickPhotos: () -> Unit = {},
-    /** #1272：最近一批手选的进度 / 结果（null = 没挑过）。 */
     pickedBatch: com.hawkeyexb.ppass.backup.picked.PickedBatchSummary? = null,
-    // MOB-02 §二 / MOB-94: 相册权限三档——非 FULL 时 hero 显示引导卡顶替
-    // 三元组（拿不到完整相册时 N/M 是假数），一键去系统设置。
-    //
-    // 用枚举而不是两个布尔：「只给了部分」和「一张都不给」互斥，布尔并列
-    // 表示不了这个互斥，而 MOB-94 的 bug 恰恰是全拒那一档被漏掉了。
     mediaAccess: MediaAccess = MediaAccess.FULL,
     onOpenAppSettings: () -> Unit = {},
-    // #413 §7：桌面剩余空间不足 5 GiB（投影裁决，见 desktopLowSpaceWarning）。
     desktopLowSpace: Boolean = false,
-    // 2026-09-07 真机反馈：暂停/取消连点几下按钮像卡死——命令已经提交、
-    // 只是还没等到下一次 500ms tick 刷新出结果；这里禁用按钮 + 换处理中
-    // 文案，同一命令没跑完不接受下一次点击。
     commandPending: Boolean = false,
-    // MOB-61: a source deleted from the phone is terminal, with no retry action.
     missingSourceNotice: com.hawkeyexb.ppass.backup.flow.MissingSourceNotice? = null,
-    // #418：正在传的这一张的字节进度（0..1），与前台服务通知的进度条同一个函数。
-    // null = 没在传 / 总字节未知 ⇒ 不画进度条。英雄区的大数字仍是「已确认 / 范围内总数」。
     transferProgress: Float? = null,
-    // #250 / #251：当前这一张那一块（裁决在 FlowUiProjection.transferRowOf）。null = 没在传。
     transferRow: com.hawkeyexb.ppass.backup.flow.TransferRow? = null,
-    // #418：设置卡「取消剩余 N 张」那一行。null = 不渲染（没有剩余 / 配对已失效 / 还没算出来）。
     cancelRemainingCount: Long? = null,
     onRequestCancelRemaining: () -> Unit = {},
-    // #418：设置卡「已跳过的照片 N 张 · 点击恢复」。null = 没有用户取消过的照片，不渲染。
-    // 恢复 = 清空跳过名单，对账扫描把它们重新放回待传。
     skippedCount: Long? = null,
     onRestoreSkipped: () -> Unit = {},
-    // 确认框里写明的 N（点那一行时现算）；null = 没有确认框。
     cancelConfirmCount: Int? = null,
     onConfirmCancelRemaining: () -> Unit = {},
     onDismissCancelRemaining: () -> Unit = {},
-    // MOB-100（B4）：「已跳过 N 张…不会再重传」的确认路径。R-CLEARABLE：
-    // 任何常驻提示都必须有用户自己走得通的消除路径，只有开发者能清不算
-    // （此前清那 6 条测试残留用的是 adb + run-as + 手改账本 JSON）。
     onAcknowledgeMissingSource: () -> Unit = {},
-    // MOB-100 关键判断 3：确认过的那批仍可查——横幅收起后计数搬进这一行，
-    // 0 = 没有已确认的，不渲染。
     acknowledgedMissingSourceCount: Int = 0,
-    // 规则 P（#413：每个等待原因一句）：为什么在等。null = 不在等 / 不在状态行说 ⇒ 不渲染任何理由。
-    // 由 BackupUiStateHolder 从投影算出；HomeScreen 自己不碰数据源。出场闸门见 [visibleWaitReasonRes]。
     waitReasonRes: Int? = null,
-    // #1072：最近一次应答说版本不兼容（哪一端的 P-Pass 太旧）。状态行换成那句话；手机太旧时按钮换成「检查更新」。
     outdated: com.hawkeyexb.ppass.proto.OutdatedSide? = null,
-    // UPD-02：「检查更新」行。value 跟随更新状态机（下载中 % / 待安装「可安装」）；
-    // onCheckUpdate 非 null 才渲染该行——行为判定全在 UpdateUiController。
     updateRowValue: String? = null,
     onCheckUpdate: (() -> Unit)? = null,
-    /** #1272：「自动备份」规则开关（以后哪些照片自动送到电脑）。关着是正常状态，不是故障。 */
     autoBackupRuleOn: Boolean = true,
-    /** #1272 §5：备份范围设了开始时间（「从今天起」）。 */
     scopeHasStart: Boolean = false,
     onToggleAutoBackupRule: (Boolean) -> Unit = {},
-    /** #1272：开关下方一行小字（没有照片权限 / 权限被收回或改成部分）。 */
     autoBackupRuleHintRes: Int? = null,
-    /** #1762「素材文件夹」：已登记的本地目录（状态由调用方按真实 SAF 可用性给）。 */
     mediaFolders: List<FolderUi> = emptyList(),
     onFolderAdd: () -> Unit = {},
     onFolderRemove: (FolderUi) -> Unit = {},
     onFolderReauthorize: (FolderUi) -> Unit = {},
-    // 素材文件夹二级页打开/关闭时告知调用方（底部 Photos/设置 tab 栏同存储电脑详情页一样整体隐藏）。
     onFoldersOpenChange: (Boolean) -> Unit = {},
-    // #1789 接线（#1788 交付判定、本卡消费）：来源可用性输入——folder-only 不被全局权限卡顶替（验收 5），
-    // 混合范围只说相册侧。默认值 = 旧的纯相册口径，调用方不传时行为与 #1788 前一致。
     hasUsableSource: Boolean = false,
     mixedAlbumIncomplete: Boolean = false,
-    // #1788：已选相册（空范围缺的是来源，不是权限）——「去设置」出口只给真的选了相册的范围。
     hasSelectedAlbum: Boolean = true,
-    // #1789：单次传输的「从文件选择」入口。
     onPickFiles: () -> Unit = {},
-    // #1962：系统告示条的唯一宿主——从 TwoTabs 顶层移到这里，只在设置页（本页）展示，
-    // 照片页 / 大图查看 / 存储详情等二级页都不再出现，与 iOS `SettingsScreen` 对齐。
     notice: (@Composable () -> Unit)? = null,
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
-    // #1883：配对有效性是连接状态的一档（[ConnectionState.needsRepair]）——本页所有
-    // 「配对失效就收起备份相关界面」的判断都从这一个状态推出来，不再各自读一个布尔。
-    val pairingLost = connection.needsRepair
 
-    // "存储电脑"详情子页——"断开连接"收进这里最底部（点按钮二次确认）。
-    // M10：仅充电/仅 Wi-Fi 改回主列表里的直接开关行，不再收进单独的
-    // "什么时候备份"子页（用户实机反馈：设计稿 M10 就是直接开关行，
-    // 折进子页是上一轮自己想当然加的一层，设计稿没有）。
     var showStorageDetail by remember { mutableStateOf(false) }
     var showMore by remember { mutableStateOf(false) }
-    // #1762：素材文件夹二级页（真实设置入口，正式 UX 后置）。
     var showFolders by remember { mutableStateOf(false) }
     androidx.compose.runtime.LaunchedEffect(showFolders) { onFoldersOpenChange(showFolders) }
     androidx.compose.material3.ProvideTextStyle(
@@ -432,7 +169,6 @@ internal fun HomeScreen(
             confirmedCount = triplet?.m ?: 0L,
             lastSuccessAt = triplet?.lastSuccessAt ?: 0L,
             connection = connection,
-            // #1272：详情在「更多」里打开，返回回到「更多」（底栏仍收着）。
             onBack = { showStorageDetail = false },
             onDisconnect = onDisconnect,
         )
@@ -446,8 +182,6 @@ internal fun HomeScreen(
         )
     } else {
 
-    // #418：「取消剩余 N 张」的确认框。确认按钮就是那句带 N 的话本身，关闭按钮用「返回」
-    // ——不用「取消」：要确认的动作本身就叫取消，两个按钮都叫取消会让人点错（MOB-89 同形）。
     if (cancelConfirmCount != null) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = onDismissCancelRemaining,
@@ -471,19 +205,6 @@ internal fun HomeScreen(
             .verticalScroll(rememberScrollState())
             .padding(20.dp, 14.dp, 20.dp, 8.dp),
     ) {
-        // ── 标题已删（2026-08-21 用户真机裁决）──
-        // 原本是「设置」28px serif（设计稿 layout-v1 / T-083 目标 1）。
-        // 用户：「顶部有必要有几个大字吗？占位置还没有什么意义。」底部 tab
-        // 已经写着「设置」，标题是同一句话说第二遍。
-        // ⚠️ 对设计稿的**有意偏离**，记在 UI-01 卡里。Column 自带 14dp 顶部
-        // 内边距，删掉标题后英雄卡不会贴边。
-
-        // ── 英雄卡：恒真三元组（M / N 张已回家 · 最近成功 · 待备份 K）──
-        // MOB-02 §二: 部分授权下不显示假 0/0——引导卡顶替三元组，
-        // 诚实说明「只授权了部分照片——备份需要完整相册权限」+ 去设置。
-        // #1789 接线（#1788 判定）：照片权限不全时，只有「没有可用来源」才是真的停了——
-        // folder-only 继续出真实进度（#1784 验收 5），混合范围单独说相册侧（iOS HeroCard 同一闸门）。
-        // 空范围缺的是来源不是权限，不算 blocked（[heroRenderOf] 同一判据）。
         val heroBlocked = autoBackupRuleOn && mediaAccess != MediaAccess.FULL && !hasUsableSource && hasSelectedAlbum
         Surface(
             color = if (heroBlocked) PPColor.ActBg else PPColor.SafeBg,
@@ -492,11 +213,8 @@ internal fun HomeScreen(
         ) {
             Column(Modifier.padding(20.dp)) {
                 if (!autoBackupRuleOn) {
-                    // #1272：没开自动备份是正常状态，不显示「无照片访问权限 / 还没有选择相册」。
                     Text(stringResource(R.string.auto_backup_off_hero), color = PPColor.Ink, fontSize = 15.sp)
                 } else if (mixedAlbumIncomplete) {
-                    // #1811 判据、#1789 接线：文件夹备份还在继续，只说相册侧的状态；
-                    // 出口只有一个「调整范围」（直接进范围页，iOS `adjustScopeFromIncompleteAlbum` 同一动作）。
                     Text(stringResource(R.string.hero_mixed_album_incomplete), color = PPColor.Act, fontSize = 15.sp)
                     Spacer(Modifier.height(12.dp))
                     OutlinedButton(
@@ -508,8 +226,6 @@ internal fun HomeScreen(
                     ) { Text(stringResource(R.string.hero_adjust_scope_action), fontSize = 15.sp, fontWeight = FontWeight.Bold) }
                 } else if (mediaAccess != MediaAccess.FULL && !hasUsableSource && hasSelectedAlbum) {
                     Text(stringResource(R.string.auto_backup_blocked_hero), color = PPColor.Ink, fontSize = 15.sp)
-                    // #1353：权限被收回（部分 / 全拒）后的唯一出口：去本 App 的系统设置页改回。开关保持开，回来按真实权限现算。
-                    // #1788：空范围缺的是**来源**不是权限，去设置授权也不会添加来源，不出（hasSelectedAlbum）。
                     if (blockedHeroOffersSettings(autoBackupRuleOn, mediaAccess, hasSelectedAlbum)) {
                         Spacer(Modifier.height(12.dp))
                         OutlinedButton(
@@ -527,14 +243,8 @@ internal fun HomeScreen(
                 if (showsFromTodayEmpty(heroRender, t, scopeHasStart)) {
                     Text(stringResource(R.string.auto_backup_from_today_empty), color = PPColor.Ink, fontSize = 15.sp)
                 } else if (heroRender == HeroRender.Triplet && t != null) {
-                    // UI-16 规则 G：五条闸门全过才准绿；任一条不成立退回墨色。
-                    // 恒绿的那两行是本卡要修的缺陷本体——配对已断/有失败待处理/
-                    // 被按停时，绿色是在替一件没发生的事作保。
-                    val numberColor =
-                        if (heroNumberIsSafe(mediaAccess, t, pairingLost)) PPColor.Safe else PPColor.Ink
+                    val numberColor = heroNumberColor(mediaAccess, t, connection)
                     Row(verticalAlignment = Alignment.Bottom) {
-                        // 设计稿："1,180 / 1,234 张已回家"——千分位分组，
-                        // 三位数以内跟纯数字一样，大库才看得出差别。
                         Text(
                             groupThousands(t.m),
                             fontSize = 40.sp, fontFamily = PPFont.Serif,
@@ -548,8 +258,6 @@ internal fun HomeScreen(
                         )
                     }
                     Spacer(Modifier.height(6.dp))
-                    // 缺陷 (b)：从未成功（ts<=0）→ 「还没有成功备份过」，
-                    // 绝不渲染 epoch 0 日期。裁决在 lastSuccessOf（有单测）。
                     val lastText = lastSuccessText(t.lastSuccessAt)
                     val pendingSuffix = if (t.k > 0) {
                         " · " + stringResource(R.string.pending_count, t.k)
@@ -559,11 +267,6 @@ internal fun HomeScreen(
                         fontSize = 14.sp, color = PPColor.Ink60,
                     )
                 } else if (heroRender == HeroRender.Unreconciled) {
-                    // UI-16 规则 H-C：账本说的已确认数多于相册里的文件数——
-                    // 两个数对不上。既不编数字（clamp 出的绿色「10 / 10」），
-                    // 也不藏事实（原始的「51 / 10」），第三条路是说实话：
-                    // 不渲染任何分数，非绿。#401：文案只说真实会发生的事——手机本地重算
-                    // 待办（不需要电脑、插电、Wi-Fi），算完 m ≤ n，这一格自己消失。
                     Text(
                         stringResource(R.string.hero_unreconciled_title),
                         fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PPColor.Waiting,
@@ -574,8 +277,6 @@ internal fun HomeScreen(
                         fontSize = 14.sp, lineHeight = 21.sp, color = PPColor.Ink60,
                     )
                 } else {
-                    // DOG-01d: 三元组不可用（媒体查询失败）→ 不编数字。
-                    // #1038：账本读不到 / 没选相册各说各的，不混成「相册数量读取失败」。
                     Text(
                         stringResource(
                             when (heroRender) {
@@ -589,65 +290,39 @@ internal fun HomeScreen(
                 }
                 }
 
-                // ── #1784：进度区对自动与单次是同一块——自动备份关着也在这里承接单次传输的真实进度
-                //（iOS `render != .accessBlocked || !autoRule` 同一闸门）；blocked 卡顶替时不重复出。
                 if (!autoBackupRuleOn || !heroBlocked) {
                 Spacer(Modifier.height(14.dp))
-                // 设计稿：hero 内 border-top = rgba(46,107,79,.18)（绿系）。
                 HorizontalDivider(color = PPColor.Safe.copy(alpha = 0.18f))
                 Spacer(Modifier.height(12.dp))
 
-                // ── 进度区（T-083 目标 2 + MOB-02 重构 + UX-09）：进行中 =
-                // 状态行 + 6dp 进度条 + 「暂停」；空闲态 = 按裁决结果说话
-                // （statusText——Ready/Pending/AllSafe/NoAlbums 各有文案，
-                // 不再恒是「插电 + Wi-Fi 时自动进行」）。UX-09：「选择相册」
-                // 大按钮从 hero 移除——onboarding 已经选过一次，属低频操作，
-                // 入口留在下方设置卡「备份范围」行（已存在，未删功能）；
-                // 空出的位置让状态文案占满整行，「立即备份」点击后不再
-                // 「看起来毫无反应」。配对失效时按钮收起，出路在红卡。
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         if (busy) {
-                            // #251：进行中这一块是固定的三格——状态行 / 当前项那一行 / 进度条槽——每格单行
-                            // （maxLines = 1、不折行），进度条没有时留同高的空位。文件名多长、换到下一张、
-                            // 准备 ↔ 备份切换，都不改变这一块的高度。
-                            val sending = (line as StatusLine.Working).state as? BackupUiState.Sending
-                            val row = transferRow?.takeIf { sending != null }
-                            val slow = row?.pace == com.hawkeyexb.ppass.backup.flow.TransferPace.SLOW
-                            // 第一格：有当前项时是文件名（已在投影层做中间截断，保住扩展名）；否则是阶段文案。
+                            val slots = heroBusySlotsOf(line as StatusLine.Working, transferRow, transferProgress)
                             Text(
-                                row?.fileName ?: workingText(line),
+                                slots.fileNameOverride ?: workingText(line),
                                 fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
                                 color = PPColor.Ink60,
                                 maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
                             )
-                            // 第二格：「12.3 / 189 MB · 第 x / y 张」；字节 15 秒没动 →「N 秒没有新数据，仍在等待」
-                            // （等待色，与正常传输看得出不同，#250）；没有当前项时留空行占位。
                             Text(
-                                when {
-                                    row == null || sending == null -> ""
-                                    slow -> stringResource(R.string.state_sending_slow, row.quietSeconds)
-                                    row.bytesText != null ->
-                                        stringResource(R.string.state_sending_detail, row.bytesText, sending.done, sending.total)
-                                    else -> stringResource(R.string.state_sending, sending.done, sending.total)
+                                when (slots.secondLine.kind) {
+                                    HeroBusySecondLine.Kind.EMPTY -> ""
+                                    HeroBusySecondLine.Kind.SLOW -> stringResource(R.string.state_sending_slow, slots.secondLine.quietSeconds)
+                                    HeroBusySecondLine.Kind.DETAIL ->
+                                        stringResource(R.string.state_sending_detail, slots.secondLine.bytesText!!, slots.secondLine.done, slots.secondLine.total)
+                                    HeroBusySecondLine.Kind.COUNT_ONLY ->
+                                        stringResource(R.string.state_sending, slots.secondLine.done, slots.secondLine.total)
                                 },
                                 fontSize = 13.sp,
-                                color = if (slow) PPColor.Waiting else PPColor.Ink60,
+                                color = slots.secondLineColor,
                                 maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
                             )
                             Spacer(Modifier.height(8.dp))
                             val progress = transferProgress
                             if (progress != null) {
-                                // MOB-33（2026-08-26 真机）：必须显式覆盖 M3 1.3
-                                // 的两个默认值，否则进度条不是一根标准直条。
-                                // 本仓用 compose-bom:2024.12.01（= material3 1.3.x），
-                                // 该版本给 LinearProgressIndicator 加了：
-                                //   gapSize = 4.dp        → 指示条与轨道之间留一道缝
-                                //   drawStopIndicator     → 末端画一个圆点
-                                // 验收人原话：「有断层，不知道是不是有一个和背景
-                                // 颜色一样的圆点在移动。反正看着不是标准的。」
-                                // ——那道缝跟着进度头走，看起来就像一个洞在移动。
-                                val barColor = if (slow) PPColor.Waiting else PPColor.Safe
+                                // Material3 1.3 LinearProgressIndicator 默认带 gapSize=4.dp 与末端停靠圆点，必须清零才是连续直条
+                                val barColor = slots.progressColor
                                 androidx.compose.material3.LinearProgressIndicator(
                                     progress = { progress },
                                     modifier = Modifier.fillMaxWidth().height(6.dp),
@@ -660,27 +335,20 @@ internal fun HomeScreen(
                                 Spacer(Modifier.fillMaxWidth().height(6.dp))
                             }
                         } else {
-                            // 规则 P（#413）：等待中这一行换成那句人话（每个等待原因一句）——
-                            // **不新增横幅**。说不清（reasonRes == null）时一个字都不加，
-                            // 退回 idleStatusText 既有的分支。
-                            val waitReason = visibleOutdatedSide(outdated, mediaAccess, pairingLost)?.let(::outdatedTextRes)
+                            val waitReason = visibleOutdatedSide(outdated, mediaAccess, connection.needsRepair)?.let(::outdatedTextRes)
                                 ?: visibleWaitReasonRes(
                                     state = state,
                                     mediaAccess = mediaAccess,
-                                    pairingLost = pairingLost,
+                                    pairingLost = connection.needsRepair,
                                     reasonRes = waitReasonRes,
                                     wifiOnly = wifiOnly,
                                     hasUsableSource = hasUsableSource,
                                     pickedOpen = (pickedBatch?.open ?: 0) > 0,
                                 )
-                            // #1789：自动备份关着是正常状态——Ready 不说「插电 + Wi-Fi 时自动进行」
-                            //（iOS Ready / 闸门不过时同样不出字），等待与进行中照常说话；
-                            // 单次传输的计数由下方 picked 行说，不在这里重复。
-                            // UI-16 规则 S：文字版的绿色谎言走同一组闸门；#1962 颜色也读同一份裁决。
                             val allSafeAllowed = allSafeTextAllowed(
                                 mediaAccess = mediaAccess,
                                 triplet = triplet,
-                                pairingLost = pairingLost,
+                                pairingLost = connection.needsRepair,
                                 missingSourceCount = missingSourceNotice?.count ?: 0,
                             )
                             val idleLine: String? = when {
@@ -699,9 +367,6 @@ internal fun HomeScreen(
                                 )
                             }
                             if (idleLine != null) {
-                                // #1888：英雄区主状态行会随状态变化（等待原因/空闲裁决文案）——
-                                // 标 liveRegion=polite，TalkBack 在变化后主动播报一句；只加语义标注，不改视觉与行为。
-                                // #1962：颜色对齐 iOS HeroCard.statusColor（等待琥珀 / 确认安全绿 / 其余次级色）。
                                 Text(
                                     idleLine,
                                     fontSize = 13.5.sp,
@@ -711,16 +376,9 @@ internal fun HomeScreen(
                             }
                         }
                     }
-                    // UX-13: 按钮**留在原地**，只换文案——进行中「暂停」，
-                    // 被暂停「继续」。原来这里是 `if (busy && !pairingLost)`，
-                    // 一暂停 busy 变 false，整个 if 块不渲染、按钮消失，
-                    // 首页再没有续传入口（验收人：「暂停之后，没有重新开始
-                    // 的按钮？」）。裁决在 heroActionOf（纯函数，有单测），
-                    // 两个分支共用 onBackupNow——MOB-19 红线：只有一条管线。
-                    val heroAction = heroActionOf(state, pairingLost)
-                    val outdatedNow = visibleOutdatedSide(outdated, mediaAccess, pairingLost)
+                    val heroAction = heroActionOf(state, connection)
+                    val outdatedNow = visibleOutdatedSide(outdated, mediaAccess, connection.needsRepair)
                     if (outdatedNow != null && offersAppUpdate(outdatedNow) && onCheckUpdate != null) {
-                        // #1072：手机上的 P-Pass 太旧——这里唯一有用的动作是检查更新（复用 UpdateUiController）。
                         Spacer(Modifier.width(12.dp))
                         HeroSecondaryButton(label = stringResource(R.string.update_check_now), onClick = onCheckUpdate)
                     } else if (heroAction != null) {
@@ -735,19 +393,10 @@ internal fun HomeScreen(
                             onClick = onBackupNow,
                         )
                     }
-                    // #418：英雄区原来这里有 MOB-89 的「取消当前轮」降级动作——取消轮已经没有了，
-                    // 取消的唯一入口是下方设置卡的「取消剩余 N 张」（带写明 N 的确认框）。
                 }
                 }
-                // ── #1784：单次传输状态只在英雄区出现——进行中的「正在传 x/y」与结算结果句。
-                // 进程被杀没传完的不算失败（验收 4）：Android 的手选行留在 pending/transferring，
-                // 下次打开由引擎按挑选顺序续传——它们仍是 open，出的是进度句不是失败句。
-                // #1789（评审）：手选传输不依赖相册权限——权限卡顶替自动备份时这行照样在场
-                //（iOS HeroCard 同一闸门），否则用户从文件选择发起的传输在 blocked 时完全看不见。
                 SingleTransferStatus.heroLine(pickedBatch)?.let { picked ->
                     Spacer(Modifier.height(8.dp))
-                    // #1801：这一行会随传输进度/结算变文案——标 liveRegion=polite，TalkBack
-                    // 在变化后主动报一句，不用用户来回找。只加语义标注，不改视觉与行为。
                     when (picked) {
                         is SingleTransferStatus.Line.Progress -> Text(
                             stringResource(R.string.picked_progress, picked.done, picked.total),
@@ -768,9 +417,7 @@ internal fun HomeScreen(
             }
         }
 
-        // #413：「将在连上 Wi-Fi 后进行」不再是 MainActivity 自己的一条平行状态——它就是
-        // 等待中（WIFI）的状态行，见上方 visibleWaitReasonRes。这里只剩桌面低空间预警（#413 §7）。
-        if (desktopLowSpaceHintVisible(desktopLowSpace, mediaAccess, pairingLost)) {
+        if (desktopLowSpaceHintVisible(desktopLowSpace, mediaAccess, connection.needsRepair)) {
             Spacer(Modifier.height(10.dp))
             Text(
                 stringResource(R.string.desktop_low_space_hint),
@@ -780,20 +427,12 @@ internal fun HomeScreen(
             )
         }
 
-        // #1962：系统告示条从 TwoTabs 顶层移到设置页——在英雄卡（含低空间提示）正下方、
-        // 故障红卡上方渲染；只在设置页可见，照片页 / 大图查看 / 二级页不再出现。
         if (notice != null) {
             Spacer(Modifier.height(12.dp))
             notice()
         }
 
-        // ── 失败才说话（T-083 目标 3 红线）：红卡正文只有人话（当前语言
-        // 单语，先说「照片没丢」）；原始错误串（IrohError/异常 dump）绝不
-        // 进主文案，只住在默认收起的「查看技术详情」里——troubleTextOf
-        // 是唯一渲染闸门（有单测）；完整原文另走 PLog.e(PPassBackup) 的
-        // logcat/bugreport 诊断导出路径（BackupUiStateHolder catch）。
-        // 目标 4：普通失败主按钮 = 「再试一次」（重跑即从断点续传）。
-        if (state is BackupUiState.Trouble && !pairingLost) {
+        if (state is BackupUiState.Trouble && !connection.needsRepair) {
             Spacer(Modifier.height(12.dp))
             Surface(
                 color = PPColor.ActBg,
@@ -817,8 +456,6 @@ internal fun HomeScreen(
                     if (copy.detail.isNotEmpty()) {
                         var showDetail by remember { mutableStateOf(false) }
                         Spacer(Modifier.height(6.dp))
-                        // #1799：开合交给标准 TextButton——role、最小触控区与涟漪由组件给出；
-                        // 文案（展开/收起）与弱化视觉（Ink40 + 下划线）不变。
                         TextButton(onClick = { showDetail = !showDetail }) {
                             Text(
                                 stringResource(
@@ -856,8 +493,7 @@ internal fun HomeScreen(
             }
         }
 
-        // ── 配对已失效：红卡说明 + 出路（重新扫码），报错先说照片没丢 ──
-        if (pairingLost) {
+        if (connection.needsRepair) {
             Spacer(Modifier.height(12.dp))
             Surface(
                 color = PPColor.ActBg,
@@ -892,35 +528,18 @@ internal fun HomeScreen(
             }
         }
 
-// ── MOB-61: a photo removed from the phone after discovery cannot be
-        // recovered by retry. Keep the fact visible, but deliberately provide
-        // no "send again" action and never reuse the cancelled-round notice.
-        // (UI-04a/c moved the five amber one-liners into NoticeHost; this
-        // SOURCE_MISSING notice is informational-only and stays here.)
         if (missingSourceNotice != null) {
             Spacer(Modifier.height(12.dp))
             NoticeCard(
                 HomeNotice(
                     kind = HomeNoticeKind.SOURCE_MISSING,
                     body = pluralStringResource(R.plurals.missing_source_notice_body, missingSourceNotice.count, missingSourceNotice.count),
-                    // MOB-100：出路是「知道了」（dismiss），**不是** action——
-                    // action 在本族视觉里是「去处理」，放在这儿会被读成
-                    // 「再传一次」，而 MOB-61 的决定正是这条不给重传按钮。
                     dismissLabel = stringResource(R.string.missing_source_notice_dismiss),
                     onDismiss = onAcknowledgeMissingSource,
                 )
             )
         }
-        // ── #1784：设置按「自动备份 / 单次传输 / 传输条件与通知」固定分组，组序由
-        // SingleTransferStatusTest 锁死；条件行只在原组内显隐，分组不移动。真有问题时上方
-        // 的红卡与告示自然出现（「需要注意」），不在这里重复。
-        // 2026-09-14（用户拍板）仍成立：组内不贴 section 标签——组的第一行（自动备份开关 /
-        // 从相册选择 / 仅 Wi-Fi）就是这组的名字，标签是信息增量为 0 的重复。
-        // #1889：产品负责人 2026-11-19 拍板，「更多」不再单独成组，并入「通知」所在的一组。
         Spacer(Modifier.height(18.dp))
-        // ── #1789 固定分组 1/3「自动备份」：开关、范围与它的条件行（取消剩余 / 已跳过 / 源已删除账目）。
-        // #1801：组内仍不贴 section 标签（2026-09-14 用户拍板，组名即首行）——首行标 heading 语义，
-        // TalkBack 按标题导航就能在这三组间跳；不增不减任何文字，视觉与点击行为不变。
         Surface(
             color = PPColor.Paper,
             shape = RoundedCornerShape(PPSize.RadiusCard),
@@ -981,9 +600,6 @@ internal fun HomeScreen(
                         onHintClick = onResolveBackgroundBackup,
                     )
                 }
-                // #418：「取消剩余 N 张」——跟「备份哪些相册」同属「这次备份包含什么」的
-                // 语义线。N 与引擎取消时写下的张数是同一个函数算的；点了先现算一次 N，
-                // 再弹确认框写明 N。取消掉的照片进下面「已跳过的照片」那一行，可以恢复。
                 if (cancelRemainingCount != null) {
                     HorizontalDivider(color = PPColor.Divider)
                     CellRow(
@@ -991,9 +607,6 @@ internal fun HomeScreen(
                         onClick = if (commandPending) null else onRequestCancelRemaining,
                     )
                 }
-                // 2026-09-14（用户拍板）/ #418：用户取消过的照片不做打断式提示，只在这里一行
-                // 「已跳过的照片 N 张 · 点击恢复」。N = SKIPPED_BY_USER 的张数，取消后随之增加；
-                // 点击恢复 = 清空跳过名单，对账扫描把这些照片重新放回待传。
                 if (skippedCount != null) {
                     HorizontalDivider(color = PPColor.Divider)
                     CellRow(
@@ -1002,11 +615,6 @@ internal fun HomeScreen(
                         onClick = if (commandPending) null else onRestoreSkipped,
                     )
                 }
-                // MOB-100 关键判断 3：确认过的「源已删除」那批的去处。
-                // MOB-59 的真机教训是「提示消失了，那批再也找不到」，所以
-                // 确认只把它从打断式横幅降级成这一行账目，事实一条没删
-                // （账本条目是对账的依据，#139 MOB-87）。不可点——源已经
-                // 不在手机上，没有任何动作能把它变回来（MOB-61）。
                 if (acknowledgedMissingSourceCount > 0) {
                     HorizontalDivider(color = PPColor.Divider)
                     CellRow(
@@ -1021,10 +629,8 @@ internal fun HomeScreen(
         }
 
         Spacer(Modifier.height(18.dp))
-        // ── #1789 固定分组 2/3「单次传输」：有独立系统照片选择器时两行「从相册选择」「从文件选择」，
-        // 无独立照片选择器（如鸿蒙卓易通）时合并为单一行「从文件选择」（#1943）；
-        // 入口行只发起选择，不显示进度、结果或最近一批——状态只在英雄区出现（#1784）。
         val photoPickerAvailable = SingleTransferFilePicker.hasDedicatedPhotoPicker(LocalContext.current)
+        val selectionRows = SettingsLayout.selectionRows(photoPickerAvailable)
         Surface(
             color = PPColor.Paper,
             shape = RoundedCornerShape(PPSize.RadiusCard),
@@ -1032,25 +638,18 @@ internal fun HomeScreen(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column {
-                if (photoPickerAvailable) {
+                selectionRows.forEachIndexed { index, entry ->
+                    if (index > 0) HorizontalDivider(color = PPColor.Divider)
                     CellRow(
-                        label = stringResource(R.string.pick_from_photos_label),
-                        onClick = onPickPhotos,
-                        heading = true,
+                        label = stringResource(entry.labelRes),
+                        onClick = { entry.request(photos = onPickPhotos, files = onPickFiles) },
+                        heading = entry.isHeading(photoPickerAvailable),
                     )
-                    HorizontalDivider(color = PPColor.Divider)
                 }
-                CellRow(
-                    label = stringResource(R.string.pick_from_files_label),
-                    onClick = onPickFiles,
-                    heading = !photoPickerAvailable,
-                )
             }
         }
 
         Spacer(Modifier.height(18.dp))
-        // ── #1789 固定分组 3/3「传输条件与通知」：仅 Wi-Fi 与失败通知两个开关，
-        // 以及并入本组的「更多」入口（#1889：产品负责人 2026-11-19 拍板，不再单独成组）。
         Surface(
             color = PPColor.Paper,
             shape = RoundedCornerShape(PPSize.RadiusCard),
@@ -1071,15 +670,12 @@ internal fun HomeScreen(
                     onCheckedChange = onNotifyOnFailureChange,
                 )
                 HorizontalDivider(color = PPColor.Divider)
-                // 「更多」点进去仍是原来的二级页（存储电脑详情、版本、检查更新）。并入本组后
-                // 不再是分组首行，所以不带 heading 语义——这组的名字仍由首行「仅 Wi-Fi」承载。
                 CellRow(
                     label = stringResource(R.string.more_label),
                     onClick = { showMore = true; onStorageDetailOpenChange(true) },
                 )
             }
         }
-        // ── #1789 固定分组结束
 
         Spacer(Modifier.height(8.dp))
     }
@@ -1087,7 +683,6 @@ internal fun HomeScreen(
     }
 }
 
-/** #1272「更多」二级页：存储电脑（点开详情，断开连接在里面）、版本、检查更新。 */
 @Composable
 private fun MorePage(
     onOpenStorage: () -> Unit,
@@ -1097,8 +692,6 @@ private fun MorePage(
 ) {
     Column(Modifier.fillMaxSize().background(PPColor.Paper).padding(20.dp, 14.dp, 20.dp, 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            // #1799：返回交给标准 IconButton + ArrowBack（与 #1797 范围页两端同款）——
-            // 触控区、涟漪与「返回」描述由组件给出，不再用自绘「‹」字符承载点击。
             IconButton(onClick = onBack) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -1106,7 +699,6 @@ private fun MorePage(
                     tint = PPColor.Ink,
                 )
             }
-            // #1888：二级页标题标 heading 语义，TalkBack 按标题导航直达本页（与 BucketScreen 页标题同款）；不改视觉。
             Text(
                 stringResource(R.string.more_label),
                 fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
@@ -1121,19 +713,11 @@ private fun MorePage(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column {
-                // 数据源：pairing 时缓存的 storageDeviceName（proto/daemon
-                // 没有主动查询"这台设备现在叫什么"的接口，改名后要等下次
-                // 配对才刷新，如实挂账，不做新协议改动）。
                 CellRow(
                     label = stringResource(R.string.storage_computer),
-                    // #1251：电脑名不放在这一行（英文标签会被挤折行），点进去详情里看。
                     onClick = onOpenStorage,
                 )
                 HorizontalDivider(color = PPColor.Divider)
-                // #1820：本地开发包在版本号后追加构建时间（`MM-DD HH:MM`），方便分辨两个包谁新；
-                // 正式/CI 构建 BUILD_STAMP 是空串，这一行与原来逐字相同。
-                // #1881：走 CellRow，大字体下标签不再被版本值挤窄——放不下时值换到标签下一行（旧写法是
-                // 固定高度 + 标签 weight(1f)，1.5× 带 BUILD_STAMP 时标签折行被裁掉）。
                 val buildStamp = BuildConfig.BUILD_STAMP
                 CellRow(
                     label = stringResource(R.string.setting_version),
@@ -1143,8 +727,6 @@ private fun MorePage(
                         "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) $buildStamp"
                     },
                 )
-                // UPD-02：手动检查入口（不受 6h 节流门限）；下载/校验中点击
-                // 重新打开被「后台下载」收起的对话框。
                 if (onCheckUpdate != null) {
                     HorizontalDivider(color = PPColor.Divider)
                     CellRow(
@@ -1158,12 +740,6 @@ private fun MorePage(
     }
 }
 
-/** "存储电脑"详情子页（M11/M12，全页面状态稿）——信息卡是状态点+
- *  设备名+"已连接·最近同步 X\n配对日期·存了 N 张照片"富文本，不是
- *  简单的"存储电脑｜名字"重复行（上一轮的真实差距，用户实机反馈
- *  "M11/12 也都需要对齐"）；断开连接三层防误触：入口藏在这个详情页 →
- *  红色描边按钮 → 点了展开一张"确定断开吗？"说明卡，卡里再点一次
- *  "确认断开"才真的触发。 */
 @Composable
 private fun StorageComputerDetail(
     storageName: String,
@@ -1177,7 +753,6 @@ private fun StorageComputerDetail(
     var armed by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().background(PPColor.Paper).padding(20.dp, 14.dp, 20.dp, 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            // #1799：同 MorePage——标准 IconButton + ArrowBack（#1797 两端同款）。
             IconButton(onClick = onBack) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -1185,7 +760,6 @@ private fun StorageComputerDetail(
                     tint = PPColor.Ink,
                 )
             }
-            // #1888：二级页标题标 heading 语义，TalkBack 按标题导航直达本页（与 BucketScreen 页标题同款）；不改视觉。
             Text(
                 stringResource(R.string.storage_computer),
                 fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
@@ -1203,8 +777,6 @@ private fun StorageComputerDetail(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         Modifier.size(9.dp).clip(androidx.compose.foundation.shape.CircleShape)
-                            // #1883：状态点跟正文同一份事实——绿=真的连上了、红=要人处理、
-                            // 琥珀=重连中、灰=没有连接（tokens 的 idle = neutral waiting / offline peer）。
                             .background(storageDetailDotColor(connection.status)),
                     )
                     Spacer(Modifier.width(10.dp))
@@ -1265,8 +837,6 @@ private fun StorageComputerDetail(
     }
 }
 
-/** M11 信息卡状态点颜色——跟正文同一份连接状态（#1883），不再只看配对有效性。
- *  绿=真的连上了、红=要人处理、琥珀=重连中、灰=没有连接（tokens 的 idle = offline peer）。 */
 internal fun storageDetailDotColor(status: ConnectionState.Status): Color = when (status) {
     ConnectionState.Status.Connected -> PPColor.Safe
     ConnectionState.Status.PairingLost -> PPColor.Act
@@ -1274,18 +844,9 @@ internal fun storageDetailDotColor(status: ConnectionState.Status): Color = when
     ConnectionState.Status.Offline, ConnectionState.Status.Unknown -> PPColor.Idle
 }
 
-/**
- * M11 信息卡正文的裁决——纯函数，JVM 可测（#1883）。
- *
- * 第一行说哪句只由唯一连接状态决定：「已连接」只在那一个状态出现，其余状态一律只说「未连接」。
- * 配对已失效时正文**只有一行**（旧写法是早返回）：那张卡已经说「配对已失效」，
- * 再拼一行「配对 X · 已备份 N 张」就是同一张卡自相矛盾。
- */
 internal data class StorageDetailLines(
     val statusRes: Int,
-    /** 第一行是否带「最近同步 X」这个参数（「配对已失效」不带）。 */
     val statusTakesLastSuccess: Boolean,
-    /** 是否再拼第二行「配对 X · 已备份 N 张」（配对日期未知时字段是 0，不硬凑）。 */
     val showPairedLine: Boolean,
 )
 
@@ -1300,10 +861,6 @@ internal fun storageDetailLines(status: ConnectionState.Status, pairedAt: Long):
         StorageDetailLines(R.string.storage_detail_offline, statusTakesLastSuccess = true, showPairedLine = pairedAt > 0)
 }
 
-/** M11 信息卡正文——#1883：连接表述从唯一状态 [ConnectionState] 取，与照片页同一个事实源。
- *  配对已失效直接说失效；真的连上了才说「已连接」；其余（断开 / 重连中 / 还没连上）
- *  只说「未连接」+ 最近同步——不再把「配对还有效」当成「电脑连得上」。
- *  行数与参数由 [storageDetailLines] 裁决，本函数只做资源映射。 */
 @Composable
 internal fun storageDetailBody(
     connection: ConnectionState,
@@ -1322,35 +879,22 @@ internal fun storageDetailBody(
     return "$line1\n$line2"
 }
 
-/** 「存储电脑」配对日期（#1206）：按界面语言给本地化长日期，不自己拼格式串。
- *  中文「2026年10月14日」、英文「October 14, 2026」；locale 与界面同一份（App 语言）。 */
 internal fun pairedDateText(pairedAt: Long, locale: java.util.Locale = java.util.Locale.getDefault()): String =
     java.text.DateFormat.getDateInstance(java.text.DateFormat.LONG, locale).format(java.util.Date(pairedAt))
 
-/** 进行中裁决 → 字符串资源（T-083 目标 2：进度区只在 Working 出状态行）。 */
 @Composable
 private fun workingText(line: StatusLine.Working): String = when (val s = line.state) {
     is BackupUiState.Scanning -> stringResource(R.string.state_scanning, s.found)
     is BackupUiState.Hashing -> stringResource(R.string.state_hashing, s.done, s.total)
     is BackupUiState.Preparing -> stringResource(R.string.state_preparing)
-    // 设计稿："正在备份 {文件名}（第 x / y 张）"——#413：x / y 按本轮算（本轮已完成 + 1 /
-    // 本轮已完成 + 待备份）。文件名还没拿到时退回纯计数文案。
     is BackupUiState.Sending -> if (s.currentFile.isNotEmpty()) {
         stringResource(R.string.state_sending_file, s.currentFile, s.done, s.total)
     } else {
         stringResource(R.string.state_sending, s.done, s.total)
     }
-    else -> stringResource(R.string.idle_auto_hint) // unreachable
+    else -> stringResource(R.string.idle_auto_hint)
 }
 
-/**
- * UX-09: 空闲态状态文案——statusLineOf 早就算出了 Pending/AllSafe/
- * NoAlbums/Ready 四种裁决（BackupStatusTest 锁死了 Pending→state_pending、
- * AllSafe→state_safe 的映射与真实中文文案），但这层映射从没接上过 UI：
- * 空闲态永远只显示 idle_auto_hint，导致「立即备份」点完（尤其是已经被
- * 后台自动任务提前传完、这次点击零新增）看起来毫无反应。按裁决结果
- * 逐一出对应文案，才是「点了有交代」的最小闭环。
- */
 @Composable
 private fun idleStatusText(
     line: StatusLine,
@@ -1360,36 +904,15 @@ private fun idleStatusText(
 ): String = when (line) {
     is StatusLine.NoAlbums -> stringResource(R.string.backup_scope_none)
     is StatusLine.Pending -> pluralStringResource(R.plurals.state_pending, line.k.toInt(), line.k)
-    // UI-16 规则 S：闸门不过时退回既有的中性分支，**不许**说「都存好了」。
     is StatusLine.AllSafe ->
         if (allSafeAllowed) stringResource(R.string.state_safe)
         else stringResource(idleHintRes(backgroundBackupState, wifiOnly))
     is StatusLine.Ready -> stringResource(idleHintRes(backgroundBackupState, wifiOnly))
     is StatusLine.Waiting -> stringResource(R.string.backup_waiting_constraints)
     is StatusLine.Paused -> stringResource(R.string.state_paused)
-    is StatusLine.Working, is StatusLine.Trouble -> stringResource(R.string.idle_auto_hint) // unreachable
+    is StatusLine.Working, is StatusLine.Trouble -> stringResource(R.string.idle_auto_hint)
 }
 
-/**
- * #540：空闲态那一句「插电 + Wi-Fi 时自动进行」是在替后台备份作保——只有后台真的在跑（Armed）才许说。
- * 挂起期间（等授权 / 监听被停）说的是设置行 hint 同一句话，两处不许给两个说法。
- * OffByUser 在这里不改：用户关掉后 Flow 的等待原因 DISABLED 先接管这一行（state_waiting_disabled）。
- * #581：关掉「仅 Wi-Fi」后不许再承诺「连接 Wi-Fi」——此时 TriggerPolicy 的
- * requiresUnmetered 已为 false（移动网络也会备份），改说只提电量的那一句。
- */
-internal fun idleHintRes(backgroundBackupState: BackgroundBackupState, wifiOnly: Boolean): Int = when (backgroundBackupState) {
-    BackgroundBackupState.NeedsSystemAuthorization -> R.string.background_backup_needs_authorization
-    BackgroundBackupState.SystemStoppedWatcher -> R.string.background_backup_system_stopped
-    BackgroundBackupState.Armed, BackgroundBackupState.OffByUser ->
-        if (wifiOnly) R.string.idle_auto_hint else R.string.idle_auto_hint_any_network
-}
-
-/** 设计稿 hero 内次级按钮：白底 #FBF8F2 + 描边 rgba(23,21,18,.24) + 圆角 14 +
- *  高 44——「暂停」/「继续」共用这一个（UX-13：同一个位置换文案，不是两个
- *  按钮；UX-09：空闲态「选择相册」已移除，入口在下方设置卡「备份范围」行）。
- *  UI-13: 手写 Row+clip+background+border+clickable 改用 Material3
- *  `OutlinedButton`——disabled 现在是组件自己的真实 disabled 语义（涟漪/
- *  点击态自动跟随），不再是手动把颜色调透明这种伪禁用。 */
 @Composable
 private fun HeroSecondaryButton(label: String, onClick: () -> Unit, enabled: Boolean = true) {
     OutlinedButton(
@@ -1412,7 +935,6 @@ private fun HeroSecondaryButton(label: String, onClick: () -> Unit, enabled: Boo
     }
 }
 
-/** 「最后成功」裁决 → 文案；Never 分支 = 缺陷 (b) 的正确出口。 */
 @Composable
 private fun lastSuccessText(ts: Long): String =
     when (val last = lastSuccessOf(ts, System.currentTimeMillis())) {
@@ -1432,36 +954,11 @@ private fun lastSuccessText(ts: Long): String =
         )
     }
 
-/** 千分位分组（设计稿"1,180 / 1,234"）——用户当前 locale 的分组符号。 */
 internal fun groupThousands(n: Long): String =
     java.text.NumberFormat.getIntegerInstance().format(n)
 
-/** M10（全页面状态稿）：cell 行高 52dp——设计稿原文数值，带 hint 的
- *  两行开关自然长过这个下限，是合理例外，不受这条线约束。
- *
- *  UI-13 评估记录：Material3 `ListItem` 的默认最小高度是单行 56dp、
- *  两行 72dp（`ListItemDefaults`），比这里的 52dp 单行、带 hint 的
- *  「两行但仍要求 52dp」都要高——套上 `ListItem` 会让整张设置卡片
- *  （备份范围/自动备份/仅充电/仅WiFi/失败通知等一串 cell）明显变高、
- *  变松散，偏离设计稿的紧凑列表观感。这不是"手写图省事"，是量出来的
- *  真实数值冲突，因此保留 `Row`+`Text`/`Row`+`Switch` 现状，不套
- *  `ListItem`。 */
 private val CellRowHeight = 52.dp
 
-/** 备份规则卡里的开关行——label（可带 hint）左、Switch 右。
- *  UI-12 追加（2026-09-15）：hint 现在可以是系统层面的运行状态描述
- *  （比如"系统已停止后台监听"），跟 label（用户配置的名字）是两个不同
- *  的信息位，不冲突——label 永远只说"这是什么配置"，hint 永远只说
- *  "这个配置眼下的真实运行情况"。hintColor 让状态类 hint 能用琥珀色
- *  跟静态说明文字（Ink40）区分；onHintClick 让状态行本身可点，去处理
- *  异常，不需要在开关行外面再叠一个 CellRow。
- *  #1799：行本体用 M3 标准 `toggleable`（Role.Switch + 开合状态 + 点击
- *  动作挂在整行一个节点上），行内 Switch 只画状态（`onCheckedChange =
- *  null`）——这是 Compose 官方文档的开关行写法；此前行无语义、TalkBack
- *  要分别聚焦文字与开关两个节点。hint 的独立点击出口保留：嵌套
- *  clickable 是独立的语义合并边界，不会被行级 toggleable 吞掉；hint
- *  可点时带 `Role.Button`（#1879 评审：TalkBack 报「按钮」，与同卡其它
- *  动作同一口径）。 */
 @Composable
 private fun RuleSwitchRow(
     label: String,
@@ -1472,13 +969,14 @@ private fun RuleSwitchRow(
     onHintClick: (() -> Unit)? = null,
     heading: Boolean = false,
 ) {
+    val spec = ruleSwitchRowSpec(hasHintAction = onHintClick != null)
     Row(
         Modifier.fillMaxWidth()
             .let { if (heading) it.semantics { heading() } else it }
             .toggleable(
                 value = checked,
                 onValueChange = onCheckedChange,
-                role = Role.Switch,
+                role = spec.rowRole,
             )
             .heightIn(min = CellRowHeight)
             .padding(horizontal = 16.dp),
@@ -1491,19 +989,16 @@ private fun RuleSwitchRow(
                     hint,
                     fontSize = 12.sp, lineHeight = 17.sp, color = hintColor,
                     modifier = if (onHintClick != null) {
-                        Modifier.clickable(role = Role.Button, onClick = onHintClick)
+                        Modifier.clickable(role = spec.hintRole, onClick = onHintClick)
                     } else {
                         Modifier
                     },
                 )
             }
         }
-        // 开启色与 iOS 设置页 Toggle 同为 safe（SettingsScreen.swift .tint(PPColor.safe)）；
-        // 关闭态与禁用态走 PPTheme 的 colorScheme。#1799：动作已由整行
-        // toggleable 承载，开关本体只画状态（onCheckedChange = null）。
         Switch(
             checked = checked,
-            onCheckedChange = null,
+            onCheckedChange = if (spec.switchInteractive) onCheckedChange else null,
             colors = SwitchDefaults.colors(
                 checkedTrackColor = PPColor.Safe,
                 checkedThumbColor = PPColor.Paper,
@@ -1513,14 +1008,6 @@ private fun RuleSwitchRow(
     }
 }
 
-/** #1881：设置页 cell 行「标签与摘要并排，还是摘要换到标签下一行」的判定——纯函数，
- *  单测用三星 SM-S928N 实测像素钉住。
- *
- *  为什么需要判定：Compose 的 `Row` 先按自身需求量**没有** weight 的子项（摘要、4dp 间距、
- *  箭头先占走宽度），标签只能吃剩下的；英文 1.5× 时标签只剩 143px，装不下「Backup range」，
- *  被压成 4 行断词 `Bac / kup / rang / e`。这里按内容量宽：标签单行宽 + 摘要单行宽 + 末尾固定量
- *  （箭头及其间距）超过整行可用宽，就把摘要换到标签下一行，两段都拿到可用的整行宽。
- *  不设字号 / 屏幕宽 / 字数 / 百分比阈值；不截断、不省略、不压字。 */
 internal fun cellRowStacks(
     labelWidthPx: Int,
     valueWidthPx: Int,
@@ -1528,15 +1015,6 @@ internal fun cellRowStacks(
     trailingWidthPx: Int,
 ): Boolean = labelWidthPx + valueWidthPx + trailingWidthPx > availableWidthPx
 
-/** 设计稿的 cell 行——label 左、可选的 value + "›" 右，整行可点。
- *
- *  MOB-100：`onClick == null` 的行是**账目**，不是入口——不可点，也不画
- *  「›」。有雪佛龙却点不动比没有雪佛龙更坏，那就是本卡要修的 D3 形状
- *  （有按钮、按钮不做事）换一个地方重演。
- *  #1799：可点行带标准 `role = Role.Button`（TalkBack 报「按钮」）；行高
- *  例外保留——UI-13 评估过 `ListItem`（单行 56dp），比设计稿 52dp 高出
- *  4dp 且整卡变松散，量出的冲突仍在，故继续走 Row + role 的薄语义封装。
- *  #1881：并排放不下时摘要换到标签下一行（判定见 `cellRowStacks`）。 */
 @Composable
 internal fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)? = null, heading: Boolean = false) {
     val measurer = rememberTextMeasurer()
@@ -1554,9 +1032,6 @@ internal fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)
         contentAlignment = Alignment.CenterStart,
     ) {
         val available = constraints.maxWidth
-        // 量的是渲染同一套样式（字号 + 当前字体 + 密度）下的真实单行宽；measurer 随密度变化重建，
-        // 所以大字体切换会重新量。键含 clickable：尾部宽度（箭头 + 间距）随它变，可点性变化要重判
-        // （如「已跳过的照片」行在 commandPending 时 onClick 由回调变 null）。
         val stacked = remember(label, value, available, clickable, measurer, labelStyle, valueStyle, chevronStyle) {
             if (value == null) {
                 false
@@ -1573,12 +1048,10 @@ internal fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)
         }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             if (stacked) {
-                // 放不下：摘要下移成 supporting text（Material 列表条目形态），两段都拿整行宽。
                 Column(Modifier.weight(1f)) {
                     Text(label, fontSize = 15.sp, color = PPColor.Ink)
                     Text(value!!, fontSize = 14.sp, color = PPColor.Ink40)
                 }
-                // 账目行（onClick == null）不画「›」——有雪佛龙却点不动比没有更坏（见 MOB-100）。
                 if (clickable) Text("›", fontSize = 16.sp, color = PPColor.Ink40)
             } else {
                 Text(label, fontSize = 15.sp, color = PPColor.Ink, modifier = Modifier.weight(1f))
@@ -1591,11 +1064,3 @@ internal fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)
         }
     }
 }
-
-/**
- * #1353：「自动备份已停止」状态卡带「去设置」——开关开着、照片权限不全（部分 / 全拒）。
- * #1788 两态口径：空范围缺的是**来源**不是权限，去设置授权也不会添加来源，不出（`hasSelectedAlbum`）；
- * 有可用目录来源（folder-only / 混合）时备份没停，英雄区分支另行处理，这张卡整个不出。开关关着是正常状态，不给。
- */
-internal fun blockedHeroOffersSettings(ruleOn: Boolean, access: MediaAccess, hasSelectedAlbum: Boolean = true): Boolean =
-    ruleOn && access != MediaAccess.FULL && hasSelectedAlbum

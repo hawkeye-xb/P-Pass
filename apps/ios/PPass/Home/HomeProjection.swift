@@ -1,19 +1,8 @@
 import Foundation
 import PPassCore
 
-// 首页（「设置」tab）的裁决——纯函数，逐条移植 Android：
-//   ui/BackupStatus.kt（StatusLine / HeroAction / LastSuccess）
-//   ui/HomeScreen.kt（BackupUiState / HeroRender / 规则 G、S）
-//   backup/ConfirmedStore.kt（BackupTriplet / tripletOf）
-//   backup/flow/FlowUiProjection.kt（backupUiStateOf / flowAllDone / roundOrdinalOf）
-// 两条铁律各有 XCTest 锁死（HomeProjectionTests）：
-//   (a) 待备份 K > 0 时永不说「照片都存好了」；(b) 从未成功（ts ≤ 0）永不渲染日期。
-// 视图只做「裁决 → 颜色 / 文案 key」的映射。
-
-/// 相册授权三档（对位 Android `MediaAccess`；iOS 由 PPassMedia 的授权模型映射而来）。
 enum MediaAccess: Equatable { case full, partial, none }
 
-/// 引擎视图里首页要用的那几项（PPassCore.EngineView 没有公开构造器，假数据源与适配器都填这个）。
 struct EngineSnapshot: Equatable {
     var state: GlobalState = .idle
     var waitReason: WaitReason?
@@ -21,11 +10,9 @@ struct EngineSnapshot: Equatable {
     var doneThisRound: Int = 0
     var currentFileName: String?
     var desktopFreeBytes: Int64?
-    /// 正在传的这一张的字节进度（引擎 CurrentItem）；没有当前项 = nil。
     var currentOrderId: Int64?
     var currentBytesSent: Int64 = 0
     var currentTotalBytes: Int64 = 0
-    /// 正在取原图的这一张（#1092）：文件名、是否从 iCloud 下载、下载进度。与 currentOrderId 不同时有值。
     var fetchingFileName: String?
     var fetchingFromICloud = false
     var fetchingFraction: Double?
@@ -56,23 +43,17 @@ struct EngineSnapshot: Equatable {
     }
 }
 
-/// 首页需要的全部事实（对位 Android `FlowProjection`）。
 struct FlowFacts: Equatable {
-    /// nil = 引擎还没算出待办（英雄区不先说「都存好了」）。
     var view: EngineSnapshot?
     var confirmed: Int64 = 0
     var inScopeTotal: Int64?
     var failed: Int64 = 0
     var unfinished: Int64 = 0
     var lastSuccessAt: Int64 = 0
-    /// 最近一次确认桌面可达（前台心跳写，Android `SentinelStore.lastReachableAt`）；0 = 从未确认。「失联 N 天」的口径。
     var lastReachableAt: Int64 = 0
     var missingSourceUnacknowledged: Int64 = 0
     var skippedByUser: Int64 = 0
-    /// 已「知道了」的源已删除张数（设置卡里的账目行）；未确认的在 missingSourceUnacknowledged。
     var missingSourceAcknowledged: Int64 = 0
-    /// #973：账本计数是否读到了。false = 读库失败，上面的 confirmed / failed / unfinished / lastSuccessAt 等都是占位 0，
-    /// 不是真值——任何「都存好了」「还没成功过」的结论都不许基于它们（对位 Android：读库失败不会变成 0）。
     var countsReadable = true
 
     var state: GlobalState { view?.state ?? .idle }
@@ -80,7 +61,6 @@ struct FlowFacts: Equatable {
     var remaining: Int64? { view.map { Int64($0.pending) } }
     var paused: Bool { state == .paused }
 
-    /// m = n − 待办 − 范围内已跳过，夹在 [0, n]；n 或待办未知时退回 confirmed。
     var done: Int64 {
         guard let n = inScopeTotal, let k = remaining else { return confirmed }
         return min(max(n - k - skippedByUser, 0), n)
@@ -90,7 +70,6 @@ struct FlowFacts: Equatable {
 enum BackupUiState: Equatable {
     case idle, preparing, paused, noAlbums
     case sending(done: Int, total: Int, currentFile: String)
-    /// #1092：这一张的原图正从 iCloud 下载（还没开始传给电脑）。fraction 为下载进度，未知为 nil。
     case fetchingFromICloud(done: Int, total: Int, currentFile: String, fraction: Double?)
     case allSafe(ingested: Int)
     case waiting(WaitReason)
@@ -108,7 +87,6 @@ enum StatusLine: Equatable { case ready, working, pending(Int64), allSafe, noAlb
 enum HeroAction: Equatable { case pause, resume }
 enum HeroRender: Equatable {
     case accessBlocked
-    /// #1811：文件夹还在备份，相册侧未完整授权（给「调整范围」出口）。
     case mixedAlbumIncomplete
     case countsUnreadable, noAlbums, unreadable, unreconciled, triplet
 }
@@ -132,8 +110,6 @@ struct BackupTriplet: Equatable {
 }
 
 enum HomeProjection {
-    /// #1272：「挑几张传」行右侧的进度 / 结果句（与 Android `pickedBatchLine` 同一种拼法）。没挑过、被杀后的批次 = nil
-    /// （被杀后的提示在大卡片里，见 [pickedInterruptedLine]）。
     static func pickedLine(_ batch: PickedBatchSummary?) -> String? {
         guard let batch, !batch.interrupted else { return nil }
         if batch.open > 0 { return L.f("picked_progress", batch.settled + 1, batch.total) }
@@ -145,7 +121,6 @@ enum HomeProjection {
         return line.isEmpty ? nil : line
     }
 
-    /// #1272：进程在传输中被杀，下次打开时大卡片里的一句。数字按实际：「上次挑的 12 张有 3 张没传完，请重新挑选。」
     static func pickedInterruptedLine(_ batch: PickedBatchSummary?) -> String? {
         guard let batch, batch.interrupted, batch.notReached > 0 else { return nil }
         return L.f("picked_interrupted", batch.total, batch.notReached)
@@ -158,7 +133,6 @@ enum HomeProjection {
                       remaining: remaining, skippedByUser: skippedByUser)
     }
 
-    /// 范围从未保存或 n 读不到 → nil（英雄区说「读不到」）。
     static func triplet(_ f: FlowFacts, scopeSaved: Bool) -> BackupTriplet? {
         guard f.countsReadable, scopeSaved, let n = f.inScopeTotal else { return nil }
         return tripletOf(n: n, confirmed: f.done, lastSuccessAt: f.lastSuccessAt, hasFailedNeedsUser: f.failed > 0,
@@ -185,7 +159,6 @@ enum HomeProjection {
 
     private static func idleState(_ f: FlowFacts, noAlbums: Bool) -> BackupUiState {
         if noAlbums { return .noAlbums }
-        // #973：计数读不到时既不能出 Trouble（那是据 0 判断的），更不能出 AllSafe；中性的 idle，由英雄区说「读不到」。
         if !f.countsReadable { return .idle }
         if f.failed > 0 { return .trouble("flow.failed=\(f.failed)") }
         if allDone(f) { return .allSafe(ingested: Int(f.done)) }
@@ -205,7 +178,6 @@ enum HomeProjection {
         return (done, max(max(doneThisRound, 0) + max(pending, 0), done))
     }
 
-    /// 优先级：失败 > 进行中 > 欠账 > 成功 > 就绪。铁律 (a)：K > 0 拦在 AllSafe 之前。
     static func statusLine(_ s: BackupUiState, pendingK: Int64) -> StatusLine {
         switch s {
         case .trouble: return .trouble
@@ -227,7 +199,10 @@ enum HomeProjection {
         return nil
     }
 
-    /// 铁律 (b)：ts ≤ 0 一律 Never，日期分支拿不到 epoch 0。
+    static func heroAction(_ s: BackupUiState, connection: ConnectionState) -> HeroAction? {
+        heroAction(s, pairingLost: connection.needsRepair)
+    }
+
     static func lastSuccess(ts: Int64, now: Int64) -> LastSuccess {
         if ts <= 0 { return .never }
         let mins = (now - ts) / 60_000
@@ -237,30 +212,27 @@ enum HomeProjection {
         return .at(ts)
     }
 
-    /// 规则 H：权限不全 → 引导卡顶替整块数字（MOB-02/MOB-94：不显示任何数，就不可能盖「都存好了」的章）。
-    /// #1811：还有可用来源时（folder-only / 混合里的目录）备份没停——纯目录照常显示进度；混合只把相册侧说成「未完整授权」。
-    /// #1788 评审定案（同判据接线，评审 Cf）：空范围缺的是**来源**不是权限——「自动备份已停止」只给真的选了
-    /// 相册的范围；空范围落到下面的正常分支（`noAlbums` 口径与 Android `heroScopeSavedOf` 一致）。
     static func heroRender(_ access: MediaAccess, _ t: BackupTriplet?, countsReadable: Bool = true, scopeSaved: Bool = true,
                            hasUsableSource: Bool = false, hasSelectedAlbum: Bool = true, mixedAlbumIncomplete: Bool = false) -> HeroRender {
         if access != .full {
             if mixedAlbumIncomplete { return .mixedAlbumIncomplete }
             if !hasUsableSource && hasSelectedAlbum { return .accessBlocked }
         }
-        if !countsReadable { return .countsUnreadable } // #973：账本读失败 ≠ 相册读不到，单独说
-        // 范围从未保存时 triplet 必为 nil，但那不是「读不到」——别把没选相册说成读取失败。
+        if !countsReadable { return .countsUnreadable }
         guard let t else { return scopeSaved ? .unreadable : .noAlbums }
         if t.confirmedRaw > t.n { return .unreconciled }
         return .triplet
     }
 
-    /// 规则 G：主数字为绿，当且仅当五条同时成立。
     static func heroNumberIsSafe(_ access: MediaAccess, _ t: BackupTriplet?, pairingLost: Bool) -> Bool {
         guard access == .full, let t, !pairingLost else { return false }
         return !t.hasFailedNeedsUser && !t.pausedByUser
     }
 
-    /// 规则 S：「照片都存好了」= 规则 G + 不在「对不上」+ 无缺源 + 范围内没有用户跳过的。
+    static func heroNumberIsSafe(_ access: MediaAccess, _ t: BackupTriplet?, connection: ConnectionState) -> Bool {
+        heroNumberIsSafe(access, t, pairingLost: connection.needsRepair)
+    }
+
     static func allSafeTextAllowed(_ access: MediaAccess, _ t: BackupTriplet?, pairingLost: Bool, missingSource: Int64) -> Bool {
         heroNumberIsSafe(access, t, pairingLost: pairingLost)
             && heroRender(access, t) != .unreconciled
@@ -268,7 +240,14 @@ enum HomeProjection {
             && (t?.skippedByUser ?? 0) == 0
     }
 
-    /// 等待原因 → 状态行那句话（Android `waitReasonTextRes`；iOS 新增的两个原因走 iOS 文案）。
+    static func allSafeTextAllowed(_ access: MediaAccess, _ t: BackupTriplet?, connection: ConnectionState, missingSource: Int64) -> Bool {
+        allSafeTextAllowed(access, t, pairingLost: connection.needsRepair, missingSource: missingSource)
+    }
+
+    static func settingsAlert(connection: ConnectionState, hasBackgroundNotice: Bool) -> Bool {
+        connection.needsRepair || hasBackgroundNotice
+    }
+
     static func waitTextKey(_ r: WaitReason) -> String {
         switch r {
         case .notPaired, .disabled: return "state_waiting_disabled"
@@ -290,9 +269,7 @@ enum HomeProjection {
     }
 }
 
-/// 传输行（Android `transferRowOf` / `bytesProgressText` / `transferPaceOf`）。
 enum TransferText {
-    /// 十进制单位；<100 保留一位小数，否则取整；总大小未知 → nil。
     static func bytes(_ sent: Int64, _ total: Int64) -> String? {
         guard total > 0 else { return nil }
         let (div, unit): (Double, String) = total >= 1_000_000_000 ? (1e9, "GB") : total >= 1_000_000 ? (1e6, "MB") : (1e3, "KB")
@@ -304,17 +281,12 @@ enum TransferText {
         return "\(fmt(min(max(sent, 0), total))) / \(fmt(total)) \(unit)"
     }
 
-    /// 字节这么久没动就算「慢」（Android TRANSFER_SLOW_AFTER_MS）。
     static let slowAfterSeconds = 15
 
-    /// 字节已全部发出、在等电脑确认（Android `TransferPace.FINISHING`）。
     static func isFinishing(sent: Int64, total: Int64) -> Bool { total > 0 && sent >= total }
 }
 
-
 extension FlowFacts {
-    /// #973：把账本读取结果并进事实。读失败 = 全部占位 0 + `countsReadable = false`，由上面的投影一律不给完成度结论。
-    /// 成功时 failed / unfinished 的口径同 Android `FlowProjection.facts`（unfinished = pending + transferring + failed）。
     func applying(counts: Result<OrderCounts, Error>) -> FlowFacts {
         var f = self
         switch counts {

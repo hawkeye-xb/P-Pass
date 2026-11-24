@@ -30,6 +30,10 @@ export function isServiceRunning(state) {
   return state === "running";
 }
 
+export function isServiceRecovery(previous, next) {
+  return isServiceRunning(next) && (previous === "unreachable" || previous === "stopped");
+}
+
 /**
  * 首页阻断卡的恢复按钮（10-30 偏离 1）：
  * - `stopped`：用户停的，按钮是「启动后台服务」；

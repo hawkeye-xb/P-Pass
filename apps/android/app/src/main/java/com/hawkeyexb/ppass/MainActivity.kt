@@ -1,14 +1,8 @@
-// T-052: pairing flow — welcome → camera scan → waiting for Allow →
-// joined. Paired phones land on a minimal home (T-055 builds it out).
 package com.hawkeyexb.ppass
 
 import android.Manifest
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -18,14 +12,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
@@ -33,16 +24,14 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import com.hawkeyexb.ppass.ui.FolderBucketUi
-import com.hawkeyexb.ppass.ui.FolderUi
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,241 +40,99 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import com.hawkeyexb.ppass.log.PLog
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.work.WorkManager
+import com.hawkeyexb.ppass.backup.AutoBackupPrefs
+import com.hawkeyexb.ppass.backup.BackgroundBackupState
+import com.hawkeyexb.ppass.backup.BackupHealthPrefs
+import com.hawkeyexb.ppass.backup.BackupScopeStore
+import com.hawkeyexb.ppass.backup.BackupSettings
+import com.hawkeyexb.ppass.backup.BackupUiStateHolder
+import com.hawkeyexb.ppass.backup.DisconnectRuntime
+import com.hawkeyexb.ppass.backup.MediaAccess
+import com.hawkeyexb.ppass.backup.MediaScanner
+import com.hawkeyexb.ppass.backup.OnboardedDesktopsStore
+import com.hawkeyexb.ppass.backup.ScopeRead
+import com.hawkeyexb.ppass.backup.SettingsWriter
+import com.hawkeyexb.ppass.backup.applyDisconnectManifest
+import com.hawkeyexb.ppass.backup.backgroundBackupStateOf
+import com.hawkeyexb.ppass.backup.disableAutoBackup
+import com.hawkeyexb.ppass.backup.enableAutoBackup
+import com.hawkeyexb.ppass.backup.flow.AndroidMediaImporter
+import com.hawkeyexb.ppass.backup.flow.TriggerReason
+import com.hawkeyexb.ppass.backup.flow.clearFlowRuntime
+import com.hawkeyexb.ppass.backup.flow.isOnUnmetered
+import com.hawkeyexb.ppass.backup.flow.requestFlowScopeBackfillAndWake
+import com.hawkeyexb.ppass.backup.flow.requestFlowWake
+import com.hawkeyexb.ppass.backup.flow.requestFlowWakeAfterRepair
+import com.hawkeyexb.ppass.backup.initialScopeTime
+import com.hawkeyexb.ppass.backup.initialSelection
+import com.hawkeyexb.ppass.backup.isKnownDesktop
+import com.hawkeyexb.ppass.backup.rescheduleAutoBackup
+import com.hawkeyexb.ppass.backup.restoreAutoBackupAfterAuthorizationReturned
+import com.hawkeyexb.ppass.backup.restoreAutoBackupAfterRepair
+import com.hawkeyexb.ppass.backup.resumeAfterInterruption
+import com.hawkeyexb.ppass.backup.savePairingOrError
+import com.hawkeyexb.ppass.backup.scheduleAutoBackup
+import com.hawkeyexb.ppass.backup.sinceToSave
+import com.hawkeyexb.ppass.backup.sinceWidened
+import com.hawkeyexb.ppass.backup.suspendAutoBackupUntilAuthorized
+import com.hawkeyexb.ppass.backup.triggerUserPresentBackup
+import com.hawkeyexb.ppass.backup.unregisteredStatePaths
 import com.hawkeyexb.ppass.battery.AndroidBackgroundAuthorizationAdapter
+import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.ForegroundHeartbeat
-import com.hawkeyexb.ppass.ui.IdentityGate
+import com.hawkeyexb.ppass.transport.PairFailure
 import com.hawkeyexb.ppass.transport.PairOutcome
+import com.hawkeyexb.ppass.transport.Pairing
+import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.ProtocolVersionGate
-import com.hawkeyexb.ppass.ui.offersAppUpdate
+import com.hawkeyexb.ppass.transport.bindThenPair
+import com.hawkeyexb.ppass.transport.disconnectAndNotifyInBackground
+import com.hawkeyexb.ppass.transport.pairWithQr
+import com.hawkeyexb.ppass.transport.parsePeerAddrToken
+import com.hawkeyexb.ppass.transport.sendUnpairNoticeOnce
+import com.hawkeyexb.ppass.ui.BucketScreen
+import com.hawkeyexb.ppass.ui.DecisionScreen
+import com.hawkeyexb.ppass.ui.FolderUi
+import com.hawkeyexb.ppass.ui.GuideFacts
+import com.hawkeyexb.ppass.ui.HomeScreen
+import com.hawkeyexb.ppass.ui.IdentityGate
+import com.hawkeyexb.ppass.ui.LoaderTimelineChannel
+import com.hawkeyexb.ppass.ui.NoticeHost
+import com.hawkeyexb.ppass.ui.PPColor
+import com.hawkeyexb.ppass.ui.PPSize
+import com.hawkeyexb.ppass.ui.PPTheme
+import com.hawkeyexb.ppass.ui.PairCodeScreen
+import com.hawkeyexb.ppass.ui.PairStatusScreen
+import com.hawkeyexb.ppass.ui.PhotosGuide
+import com.hawkeyexb.ppass.ui.PhotosScreen
+import com.hawkeyexb.ppass.ui.ScanScreen
+import com.hawkeyexb.ppass.ui.TimelineLoader
+import com.hawkeyexb.ppass.ui.TimelineSubscriptionHolder
+import com.hawkeyexb.ppass.ui.TwoTabs
+import com.hawkeyexb.ppass.ui.UpdateDialog
+import com.hawkeyexb.ppass.ui.WelcomeScreen
 import com.hawkeyexb.ppass.ui.evictPhotoPreviews
+import com.hawkeyexb.ppass.ui.offersAppUpdate
 import com.hawkeyexb.ppass.ui.outdatedTextRes
 import com.hawkeyexb.ppass.ui.pairRefusalDetailRes
 import com.hawkeyexb.ppass.ui.pairRefusalErrorCode
 import com.hawkeyexb.ppass.ui.pairRefusalTitleRes
-import com.hawkeyexb.ppass.transport.PairFailure
-import com.hawkeyexb.ppass.transport.Pairing
-import com.hawkeyexb.ppass.transport.PairingStore
-import com.hawkeyexb.ppass.transport.bindThenPair
-import com.hawkeyexb.ppass.transport.pairWithQr
-import com.hawkeyexb.ppass.backup.BackupScopeStore
-import com.hawkeyexb.ppass.backup.ScopeRead
-import com.hawkeyexb.ppass.backup.initialScopeTime
-import com.hawkeyexb.ppass.backup.showBackgroundBackupOffer
-import com.hawkeyexb.ppass.backup.initialSelection
-import com.hawkeyexb.ppass.backup.sinceToSave
-import com.hawkeyexb.ppass.backup.sinceWidened
-import com.hawkeyexb.ppass.backup.startOfLocalDaySec
-import com.hawkeyexb.ppass.backup.SettingsWriter
-import com.hawkeyexb.ppass.backup.savePairingOrError
-import com.hawkeyexb.ppass.backup.OnboardedDesktopsStore
-import com.hawkeyexb.ppass.backup.isKnownDesktop
-import com.hawkeyexb.ppass.backup.BackupSettings
-import com.hawkeyexb.ppass.backup.MediaScanner
-import com.hawkeyexb.ppass.backup.AutoBackupPrefs
-import com.hawkeyexb.ppass.backup.BackupHealthPrefs
-import com.hawkeyexb.ppass.backup.MediaAccess
-import com.hawkeyexb.ppass.backup.mediaAccessOf
-import com.hawkeyexb.ppass.backup.resumeAfterInterruption
-import com.hawkeyexb.ppass.backup.rescheduleAutoBackup
-import com.hawkeyexb.ppass.backup.scheduleAutoBackup
-import com.hawkeyexb.ppass.backup.disableAutoBackup
-import com.hawkeyexb.ppass.backup.enableAutoBackup
-import com.hawkeyexb.ppass.backup.suspendAutoBackupUntilAuthorized
-import com.hawkeyexb.ppass.backup.restoreAutoBackupAfterRepair
-import com.hawkeyexb.ppass.backup.restoreAutoBackupAfterAuthorizationReturned
-import com.hawkeyexb.ppass.backup.BackgroundBackupState
-import com.hawkeyexb.ppass.backup.backgroundBackupStateOf
-import com.hawkeyexb.ppass.backup.triggerUserPresentBackup
-import com.hawkeyexb.ppass.backup.DisconnectRuntime
-import com.hawkeyexb.ppass.backup.applyDisconnectManifest
-import com.hawkeyexb.ppass.backup.unregisteredStatePaths
-import com.hawkeyexb.ppass.backup.BackupUiStateHolder
-import com.hawkeyexb.ppass.backup.flow.requestFlowScopeBackfillAndWake
-import com.hawkeyexb.ppass.backup.flow.requestFlowWakeAfterRepair
-import com.hawkeyexb.ppass.backup.flow.requestFlowWake
-import com.hawkeyexb.ppass.backup.flow.TriggerReason
-import com.hawkeyexb.ppass.backup.flow.AndroidMediaImporter
-import com.hawkeyexb.ppass.backup.flow.isOnUnmetered
-import com.hawkeyexb.ppass.backup.flow.clearFlowRuntime
-import com.hawkeyexb.ppass.ui.BackupUiState
-import com.hawkeyexb.ppass.ui.HomeScreen
-import com.hawkeyexb.ppass.ui.NoticeHost
-import com.hawkeyexb.ppass.ui.LoaderTimelineChannel
-import com.hawkeyexb.ppass.ui.PhotosScreen
-import com.hawkeyexb.ppass.ui.PhotosGuide
-import com.hawkeyexb.ppass.ui.GuideFacts
 import com.hawkeyexb.ppass.ui.photosGuideOf
 import com.hawkeyexb.ppass.ui.scopeEmptyHintShown
-import com.hawkeyexb.ppass.ui.TimelineLoader
-import com.hawkeyexb.ppass.ui.TimelineSubscriptionHolder
-import com.hawkeyexb.ppass.ui.connectionStateOf
-import com.hawkeyexb.ppass.ui.TwoTabs
-import com.hawkeyexb.ppass.ui.twoTabsBackground
-import com.hawkeyexb.ppass.transport.disconnectAndNotifyInBackground
-import com.hawkeyexb.ppass.transport.sendUnpairNoticeOnce
-import com.hawkeyexb.ppass.transport.parsePeerAddrToken
-import com.hawkeyexb.ppass.ui.PairStatusScreen
-import com.hawkeyexb.ppass.ui.PairCodeScreen
-import com.hawkeyexb.ppass.transport.PairDesktopIdentity
-import com.hawkeyexb.ppass.ui.BucketScreen
 import com.hawkeyexb.ppass.ui.selectedExistingCount
-import com.hawkeyexb.ppass.ui.PPColor
-import com.hawkeyexb.ppass.ui.PPTheme
-import com.hawkeyexb.ppass.ui.PPSize
-import com.hawkeyexb.ppass.ui.ScanScreen
-import com.hawkeyexb.ppass.ui.WelcomeScreen
-import com.hawkeyexb.ppass.ui.DecisionScreen
-import com.hawkeyexb.ppass.ui.UpdateDialog
+import com.hawkeyexb.ppass.ui.twoTabsBackground
 import com.hawkeyexb.ppass.update.UpdateUiController
-import com.hawkeyexb.ppass.update.UpdateUiState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-/** #1118: what the pairing wait screen shows while [pairWithQr] runs: sending the request, then
- *  the code page. Nothing in between asks the user anything. */
-internal sealed class PairPhase {
-    data object Asking : PairPhase()
-    data class Code(val code: String, val desktop: PairDesktopIdentity) : PairPhase()
-}
-
-internal sealed class Screen {
-    data object Welcome : Screen()
-    data object Scan : Screen()
-    // #421：手动输入配对串（不开相机）。拒绝摄像头权限、或欢迎页直接点
-    // 「无法扫码？」都落到这里；返回回 Welcome，不经过会再弹权限的路径。
-    data object ManualPair : Screen()
-    data class Waiting(val qr: String) : Screen()
-    // #1072：offerAppUpdate = 手机版本过旧，按钮换成「检查更新」（应用内更新入口）。
-    // 10-29 文案 B5/B7：bodyRes 为空 = 只有标题（电脑上点了拒绝、扫到的不是配对码）；
-    // B13：errorCode 非空时正文下加一行小字「错误代码：…」。
-    data class Trouble(
-        val titleRes: Int,
-        val bodyRes: Int? = null,
-        val offerAppUpdate: Boolean = false,
-        val errorCode: String? = null,
-    ) : Screen()
-    data class Home(val pairing: Pairing) : Screen()
-    // T6: 相册选择（配对成功直接进这页，或从 Home 的设置区重进）；
-    // M4（全页面状态稿）：配对成功不再停一个要点按钮的 Joined 中间页，
-    // firstTime 记这次是不是 onboarding 首次选范围——#1263 起没有完成页：首次在这页点「开始备份」
-    // 就落盘「连过这台」、唤醒引擎、直接进首页；按钮叫「开始备份」，设置里重选叫「保存」。
-    data class Buckets(val pairing: Pairing, val current: Set<Long>, val firstTime: Boolean) : Screen()
-    // #1321：新电脑 / 首次配对后的决定页——「备份哪些照片」二选一（范围备份 / 单张备份），做完才进照片页。
-    data class Decision(val pairing: Pairing) : Screen()
-}
-
-/**
- * #1321 判断 B：冷启动的首屏。先补记（[com.hawkeyexb.ppass.backup.OnboardedDesktopsStore.initIfAbsent]，进程启动时
- * 已做），再按**记录**判：没做过决定（含决定页被杀）→ 决定页。不看范围——选了单张备份的人有记录、范围为空，
- * 看范围的话他们每次打开都会被拦一次。完整判据 [isKnownDesktop] 只用在配对成功后的分流（[screenAfterPairing]）。
- */
-internal fun launchScreen(pairing: Pairing?, onboarded: (String) -> Boolean): Screen = when {
-    pairing == null -> Screen.Welcome
-    onboarded(pairing.daemonNodeId) -> Screen.Home(pairing)
-    else -> Screen.Decision(pairing)
-}
-
-/**
- * 决定页「处理中」锁（定案：决定开始处理后两个按钮都不可点，直到进照片页或回到决定页）。
- * 点任一按钮先 [tryLock]：锁住时再点不触发第二次；离开决定页或这次处理落空（取消、没登记上、结果丢失、拉不起系统页）就 [unlock]。
- */
-internal class DecisionLock {
-    var busy by mutableStateOf(false)
-        private set
-    fun tryLock(): Boolean {
-        if (busy) return false
-        busy = true
-        return true
-    }
-    fun unlock() { busy = false }
-}
-
-/**
- * UI-18（#355）：配对失效红卡「重新扫码连接」的落点——直达扫码，中间零多余屏。
- * 相机权限被系统收回时先垫 Welcome（系统授权框盖在上面，授权回调落到 Scan；
- * 拒绝则落到手动输入配对串，见 [cameraPermissionResultTarget]）。
- */
-internal fun repairScanTarget(cameraGranted: Boolean): Screen =
-    if (cameraGranted) Screen.Scan else Screen.Welcome
-
-/**
- * #421：摄像头权限请求的落点。拒绝（含「不再询问」后 launch 立即回 false）
- * 直接进手动输入配对串——那条退路本来就是给扫不了码的人的，不能被摄像头
- * 权限挡在后面；也不再追弹一次权限。
- */
-internal fun cameraPermissionResultTarget(granted: Boolean): Screen =
-    if (granted) Screen.Scan else Screen.ManualPair
-
-/**
- * #1119 被拒即清理之后的落点：电脑不认这台手机、本地配对已经删掉——停在这条配对上的页面（首页 / 选相册 / 完成页）
- * 回欢迎页。正在扫码 / 配对中的页面不动（那是用户在建立新配对）；清的不是这一条配对也不动。
- */
-internal fun screenAfterPairingCleared(screen: Screen, clearedPairingId: String): Screen {
-    val shown = when (screen) {
-        is Screen.Home -> screen.pairing.pairingId
-        is Screen.Buckets -> screen.pairing.pairingId
-        is Screen.Decision -> screen.pairing.pairingId
-        else -> return screen
-    }
-    return if (shown == clearedPairingId) Screen.Welcome else screen
-}
-
-/** #1263：onboarding 里独占屏幕的页面（#1321 决定页、首次选范围）——更新对话框不压在上面。 */
-internal fun isOnboardingScreen(screen: Screen): Boolean =
-    screen is Screen.Decision || (screen is Screen.Buckets && screen.firstTime)
-
-/**
- * #1864：单次传输入口的入队协调（首页相册、首页文件、决定页三处共用）。用户确实选了东西（[uriCount] > 0）
- * 而 [enqueue] 抛异常或一个都没登记上时，不碰原状态（不清理、不刷新汇总、不唤醒传输循环），改由
- * [notifyFailure] 给出既有的 [R.string.command_failed] 提示，不让「选了却什么都没发生」；取消选择
- * （空列表）按取消处理，不报错。返回是否登记成功，调用方据此决定要不要继续走成功路径。
- */
-internal fun runPickedEnqueue(
-    uriCount: Int,
-    enqueue: () -> Int,
-    onSuccess: () -> Unit,
-    onFailure: (Throwable?) -> Unit,
-    notifyFailure: (Int) -> Unit,
-): Boolean {
-    if (uriCount <= 0) return false
-    val added = try {
-        enqueue()
-    } catch (t: Throwable) {
-        onFailure(t)
-        notifyFailure(R.string.command_failed)
-        return false
-    }
-    if (added <= 0) {
-        onFailure(null)
-        notifyFailure(R.string.command_failed)
-        return false
-    }
-    onSuccess()
-    return true
-}
-
-/**
- * #1263：「只备份某天起的照片」那一档一律写日期（10-29 文案定稿）：没存过 → 今天（保存时落的就是今天 0 点，见
- * [sinceToSave]）；存过 → 存的那一天。几天以后看也还是那一天，不会说成「从今天起」。
- */
-internal fun scopeSinceDate(sinceSec: Long?, nowMs: Long): String {
-    val sec = sinceSec ?: startOfLocalDaySec(nowMs)
-    val date = java.time.Instant.ofEpochSecond(sec).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
-    val pattern = android.text.format.DateFormat.getBestDateTimePattern(java.util.Locale.getDefault(), "MMMd")
-    return java.time.format.DateTimeFormatter.ofPattern(pattern).format(date)
-}
-
-/** 选范围页的选项文字：「10月29日起的照片」。 */
 internal fun scopeSinceOptionLabel(context: Context, sinceSec: Long?, nowMs: Long = System.currentTimeMillis()): String =
     context.getString(R.string.scope_time_since_date, scopeSinceDate(sinceSec, nowMs))
 
-/** 设置行「备份哪些照片」的值：[sinceSec] 为空 = 含以前的照片；否则「10月29日起的照片」（英文比选项短）。 */
 internal fun scopeValueLabel(context: Context, sinceSec: Long?, nowMs: Long = System.currentTimeMillis()): String =
     if (sinceSec == null) {
         ""
@@ -293,23 +140,10 @@ internal fun scopeValueLabel(context: Context, sinceSec: Long?, nowMs: Long = Sy
         context.getString(R.string.scope_value_since, scopeSinceDate(sinceSec, nowMs))
     }
 
-/** System back for secondary app screens; null leaves the root gesture to Android. */
-internal fun systemBackTarget(screen: Screen): Screen? = when (screen) {
-    // #1321：决定页是必经步骤，返回不能绕过它（交给系统，退到桌面）。
-    Screen.Welcome, is Screen.Home, is Screen.Decision -> null
-    Screen.Scan, Screen.ManualPair -> Screen.Welcome
-    is Screen.Waiting, is Screen.Trouble -> Screen.Scan
-    // #1321：首次选范围是从决定页进来的，返回回决定页——还没做决定，不能进照片页。
-    is Screen.Buckets -> if (screen.firstTime) Screen.Decision(screen.pairing) else Screen.Home(screen.pairing)
-}
-
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // MOB-01: 统一 edge-to-edge——API 35+ 默认强制，低版本主动
-        // 开启后行为一致；各屏内容安全区由 PPScreen 一处处理。
         enableEdgeToEdge()
-        // 根部主题：M3 组件的默认色全部从 PPColor 取，不落到 M3 基线紫（见 ui/Theme.kt）。
         setContent { PPTheme { IdentityGate((application as PPassApplication).identity) { PPassApp() } } }
     }
 }
@@ -317,29 +151,13 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun PPassApp() {
     val context = LocalContext.current
-    // UPD-01: 下载安装是 suspend（IO 线程下载）——按钮 onClick 从协程调。
     val scope = rememberCoroutineScope()
-    // UI-12 追加（2026-09-15，用户拍板）：后台备份"去处理"的短暂反馈用
-    // Snackbar——这是本代码库第一个"转瞬即逝、非持久"的反馈机制（此前
-    // 所有反馈都是改一个持久状态、界面自己重组合）。只覆盖两条真实存在
-    // 的信号：①点击发起重挂监听的确认（"正在重新连接…"，无失败态——
-    // WorkManager 入队不会抛错，真失败已由 Trouble 状态/系统通知覆盖）；
-    // ②系统授权弹窗的结果回调（同意/拒绝，各一句文案）。
-    // #1864：单次传输入队失败也是真实存在的失败信号（写盘/数据库出错），
-    // 复用同一个提示出口；宿主放在最外层，首页与决定页都能看到。
     val snackbarHostState = remember { SnackbarHostState() }
-    // #1272 挑几张传：系统照片选择器（不需要照片权限）。选完登记成一批手选订单，叫醒传输循环；
-    // 进度 / 结果每秒读一次手选表（只在有未结束的或刚结束时变）。
     var pickedBatch by remember { mutableStateOf<com.hawkeyexb.ppass.backup.picked.PickedBatchSummary?>(null) }
     val pickPhotosLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(com.hawkeyexb.ppass.backup.picked.PickedUploads.MAX_PICK),
     ) { uris ->
         scope.launch(Dispatchers.IO) {
-            // #1789（#1784）：已结束记录随下一次选择清理。评审 AP：清理放在**登记成功之后**——
-            // 先清再登记时，若登记失败，未结束批次里已结算的行已被删掉且无法恢复；登记成功后再清，
-            // 新批已在队列里顶替旧状态，失败时原状态原样保留。
-            // #1864：登记失败不再静默——走 [runPickedEnqueue] 弹既有 command_failed 提示；
-            // 取消选择（空列表）不报错。
             runPickedEnqueue(
                 uriCount = uris.size,
                 enqueue = { com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris) },
@@ -354,19 +172,13 @@ fun PPassApp() {
             )
         }
     }
-    // #1789「从文件选择」：SAF 系统文件选择器（SingleTransferFilePicker.intent：图片/视频、可多选）。
-    // 结果只走既有 Picked 队列（登记、URI 授权、去重沿用 #1786/#1840 链路），不授目录、不进备份范围；
-    // 取消（resultCode 不是 RESULT_OK 或没有 URI）不建任务。已结束记录同样随下一次选择清理。
     val filePickLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
-        // 评审：解析复用 [SingleTransferFilePicker.urisFromResult]——SAF 多选装 clipData、单选落 data 的边界只写一处。
         val uris = if (result.resultCode == android.app.Activity.RESULT_OK) {
             com.hawkeyexb.ppass.ui.SingleTransferFilePicker.urisFromResult(result.data)
         } else emptyList()
         scope.launch(Dispatchers.IO) {
-            // 评审 AP：清理同样放在登记成功之后（相册入口同一理由）。
-            // #1864：与相册入口共用 [runPickedEnqueue] 的失败反馈，登记失败弹提示、不静默。
             runPickedEnqueue(
                 uriCount = uris.size,
                 enqueue = { com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris) },
@@ -387,7 +199,6 @@ fun PPassApp() {
             kotlinx.coroutines.delay(1000)
         }
     }
-    // #1020：设置写盘的唯一 UI 边界——写失败不崩溃，记日志 + 一过性提示，显示值由调用方从盘上重读。
     val settingsWriter = remember {
         SettingsWriter { res -> scope.launch { snackbarHostState.showSnackbar(context.getString(res)) } }
     }
@@ -396,12 +207,9 @@ fun PPassApp() {
     val pairings = remember { PairingStore(context.filesDir) }
     val client = remember { app.daemonClient }
 
-    // #1321 判断 B：补记已在进程启动时做过（PPassApplication），这里只按记录判首屏。
     var screen by remember {
         mutableStateOf(launchScreen(pairings.load(), OnboardedDesktopsStore(context.filesDir)::wasOnboarded))
     }
-    // #1219 V4：被拒即清理多半发生在后台，没有界面；落盘的「待说明」在用户下次看到 App 时弹一次。
-    // 已经重新配对的不再说明（顺手清掉）。
     val removedNotice = remember { com.hawkeyexb.ppass.backup.PairingRemovedNoticeStore(context.filesDir) }
     fun removedNoticeDue(): Boolean {
         if (!removedNotice.pending()) return false
@@ -412,7 +220,6 @@ fun PPassApp() {
         return true
     }
     var showRemovedNotice by remember { mutableStateOf(removedNoticeDue()) }
-    // #1119：电脑不认这台手机（被拒即清理，在 Application 里执行）→ 界面回欢迎页，并说明一次（#1219 V4）。
     LaunchedEffect(Unit) {
         app.pairingRejectionCleanup.clearedPairingId.collect { cleared ->
             if (cleared != null) {
@@ -421,85 +228,29 @@ fun PPassApp() {
             }
         }
     }
-    // MOB-03: 媒体权限被拒 → 人话引导（不崩不白屏，说清为什么需要）。
-    // #1272：照片权限被拒不再弹对话框，改成「自动备份」开关下方一行小字。
     var ruleHintRes by remember { mutableStateOf<Int?>(null) }
-    // MOB-02 §二: 部分授权态（API 34+「部分照片」）——ON_RESUME 一起刷新
-    // （用户去系统设置改完全授权返回后引导卡消失）；bucketAlbumPermission
-    // 回调里也会即时重读。声明提前：launcher 回调需要引用。
-    // MOB-94: 三档，不是布尔。全拒那一档此前落进了「正常」分支，
-    // 首页因此显示「0 / 0 张已回家 · 照片都存好了」。
     var mediaAccess by remember { mutableStateOf(mediaAccess(context)) }
-    // #1788：范围页相册提示的动作分流——系统还肯不肯为相册权限弹框（rationale）。
-    // ON_RESUME（去设置回来）与页内申请返回（被锁时点了也不弹）都要重读。
     var albumAccessCanPrompt by remember { mutableStateOf(canPromptForFullMediaAccess(context)) }
-    // #843：读得到照片的拍摄地点吗（ACCESS_MEDIA_LOCATION）。读不到时照常备份，首页挂提示；回到前台重读。
     var mediaLocation by remember { mutableStateOf(AndroidMediaImporter.canReadMediaLocation(context)) }
     val locationPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
-        // 系统不再弹窗（之前拒过且不让再问）时请求直接返回拒绝：只剩应用详情页能开。
         val activity = context as? android.app.Activity
         if (!granted && activity != null &&
             !activity.shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_MEDIA_LOCATION)
         ) openAppDetailsSettings(context)
     }
-    // #836：每次回到前台 +1。App 外发生的变化（例如在相册 App 里删掉已选相册）要在用户切回来时重算，
-    // composition 存活期间只靠进入时算一次的 LaunchedEffect 接不住。
     var resumeCount by remember { mutableStateOf(0) }
-    // #413：「将在连上 Wi-Fi 后进行」由引擎的等待原因（WIFI）给出，这里不再另存一份排队状态。
-    // Home 内 Photos/设置 tab——提到顶层是因为 Screen.Buckets 是独立的
-    // 顶层 Screen，从相册选择页返回时 `is Screen.Home ->` 分支会整个
-    // 重新进入组合，若这个变量还留在分支内部的 remember 里就会被重置回
-    // 0（Photos），导致「从选相册页回退后莫名跳去照片 tab」（用户实机
-    // 反馈的 history stack 错乱）。提到这里后跨 Screen 切换也不丢。
-    var tab by remember { mutableStateOf(0) } // 0=Photos 1=Backup
-    // Paired phones: periodic backup + content trigger stay scheduled
-    // (idempotent KEEP) and every app-open runs one catch-up — BUT only
-    // if the last success is older than 24h (MOB-02 事件④, user-present
-    // tier). UX-06: 全局暂停态下两者都不跑（重开 App 不自动恢复，
-    // 直到用户恢复开关）。
-    // MOB-14: 打开 App 无条件补跑一次（原来卡 24h 门槛，导致通知丢失只能
-    // 干等周期兜底，而用户开 App 的意图正是"看照片到家没有"）。
-    //
-    // MOB-18 已撤（2026-08-19 用户拍板 pending）：这里曾先查一次调度是否
-    // 被 force-stop 清空、清空则只提示不恢复。撤掉的原因是那个语义做不到
-    // ——WorkManager 的 ForceStopRunnable 跑在 androidx.startup 的
-    // ContentProvider 里，**比 Application.onCreate 还早**，它自己就把所有
-    // work 重排了，应用层拦不住。留着只会显示一条"点了才恢复"却其实早已
-    // 自愈的假提示。出处：已退役卡片 MOB-18（git 历史 8917fa05 可查）。
-    // MOB-28: 检测到监听被外力清过、用户还没点「恢复」时，**这里不许重挂**。
-    // 这条路径是"打开 App 就悄悄恢复"的那个漏子——用户实测原话："还是没有
-    // 提示，强行停止立即就恢复了。" 闸门必须同时立在 Application 的对账
-    // 和这里，缺一处就等于没有。
+    var tab by remember { mutableStateOf(0) }
     var backupInterrupted by remember {
         mutableStateOf(BackupHealthPrefs(context.filesDir).load().interruptedUnacknowledged)
     }
-    // MOB-35（2026-08-25 真机）：`backupInterrupted` 只该挡**重挂后台监听**，
-    // 不该挡**用户在前台的补捞**。原来一个 `return` 把两件事一起挡了，于是
-    // force-stop 之后即使 App 摆在眼前也一张不传（实测：停止期间拍照 → 重开
-    // App 放前台 → 轮询 90 秒零上传）。
-    //
-    // 用户定调（2026-08-25）："重新启动之后，我依旧没有启动后台是合理的，但是
-    // 前台情况下，都无法上传，是不是不合理呢？" 给的状态模型是：**前台 = 人在
-    // 场 = 该传**。用户打开 App 本身就是意思表示，而且他看得见进度——不存在
-    // MOB-28 要防的那种"自作主张"。MOB-28 防的是"背着用户把后台监听装回去"。
-    // MOB-38: 「回到前台该做什么」只写一份——`LaunchedEffect`（首次进入组合）
-    // 与 `ON_RESUME`（每次切回来）都调它。
-    //
-    // ⚠️ 提成函数不是为了少打字，是为了**让「漏接一处」变得不可能**。两处各写
-    // 一遍门控的话，下次改其中一条（比如再加一个「暂停中不补」的条件）就又会
-    // 漏——MOB-33/34/35/38 四个 bug 全是这个形状。
     val foregroundCatchup = {
         if (pairings.load() != null) {
             if (AutoBackupPrefs(context.filesDir).enabled()) {
-                // 后台监听：只在后台备份开着时挂；中断待确认时不许重挂（MOB-28 红线，唯一入口是
-                // resumeAfterInterruption）。
                 if (!backupInterrupted) scheduleAutoBackup(context)
             }
-            // 前台补捞：无条件跑。人在场就该传（MOB-35 的定调）。#1263：后台备份默认关之后，这一条不再挂在
-            // 后台开关上——关着后台备份的用户打开 App 也照样传（首页「开启后台备份」卡片说的就是这个区别）。
             triggerUserPresentBackup(context)
         }
     }
@@ -509,39 +260,26 @@ fun PPassApp() {
         ActivityResultContracts.RequestPermission()
     ) { granted -> screen = cameraPermissionResultTarget(granted) }
 
-    // #1794: 范围页的相册权限在页内申请（对齐 iOS：范围页始终能进，没有相册权限也能管理文件夹）。
-    // 回调只按真实权限刷新，不离开范围页——拒绝后文件夹与「添加文件夹」照常可用。
     val bucketAlbumPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
         mediaAccess = mediaAccess(context)
         mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
-        // #1788：被锁时点了也不弹框——按发射记录与最新 rationale 把页内动作换成「去设置」。
         albumAccessCanPrompt = canPromptForFullMediaAccess(context)
         PLog.i("PPassFlow", "scope: photo access after prompt=$mediaAccess")
     }
-    // #1788：相册权限的申请口共用这一个发射口——发射成功先记「本机申请过一次」。
-    // rationale 把「从没申请过」与「被永久拒绝」都读成 false，只有自己的发射记录分得开；
-    // 漏接一个申请口，从那里进来的用户就会被误判（单张备份出口不弹权限框，自然也不记）。
     val launchAlbumAccessPrompt: (androidx.activity.result.ActivityResultLauncher<Array<String>>, Array<String>) -> Unit =
         { launcher, permissions ->
             launcher.launch(permissions)
             com.hawkeyexb.ppass.backup.AlbumAccessPromptPrefs(context).markRequested()
         }
 
-    // UPD-02: 更新状态机——检查/下载/校验/安装/回执全链状态在
-    // UpdateUiController 一处汇合，这里只接线：触发节点 1（冷启动，下方
-    // LaunchedEffect）+ 节点 2（ON_RESUME，挂进既有生命周期观察器），
-    // 两个节点共用 6h 节流门（GitHub 匿名限流下的硬约束）；手动检查走
-    // 设置行「检查更新」（onCheckRowClick），不受门限。
     val updateController = remember {
         UpdateUiController(context, scope, BuildConfig.VERSION_NAME)
     }
     val updateState by updateController.state.collectAsState()
     val updateDialogSuppressed by updateController.dialogSuppressed.collectAsState()
     LaunchedEffect(Unit) { updateController.onColdStart() }
-    // Snackbar 级一过性反馈（已是最新 / 检查失败）——
-    // 与 UI-12 的「只报能诚实上报的信号」同一条规矩。
     LaunchedEffect(Unit) {
         updateController.notices.collect { notice ->
             snackbarHostState.showSnackbar(
@@ -553,9 +291,6 @@ fun PPassApp() {
             )
         }
     }
-    // onboarding 里的首次选范围独占屏幕；更新可以等用户完成
-    // onboarding 后再说，绝不压在系统权限框上。「后台下载」收起的对话框
-    // （dialogSuppressed）不渲染，设置行点击可重新打开。
     if (!isOnboardingScreen(screen) && !updateDialogSuppressed) {
         UpdateDialog(
             state = updateState,
@@ -569,7 +304,6 @@ fun PPassApp() {
         )
     }
 
-    // #1219 V4：电脑不再认这台手机——说明一次：照片都还在手机上，重新扫码就会继续备份。
     if (showRemovedNotice) {
         val acknowledge = {
             removedNotice.clear()
@@ -585,25 +319,16 @@ fun PPassApp() {
         )
     }
 
-    // DOG-02: 电池白名单状态——ON_RESUME 刷新（从系统设置返回立即更新，
-    // 加白后卡片消失；拒绝授权时保持卡片）
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     val backgroundAuthorization = remember { AndroidBackgroundAuthorizationAdapter(context) }
     var batteryWhitelisted by remember { mutableStateOf(backgroundAuthorization.isGranted()) }
 
-    // 设计稿"失联多少天"——复用 SENT-01 既有的 SentinelStore（不是新
-    // 造的判定），距上次确认可达的天数；从未确认可达过（lastReachableAt
-    // <= 0）时为 null，调用方（PhotosScreen）走不编造天数的兜底文案。
     fun computeDaysUnreachable(): Int? {
         val last = com.hawkeyexb.ppass.backup.SentinelStore(context.filesDir).load().lastReachableAt
         if (last <= 0) return null
         return ((System.currentTimeMillis() - last) / (24 * 60 * 60 * 1000L)).toInt()
     }
     var daysUnreachable by remember { mutableStateOf(computeDaysUnreachable()) }
-    // SYNC-06: 订阅连接生命周期跟心跳对齐——ON_RESUME 起 / ON_STOP 停，
-    // App 前台期间不管显示哪个 tab 都保持订阅（脱钩 tab 切换，旧实现
-    // 绑在 PhotosScreen 组合可见性上，切设置 tab 就断）。只有退后台/
-    // 锁屏/进程被杀才断开；回前台重建并整页刷新补齐错过的变化。
     val timeline = remember {
         TimelineSubscriptionHolder(
             scope = scope,
@@ -618,19 +343,13 @@ fun PPassApp() {
             log = { PLog.i("PPassTimeline", it) },
         )
     }
-    // PRES-01: 前台轻心跳——ON_RESUME 起、ON_STOP 停（退后台绝不心跳，
-    // 耗电红线）；app 在前台时 daemon 每 ~30s 收到一次 hello，桌面设备行
-    // 才显示「在线」而不是「离线」（锁屏 ≠ 离开）。
     val heartbeat = remember {
         ForegroundHeartbeat(
             client, pairings, scope, com.hawkeyexb.ppass.backup.SentinelStore(context.filesDir),
-            // #439: 桌面回来了，人就在 App 里——不等 10 分钟的探测。
-            // #474: 同一个信号也交给照片 tab 的订阅——退避耗尽后桌面回来了，不用手点「重试」。
             onReachable = {
                 com.hawkeyexb.ppass.backup.flow.onFlowDesktopReachable(context)
                 timeline.onDesktopReachable()
             },
-            // #466: 打开 App 就能发现「电脑端已移除这台手机」，不用等下一张新照片。
             onPairingLost = { pid, failure ->
                 com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss.record(
                     com.hawkeyexb.ppass.backup.flow.PairingId(pid), failure,
@@ -643,10 +362,6 @@ fun PPassApp() {
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
                     batteryWhitelisted = backgroundAuthorization.isGranted()
-                    // #540：白名单是前提、意图是真相源。用户在系统设置里把白名单加回来，回到 App 时
-                    // 没有任何开关动作会经过这里——前提重新满足就按意图把生产者排回去。必须同步跑、
-                    // 排在 foregroundCatchup() 之前：它门控在 enabled() 上，晚一拍这次补捞就白跳过了。
-                    // #1039：主线程上的后台写者——写不下来只记日志（没有用户操作在等），下次回到前台再试。
                     if (batteryWhitelisted) {
                         settingsWriter.quiet("autoBackup", "restore on resume") {
                             restoreAutoBackupAfterAuthorizationReturned(context, backgroundAuthorized = true, source = "resume")
@@ -656,36 +371,13 @@ fun PPassApp() {
                     daysUnreachable = computeDaysUnreachable()
                     val accessBefore = mediaAccess
                     mediaAccess = mediaAccess(context)
-                    // #1353：从系统设置改完权限回来，按真实权限现算；变了就记一行（回来读到 FULL = 状态卡消失、自动备份恢复）。
                     if (mediaAccess != accessBefore) PLog.i("PPassFlow", "photo access on resume: $accessBefore -> $mediaAccess")
                     mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
-                    // #1788：去系统设置的相册页回来，rationale 可能翻面——范围页动作按真实状态重算。
                     albumAccessCanPrompt = canPromptForFullMediaAccess(context)
                     resumeCount++
                     heartbeat.start()
                     timeline.start()
-                    // MOB-38（2026-08-26 真机）：**每次回到前台都补捞一次。**
-                    //
-                    // 在此之前补捞只挂在 `LaunchedEffect(backupInterrupted)` 上，
-                    // 那个键只有一个 → composition 存活期间只跑一次。Activity 走
-                    // STOPPED → RESUMED（从 App 切去相机、拍照、再切回来）**不会**
-                    // 让它重跑，composition 本身没被销毁。于是用户人就在 App 里
-                    // 看着、期待它传，而那一刻没有任何补捞被发起——如果内容监听
-                    // 那次也没接住（被 OEM 清过、防抖窗口边界、force-stop 之后
-                    // 还没恢复），这张照片只能等 5h 周期兜底。
-                    //
-                    // 验收人原话：「在前台，一张照片很久也没有同步。……从我们
-                    // app 切换到相机，这样就不算前台了吗？我记得咱们针对不同的
-                    // app 状态有过讨论的啊。」——讨论过、也做了，上面那四行刷新
-                    // 就是；**唯独备份补捞漏了**。
-                    //
-                    // 为什么放心「每次 resume 都补」：MOB-33 的 `backupInFlight`
-                    // 互斥门在管线入口，重复触发的代价降到一次 CAS（抢不到就
-                    // 早退）。在 MOB-33 之前这么做会造出一串并行备份——那正是
-                    // MOB-33 的原症状。
                     foregroundCatchup()
-                    // UPD-02 节点 2：回到前台顺手查一次更新（6h 节流门在
-                    // controller 内，未过门直接早退，成本一次时间比较）。
                     updateController.onResume()
                 }
                 Lifecycle.Event.ON_STOP -> {
@@ -703,30 +395,11 @@ fun PPassApp() {
         }
     }
 
-    // MOB-03: 进相册选择页的完整权限链（Home「选择备份的相册」与配对
-    // 成功→直接选相册共用）——未授权 → 直接弹系统权限请求（#1259：不加说明屏）；
-    // 完整授权或只给了部分 → 选范围页（部分时页顶说明一行）；拒绝 → Home + 人话对话框。备份主流程的入口，任何分支都
-    // 不许白屏。
-    /**
-     * 这台电脑以前连过吗——**在这台手机上走完过 onboarding，且这台桌面的
-     * 相册范围还在，就算连过。**
-     *
-     * MOB-114（#455）：原判据是 `flow-state/<id>/discovery-ledger.json` 在不在；
-     * #413 的迁移删了整个 `flow-state/` 且之后没人再写，判据恒为 false，连回
-     * 同一台电脑被当成新电脑。新判据用 [OnboardedDesktopsStore]——断开、配对
-     * 失效、换台再换回都不清它（为什么不用 order 表 / pairing.json 等见该类）。
-     *
-     * MOB-92：范围也必须按**这台**桌面问。此前读的是全局那一份，于是
-     * 「macOS → Windows → 回 macOS」时它非空（是给 Windows 选的那 2 个），
-     * 直接回首页、用着错的范围开始备份，用户连重选的机会都没有。
-     */
     fun hasExistingLedgerFor(pairing: Pairing): Boolean =
         isKnownDesktop(OnboardedDesktopsStore(context.filesDir), pairing.daemonNodeId) {
             BackupScopeStore(context, pairing.daemonNodeId).selectedBucketIds()?.isNotEmpty() == true
         }
 
-    // #1794：范围页始终能进——没有相册权限也直接进（对齐 iOS），相册区在页内说明现状并给申请入口，
-    // 文件夹区与「添加文件夹」照常可用；相册权限只在用户点页内申请入口时才申请。
     fun enterBucketPicker(pairing: Pairing, firstTime: Boolean) {
         screen = Screen.Buckets(
             pairing,
@@ -735,14 +408,9 @@ fun PPassApp() {
         )
     }
 
-    // #1272/#1794：「自动备份」规则开关。按范围实际需不需要相册判断：没有有效来源 → 先进选范围页选来源；
-    // 只有文件夹来源 → 直接开，不申请相册权限；范围含相册才走权限（全部 → 开；有限访问 → 开关不开、把允许的
-    // 照片按手选链路传一次；不允许 → 开关不开、开关下方一行小字）。
     val rulePrefs = remember { com.hawkeyexb.ppass.backup.autoBackupRulePrefs(context) }
     var ruleOn by remember { mutableStateOf(runCatching { rulePrefs.enabled() }.getOrDefault(false)) }
     var pendingRulePairing by remember { mutableStateOf<Pairing?>(null) }
-    // 开自动备份时拿到的照片权限档 → 结果：全部 → 开、进选范围页；部分 → 开关不开，把允许的照片按手选链路传一次
-    // （不弹提示：弹出时照片还没传，进度看设置页）；拒绝 → 开关不开、开关下方一行小字。
     val applyRuleAccess: (Pairing?, MediaAccess) -> Unit = { pairing, access ->
         when (access) {
             MediaAccess.FULL -> if (pairing != null) {
@@ -770,10 +438,7 @@ fun PPassApp() {
             else -> ruleHintRes = R.string.auto_backup_rule_denied_hint
         }
     }
-    // #1353：部分权限下开自动备份、系统已不再弹框（拒过两次被锁）→ 去本 App 的系统设置页，回到前台按真实权限现算（同 iOS）。
-    // 不预写开关；只记「去了设置、回来要接着走」（Activity 重建也保留）。
     var ruleAwaitingSettings by rememberSaveable { mutableStateOf(false) }
-    // 从系统设置回来（ON_RESUME 推进 resumeCount、先重读了 mediaAccess）：按真实权限接着走，只接一次。
     LaunchedEffect(resumeCount) {
         if (!ruleAwaitingSettings) return@LaunchedEffect
         ruleAwaitingSettings = false
@@ -798,8 +463,6 @@ fun PPassApp() {
             val routeFolderCount = com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().size
             when (ruleEnableRoute(mediaAccess(context), canPromptForFullMediaAccess(context), routeScope, routeFolderCount)) {
                 RuleEnableRoute.ChooseScope -> {
-                    // #1794：没有有效来源时先打开规则开关，再进范围页让用户选（不跳系统设置，也不先要相册权限）。
-                    // 范围页以 firstTime=false 打开、保存分支不会替用户开开关，所以必须先在这里落开关，否则保存回来仍是关的。
                     PLog.i("PPassFlow", "auto-rule: no effective scope, enabling rule then opening scope page to choose sources")
                     rulePrefs.set(true)
                     ruleOn = true
@@ -819,8 +482,6 @@ fun PPassApp() {
             }
         }
     }
-    // #1321：决定页的两个出口。「连过这台」在这里落盘——范围保存成功（选范围页 firstTime），或单张选完登记成功；
-    // 配对成功本身不落盘。记不下来不挡进照片页、提示（#1039 同口径）：后果只是下次重开仍回决定页（偏安全的一侧）。
     val markDecided: (Pairing, String) -> Unit = { pairing, how ->
         if (settingsWriter.write("onboarded", pairing.daemonNodeId.take(8)) {
                 OnboardedDesktopsStore(context.filesDir).markOnboarded(pairing.daemonNodeId)
@@ -829,10 +490,8 @@ fun PPassApp() {
             PLog.i("PPassFlow", "onboarding: marked onboarded via=$how desktop=${pairing.daemonNodeId.take(8)}")
         }
     }
-    // 决定页处理中锁：离开决定页（进照片页 / 选范围页）一律解锁；留在决定页的出口在各自分支里解锁。
     val decisionLock = remember { DecisionLock() }
     LaunchedEffect(screen) { if (screen !is Screen.Decision) decisionLock.unlock() }
-    // 单张备份：系统选图（不要照片权限）。选完登记成一批手选订单才算做了决定；取消 = 还在决定页。
     var decisionPickPairing by remember { mutableStateOf<Pairing?>(null) }
     val decisionPickLauncherResult: (List<android.net.Uri>) -> Unit = handlePick@{ uris ->
         val pairing = decisionPickPairing
@@ -843,7 +502,6 @@ fun PPassApp() {
             return@handlePick
         }
         scope.launch {
-            // #1864：登记失败走 [runPickedEnqueue]——弹既有 command_failed 提示后，按钮解锁、留在决定页重试。
             val registered = withContext(Dispatchers.IO) {
                 runPickedEnqueue(
                     uriCount = uris.size,
@@ -887,7 +545,6 @@ fun PPassApp() {
     val launchDecisionPick: (Pairing) -> Unit = { pairing ->
         decisionPickPairing = pairing
         runCatching {
-            // #1840：单次入口只收图片与视频（产品口径 2026-11-17）。
             decisionPickLauncher.launch(
                 androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
             )
@@ -897,7 +554,6 @@ fun PPassApp() {
             decisionLock.unlock()
         }
     }
-    // #1902：权限只在范围页主动申请，决定页先持久化规则。
     val onDecisionChooseScope: (Pairing) -> Unit = { pairing ->
         if (settingsWriter.write("autoRule", true) { rulePrefs.set(true) }) {
             ruleOn = true
@@ -928,8 +584,6 @@ fun PPassApp() {
             onManual = { screen = Screen.ManualPair },
         )
 
-        // #421：Waiting / Trouble 返回或「重新扫码」都回 Scan；没有摄像头权限
-        // （走手动串过来的）就以手动页起步，不开相机、也不弹权限。
         is Screen.Scan -> ScanScreen(
             onQr = { qr -> screen = Screen.Waiting(qr) },
             onCancel = { screen = Screen.Welcome },
@@ -944,10 +598,8 @@ fun PPassApp() {
         )
 
         is Screen.Waiting -> {
-            // #1118: sending the request → code page (with the computer's name and identity).
             var phase by remember(s.qr) { mutableStateOf<PairPhase>(PairPhase.Asking) }
             when (val ph = phase) {
-                // 10-29 文案 B8：等待页只有标题和转圈。
                 PairPhase.Asking -> PairStatusScreen(
                     title = androidx.compose.ui.res.stringResource(R.string.pair_waiting_title),
                     body = null,
@@ -963,9 +615,6 @@ fun PPassApp() {
                 )
             }
             LaunchedEffect(s.qr) {
-                // Every throw (missing native lib, NET-28 bind timeout, …)
-                // becomes Failed inside bindThenPair — never a crash, never
-                // an endless wait (bind is bounded inside DaemonClient).
                 val outcome = bindThenPair(
                     bind = { client.bind(identity.secretKey()) },
                     pair = {
@@ -973,55 +622,23 @@ fun PPassApp() {
                             client,
                             s.qr,
                             deviceName(context),
-                            // Shown only after the request was queued (PairSubmitted); never logged here.
                             onCode = { code, desktop, _ -> phase = PairPhase.Code(code, desktop) },
                             storageDeviceNameFallback = context.getString(R.string.storage_device_default),
                             knownDesktop = { OnboardedDesktopsStore(context.filesDir).wasOnboarded(it) },
                         )
                     },
                 )
-                // The user may have cancelled while we waited — a stale
-                // result must not yank them out of another screen.
                 if (screen != s) return@LaunchedEffect
                 when (outcome) {
                     is PairOutcome.Joined -> {
-                        // #1039（对位 iOS #969）：写盘成功才算配对成功——存不下来就进配对失败页让用户清出空间后重扫，
-                        // 不进重启即丢的「已配对」，也不崩。
                         val saveError = savePairingOrError { pairings.save(outcome.pairing) }
                         if (saveError != null) {
-                            // #1264：原文只进日志，屏幕上只说本机的话（tokens.json rules 第 10 条）。
                             PLog.w("PPassFlow", "pairing joined but saving it failed: $saveError")
-                            // 10-29 文案：电脑已经允许了，连得上——标题是「加入失败」，正文只说存储空间。
                             screen = Screen.Trouble(R.string.pair_lapsed_title, R.string.pair_save_failed)
                             return@LaunchedEffect
                         }
-                        // MOB-87: 配对成功这个状态跃迁，此前**没有任何人接**。
-                        // 补捞只挂在 `LaunchedEffect(backupInterrupted)`（键里
-                        // 没有配对状态）和 `ON_RESUME`（会话内重新扫码用户一直
-                        // 在 App 里，不走 STOPPED→RESUMED）——两个都接不住，
-                        // 于是"配对完成了却毫无动静"，必须杀 App 重开。
-                        //
-                        // 顺带跑一轮远端对账：断开期间桌面那边什么都可能发生过，
-                        // 这是最该核对一次的时刻，也是真机验收这条链最快的触发点
-                        // （不必等 5 小时兜底）。
                         requestFlowWakeAfterRepair(context)
-                        // M4（全页面状态稿）：桌面点"允许"之后不再停一个要
-                        // 点按钮的 Joined 中间页——直接进选相册（用户实机
-                        // 反馈"扫完等 desktop 允许自己跳选择相册页面不行？"）；
-                        // firstTime=true 标记这是 onboarding 首次选相册，
-                        // 选完才过 M6 安心收尾页。
-                        //
-                        // MOB-87（2026-09-20 验收人定调）：**这是"第一次"才该
-                        // 走的路。** 重新连回一台**以前连过的**电脑，账本还在，
-                        // 相册选择也还在——再让人把 onboarding 重走一遍是白让
-                        // 他干一遍活。识别出来就直接回首页，让对账去把差异补上。
                         if (hasExistingLedgerFor(outcome.pairing)) {
-                            // MOB-93: 这条路跳过 onboarding，所以恢复自动
-                            // 备份这件事没有别人会做——断开时留下的意图在
-                            // 这里兑现。不做的话，重连之后手机上一个自动
-                            // 生产者都没有，而且不吭声。
-                            // #1039（对位 iOS applyOnPairing）：写不下来只记日志、照常回首页——意图还在盘上，
-                            // 回到前台的 #540 对账会按它再排一次。
                             settingsWriter.quiet("autoBackup", "restore after repair") {
                                 restoreAutoBackupAfterRepair(
                                     context,
@@ -1030,40 +647,29 @@ fun PPassApp() {
                             }
                             screen = Screen.Home(outcome.pairing)
                         } else {
-                            // MOB-93: 换一台新电脑 = 新的信任关系，后台备份
-                            // 要重新问一次。清意图放在这里（而不是断开时），
-                            // 正是原注释所说的「the next onboarding」。
-                            // #1039：清不掉不拦配对、照常进选相册，但要提示——完成页点按钮时会按用户的选择再写一次。
                             settingsWriter.write("autoBackup", "new desktop, ask again") {
                                 AutoBackupPrefs(context.filesDir).setRequested(false)
                             }
-                            // 新电脑的「自动备份」从关开始；#1321：先进决定页，做了决定才落「连过」、进照片页。
                             rulePrefs.set(false)
                             ruleOn = false
                             screen = Screen.Decision(outcome.pairing)
                         }
                     }
                     is PairOutcome.Refused -> {
-                        // 10-29 文案 B13：手机没有文案的原因，屏幕上只有「错误代码：generic」，原始 reason 进日志。
                         outcome.wireReason?.let { PLog.w("PPassFlow", "pairing refused for a reason with no wording: $it") }
                         screen = Screen.Trouble(
-                            // NET-10 / B6 / C10: only the owner's "decline" is "the computer said no"; an expired QR has its own title.
                             pairRefusalTitleRes(outcome.cause),
-                            // #1072 / B5：正文就是原因行（自带操作）；拒绝时没有原因行。
                             bodyRes = pairRefusalDetailRes(outcome.cause),
                             errorCode = pairRefusalErrorCode(outcome.cause),
                         )
                     }
-                    // #1072：握手就发现版本不兼容——没发配对请求。说清是哪一端的 P-Pass 太旧；手机太旧给更新入口。
                     is PairOutcome.NeedsUpdate -> screen = Screen.Trouble(
                         R.string.pair_needs_update_title,
                         outdatedTextRes(outcome.side),
                         offerAppUpdate = offersAppUpdate(outcome.side),
                     )
                     is PairOutcome.Failed -> {
-                        // #1264：异常类名、关闭码只进日志与诊断包，失败页不出现（tokens.json rules 第 10 条）。
                         PLog.w("PPassFlow", "pairing failed: ${outcome.diagnostic}")
-                        // 10-29 文案 B7：不是配对码 / 码里缺地址各自一页，不套「无法连接电脑」。
                         screen = when (outcome.kind) {
                             PairFailure.UNREACHABLE -> Screen.Trouble(R.string.pair_failed_title, R.string.pair_failed_body)
                             PairFailure.NOT_A_CODE -> Screen.Trouble(R.string.not_a_code)
@@ -1102,28 +708,16 @@ fun PPassApp() {
 
         is Screen.Home -> {
             val holder = remember { BackupUiStateHolder(context, client, identity, s.pairing) }
-            // MOB-88: holder 改成订阅之后，它的监听器挂在进程级的账本总线上，
-            // 不解订阅就会随每次重进首页累积。轮询时代没有这个问题（协程随
-            // scope 死掉），所以这个 DisposableEffect 是新增的必需品。
             DisposableEffect(holder) {
                 onDispose { holder.dispose() }
             }
-            // #1020：命令执行出错的一过性提示（UI-12 Snackbar）。
             LaunchedEffect(holder) {
                 holder.notices.collect { snackbarHostState.showSnackbar(context.getString(it)) }
             }
-            // #1038：回到前台重读账目（账本读不到时的「打开 App 时会再试」）。
             LaunchedEffect(holder, resumeCount) { holder.onResume() }
-            // #541：权限档位（ON_RESUME / 权限弹窗回调重读）变了要让 holder 重数 n——授权不会触发
-            // MediaStore 的 ContentObserver，也不会杀进程，不接这一下英雄卡就停在无权限时数出来的 0 / 0。
             LaunchedEffect(holder, mediaAccess) { holder.onMediaAccess(mediaAccess) }
-            // UX-03: 极简设置状态（仅充电/仅 WiFi）——改开关即落盘 +
-            // 按新约束重建周期任务。MOB-02 起语义为「需要充电/需要 Wi-Fi」
-            // 两档运行条件（默认都开），设置页有后果描述 + 合成句。
             val backupSettings = remember { BackupSettings(context.filesDir) }
             var wifiOnly by remember { mutableStateOf(backupSettings.load().wifiOnly) }
-            // M10（全页面状态稿）：通知开关的真实偏好。#130 起它管的是「需要处理」的确定事件通知
-            // （配对失效 / 相册权限收回 / 系统停止后台备份），见 DefinitiveEventNotices.kt。
             val notifyOnFailurePrefs = remember {
                 com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs(context.filesDir)
             }
@@ -1131,18 +725,12 @@ fun PPassApp() {
                 mutableStateOf(notifyOnFailurePrefs.enabled() && hasNotificationPermission(context))
             }
             var notificationRequestInFlight by remember { mutableStateOf(false) }
-            // Explicit user intent is separate from whether Android can currently run it.
             val prefs = remember { AutoBackupPrefs(context.filesDir) }
             var userRequestedBackgroundBackup by remember { mutableStateOf(prefs.requested()) }
-            // #1762「素材文件夹」：设置页的真实入口。列表读自 FolderRegistry（进程单例，与引擎同一份），
-            // 授权状态按真实 SAF 可用性现判；目录选择器（SAF ACTION_OPEN_DOCUMENT_TREE）由系统出界面。
             var mediaFolders by remember { mutableStateOf<List<FolderUi>>(emptyList()) }
             var folderRevision by remember { mutableStateOf(0) }
             var foldersError by remember { mutableStateOf<Int?>(null) }
-            // 选择器停留期间 Activity 可能被重建：目标 sourceId 用 rememberSaveable 保住，
-            // 否则结果回调把「重新授权」误当「添加」处理。
             var folderToReauthorize by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
-            // 授权可能后台失效（SAF 撤销）：回前台（resumeCount）也重读一遍，二级页状态不陈旧。
             LaunchedEffect(folderRevision, resumeCount) {
                 mediaFolders = withContext(Dispatchers.IO) {
                     com.hawkeyexb.ppass.backup.folder.FolderAccess.listEntries(context)
@@ -1180,8 +768,6 @@ fun PPassApp() {
                     }
                 }
             }
-            // #540：生产者此刻是否真的开着。任何线程落盘（含进程启动对账）都会推进 revision，这里跟着重读——
-            // 不在各个回调里手动刷新，漏一处就是「开关开、写着自动进行、实际 0 个任务」。
             val autoPrefsRevision by AutoBackupPrefs.revision.collectAsState()
             val autoBackupProducing = remember(autoPrefsRevision) { prefs.enabled() }
             var batteryRequestInFlight by remember { mutableStateOf(false) }
@@ -1199,15 +785,10 @@ fun PPassApp() {
                 batteryRequestInFlight = false
                 batteryWhitelisted = backgroundAuthorization.isGranted()
                 if (batteryWhitelisted) {
-                    // #1039：「已确认中断」写成功才重挂、才收起中断卡；写不下来卡片留着，用户清出空间后再点。
                     val saved = if (backupInterrupted) {
                         settingsWriter.write("backupInterruption", "acknowledged") { resumeAfterInterruption(context) }
                             .also { backupInterrupted = !it }
                     } else settingsWriter.write("autoBackup", true) { enableAutoBackup(context) }
-                    // UI-12: 系统授权弹窗的结果——这个 launcher 被「去处理」
-                    // 和「首次开启开关」两条路径共用，两者都是同一个系统
-                    // 权限请求，结果反馈理应一致，不用按入口拆分。
-                    // #1020：没存上时 SettingsWriter 已经提示过，这里不再说「已允许」。
                     if (saved) {
                         scope.launch {
                             snackbarHostState.showSnackbar(
@@ -1224,17 +805,8 @@ fun PPassApp() {
                 }
                 userRequestedBackgroundBackup = prefs.requested()
             }
-            // MOB-02 §三: 「需要 Wi-Fi」关闭需二次确认（移动网络消耗流量）。
             var pendingWifiOff by remember { mutableStateOf(false) }
-            // SYNC-06: TimelineLoader 由 timeline holder 按配对创建/重建
-            // （PhotoScreen 用户交互共用 holder.loader）——这里不再各自建。
-            // tab 状态已提到 PPassApp 顶层（见上方声明），这里不再重复
-            // remember，否则从相册选择页返回时会被重置回 Photos。
-            // 2026-08-17 大图查看页导航修复：正在全屏看大图/视频时，
-            // 主 [照片]/[设置] tab 栏根本不进组合树（不是盖住看不见）。
             var photoViewerOpen by remember { mutableStateOf(false) }
-            // 存储电脑详情是二级页——打开时跟大图查看页一样把底部 tab
-            // 栏整体隐藏（用户实机反馈：进了二级页底部 tab 还杵在那）。
             var storageDetailOpen by remember { mutableStateOf(false) }
             LaunchedEffect(batteryWhitelisted) {
                 userRequestedBackgroundBackup = prefs.requested()
@@ -1249,32 +821,13 @@ fun PPassApp() {
                 watcherScheduled = !backupInterrupted,
                 watcherInterrupted = backupInterrupted,
             )
-            // UI-12 追加修正（2026-09-15，用户判断成立）：开关必须绑定
-            // 用户真实意图（userRequestedBackgroundBackup），不能绑 Armed——
-            // 否则系统一撤白名单，开关会在 UI 上自己跳回关闭，用户会误以为
-            // 是自己手滑关的，或者以为 App 把设置清空了。系统层面的失效
-            // 只改状态提示（见 HomeScreen 的 RuleSwitchRow hint），不改
-            // 开关本身显示值；唯一能让开关变灰的只有用户自己点关。
-            // UI-12 二次修正（用户判断成立）：不再维护"知道了"这个独立的
-            // 忽略状态——横幅和设置页 hint 说的是同一件事，两个入口不能给
-            // 两个不同承诺。见 HomeNotices.kt 的 NoticeHost 文档。
-            // UI-12: 唯一入口，NoticeHost 的横幅动作与设置页 RuleSwitchRow
-            // hint 共用同一个 lambda——两处各写一遍就是 MOB-33/34/35/38
-            // 那种「漏一处」的形状（AGENTS.md 提炼函数的理由同款）。
             val resolveBackgroundBackup = {
                 if (batteryWhitelisted) {
-                    // #1039：「已确认中断」与恢复生产者都写成功，才收起中断卡、才说「正在重新连接」；
-                    // 写不下来 SettingsWriter 已提示，卡片留着，用户清出空间后再点一次。
-                    // #540：中断确认之后，挂起留下的 autoEnabled=false 也要回来——否则 Worker 与
-                    // foregroundCatchup 的 enabled() 闸门仍关着，点了「恢复」等于没点。
                     val resumed = settingsWriter.write("backupInterruption", "acknowledged") {
                         resumeAfterInterruption(context)
                         restoreAutoBackupAfterAuthorizationReturned(context, backgroundAuthorized = true, source = "resolve")
                     }
                     backupInterrupted = BackupHealthPrefs(context.filesDir).load().interruptedUnacknowledged
-                    // UI-12: 本地重挂 WorkManager 监听，没有会失败的路径——
-                    // 真正传不传得出去要等这轮 Flow 跑完，那是 Trouble 状态/
-                    // SystemFailureNotifier 的地盘，这里只诚实说"已发起"。
                     if (resumed) {
                         scope.launch {
                             snackbarHostState.showSnackbar(
@@ -1288,14 +841,10 @@ fun PPassApp() {
                 }
                 Unit
             }
-            // #1263：设置页开关与首页「开启后台备份」卡片共用这一条路（卡片点「开启」= 开关打开）。
             val onToggleAutoBackup: (Boolean) -> Unit = { enabled ->
-                // #1020：先落盘，写成功才做副作用（确认中断、重挂 / 取消任务、申请白名单）；
-                // 写失败不崩溃，开关回到盘上的意图并提示。
                 if (!enabled) {
                     batteryRequestInFlight = false
                     if (settingsWriter.write("autoBackup", false) { disableAutoBackup(context) }) {
-                        // #1039：关已经存上了；「已确认中断」没存上就提示，中断状态按盘上的值显示。
                         settingsWriter.write("backupInterruption", "acknowledged") {
                             BackupHealthPrefs(context.filesDir).acknowledge()
                         }
@@ -1304,7 +853,6 @@ fun PPassApp() {
                     userRequestedBackgroundBackup = prefs.requested()
                 } else if (batteryWhitelisted) {
                     if (backupInterrupted) {
-                        // #1039：写成功才重挂、才收起中断卡、开关才打开；写不下来开关与卡片都不动。
                         val resumed = settingsWriter.write("backupInterruption", "acknowledged") {
                             resumeAfterInterruption(context)
                         }
@@ -1322,12 +870,8 @@ fun PPassApp() {
                     userRequestedBackgroundBackup = prefs.requested()
                 }
             }
-            // #1263：首页「开启后台备份」卡片被手动关掉了吗。
             val offerStore = remember { com.hawkeyexb.ppass.backup.BackgroundBackupOfferStore(context.filesDir) }
             var offerDismissed by remember { mutableStateOf(offerStore.dismissed()) }
-            // #1263：卡片自己的白名单申请。与设置页开关不同，**弹框前不写意图**：拒绝了就什么都不写，仍是「没开」，
-            // 卡片留着，不变成「允许系统后台运行」的告警、设置页也不亮红点——拒绝一个可选功能不是故障。
-            // 授予了才按「开」落盘（与设置页开关授予后同一个写法）。
             val offerBatteryPermission = rememberLauncherForActivityResult(
                 ActivityResultContracts.StartActivityForResult(),
             ) {
@@ -1346,17 +890,11 @@ fun PPassApp() {
                     offerBatteryPermission.launch(backgroundAuthorization.requestIntent())
                 }
             }
-            // #836：「已选相册」按已选且当前存在计数（与选相册页同源：MediaStore 里实际有的相册）。
-            // 先用存下的个数占位，IO 上查完相册再校正；照片权限变化、每次回到前台都重算。
             var selectedBucketCount by remember { mutableStateOf(BackupScopeStore(context).selectedBucketIds()?.size) }
             var selectedFolderCount by remember { mutableStateOf(0) }
-            // #1789 接线（#1788 判定）：目录来源是否可用——英雄区 folder-only 不被全局权限卡顶替（#1784 验收 5）。
             var hasUsableFolder by remember { mutableStateOf(false) }
-            // #1020：存了范围但读不出来——设置行说「读不到已保存的选择」，不说「未选定自动备份范围」。
             var scopeUnreadable by remember { mutableStateOf(false) }
-            // #1263：范围的开始时间（设置行的值「3 个相册 · 10月29日起的照片」）。
             var scopeSince by remember { mutableStateOf(BackupScopeStore(context).sinceSec()) }
-            // #1322：范围备份开着 = 「自动备份」规则开、且至少选了一个相册（读不出来按「有」，设置行另说「读不到」）。
             val scopeOn = ruleOn && (scopeUnreadable || (selectedBucketCount ?: 0) > 0)
             LaunchedEffect(mediaAccess, resumeCount) {
                 scopeUnreadable = withContext(Dispatchers.IO) { BackupScopeStore(context).readScope() is ScopeRead.Unreadable }
@@ -1374,8 +912,6 @@ fun PPassApp() {
                         .mapTo(HashSet()) { it.bucketId }
                     com.hawkeyexb.ppass.backup.effectiveBackupScope(store.scope(), store.knownBucketIds(), folderIds, store.sinceSec())?.buckets
                 }
-                // #1789：目录来源可用性走引擎同源的判据（SourceAvailability.hasUsableFolder 复用
-                // effectiveBackupScope——勾选存值里的目录必须还在登记表里才算可用）。
                 hasUsableFolder = withContext(Dispatchers.IO) {
                     val store = BackupScopeStore(context)
                     val folderIds = com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords()
@@ -1393,9 +929,6 @@ fun PPassApp() {
                 selectedBucketCount = selectedExistingCount(effectiveSelected, listed?.map { it.id }?.toSet()?.plus(folderIds))
             }
             val scope = rememberCoroutineScope()
-            // NET-28: bind can now throw (timeout) — an uncaught throw in a
-            // LaunchedEffect would crash Home. This is only a warm-up; every
-            // real use binds again and reports its own failure.
             LaunchedEffect(Unit) {
                 runCatching { client.bind(identity.secretKey()) }
                     .onFailure { PLog.w("PPassBind", "home warm-up bind failed: $it") }
@@ -1406,13 +939,6 @@ fun PPassApp() {
                 mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
                 if (requiredMediaPermissions().any { grants[it] == true }) holder.backupNow()
             }
-            // 存储端移除/吊销本设备后：本地照清（无需 unpair，daemon 端
-            // 本就不认本设备），直达扫码，新 token 走 rejoin 门
-            // 重建——备份页、照片页的失联红卡按同一个动作走。
-            // UI-18（#355）：这是**恢复**路径，不是开场路径——直达扫码，不回
-            // onboarding 第一页。相机权限已给过就不再问；只有被系统收回时
-            // 才请求（授权回调本来就落到 Scan）。扫码成功后连回同一台电脑走
-            // 快速重连回 Screen.Home，`tab` 是 PPassApp 顶层状态，回到点击前的那个。
             val onRepairPairing = {
                 scope.launch {
                     withContext(Dispatchers.IO) { clearLocalPairingLogged(context, s.pairing) }
@@ -1424,27 +950,14 @@ fun PPassApp() {
                 }
                 Unit
             }
-            // #1072：版本不兼容显示在首页状态卡上（不弹窗、不遮挡），见 HomeScreen 的 outdated。
             val outdatedSide = ProtocolVersionGate.outdated.collectAsState().value
-            // #1883：唯一的连接状态——配对有效性（holder）+ 实时订阅会话（timeline）+ 失联天数，
-            // 在这里合成一次，照片页与存储电脑详情页都读这一份，同屏不可能出现相反结论。
-            val connection = connectionStateOf(
-                pairingLost = holder.pairingLost.value,
-                state = timeline.state,
-                daysUnreachable = daysUnreachable,
-            )
+            val connection = holder.connectionState(timeline, daysUnreachable)
             TwoTabs(
                 tab = tab,
                 onTab = { tab = it },
                 background = twoTabsBackground(viewerOpen = photoViewerOpen),
                 showTabBar = !photoViewerOpen && !storageDetailOpen,
-                // M13 哨兵态：长期失联时设置图标角标红点，跟照片页的失联
-                // 红卡同一个信号源（holder.pairingLost），不额外判天数。
-                // 后台备份只在真出问题（待授权白名单 / 监听被系统清掉）时
-                // 才亮红点——此前误写成 != OffByUser，导致正常 Armed（用户
-                // 开着、白名单已过、监听健康）也常年亮红点，即使一切正常
-                // 用户也永远看到红点，是个逻辑 bug（2026-09-15 用户反馈）。
-                settingsAlert = holder.pairingLost.value ||
+                settingsAlert = connection.needsRepair ||
                     backgroundBackupState == BackgroundBackupState.NeedsSystemAuthorization ||
                     backgroundBackupState == BackgroundBackupState.SystemStoppedWatcher,
                 photos = {
@@ -1454,7 +967,6 @@ fun PPassApp() {
                         backgroundOn = userRequestedBackgroundBackup,
                         finished = offerDismissed,
                     )
-                    // 产品口径（2026-11-17）：首次引导只发生一次——只有从未保存过范围才出「开启范围备份」。
                     val firstChoicePending = com.hawkeyexb.ppass.backup.scopeNeedsFirstChoice(
                         BackupScopeStore(context).readScope(),
                         com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().size,
@@ -1465,11 +977,8 @@ fun PPassApp() {
                         onViewerOpenChange = { photoViewerOpen = it },
                         connection = connection,
                         onReconnect = onRepairPairing,
-                        // #1322：引导位按当前开关现算（方案结论 6）；「还没有选择相册」并入「开启范围备份」这一步。
-                        // 范围存了但读不出来不算「没选」（设置行另说「读不到」）。
                         guide = guide,
                         computerName = s.pairing.storageDeviceName,
-                        // #1353：开关关着、点了会去系统设置（部分权限且系统不再弹框）→ 按钮说「去设置」。
                         guideActionGoesToSettings = !ruleOn &&
                             ruleEnableRoute(
                                 mediaAccess,
@@ -1479,7 +988,6 @@ fun PPassApp() {
                             ) == RuleEnableRoute.Settings,
                         onGuideAction = { g ->
                             when (g) {
-                                // 开关开着、只是还没有来源 → 直达选范围页；开关关着 → 走开启链路（权限 → 选范围页）。
                                 PhotosGuide.EnableScope ->
                                     if (ruleOn) enterBucketPicker(s.pairing, firstTime = false) else onToggleRule(s.pairing, true)
                                 PhotosGuide.EnableBackground -> onEnableFromOffer()
@@ -1487,13 +995,11 @@ fun PPassApp() {
                             }
                         },
                         onGuideDismiss = {
-                            // × = 「onboarding 已走完」，按手机记；写不下来卡片留着、提示（#1039 同口径）。
                             if (settingsWriter.write("onboardingGuide", "dismissed") { offerStore.dismiss() }) {
                                 offerDismissed = true
                                 PLog.i("PPassGuide", "photos-guide: dismissed")
                             }
                         },
-                        // 方案结论 7：范围备份开着、范围里一张照片都还没有 → 一行现状。triplet 未算出来（null）时不说。
                         scopeEmptyHint = if (scopeEmptyHintShown(guideFacts, holder.triplet.value?.n)) {
                             scopeSince?.let {
                                 context.getString(R.string.photos_scope_empty_since, scopeSinceDate(it, System.currentTimeMillis()), s.pairing.storageDeviceName)
@@ -1502,8 +1008,6 @@ fun PPassApp() {
                     )
                 },
                 backup = {
-                    // #1789 接线（#1788 判定、#1784 验收 5）：来源可用性——folder-only 与混合范围
-                    // 不被全局权限卡顶替；空范围缺的是来源不是权限，不出「去设置」。
                     val homeAvailability = com.hawkeyexb.ppass.backup.SourceAvailability(
                         autoRule = ruleOn,
                         photoAccess = mediaAccess,
@@ -1514,34 +1018,24 @@ fun PPassApp() {
                         storageName = s.pairing.storageDeviceName,
                         state = holder.state.value,
                         triplet = holder.triplet.value,
-                        // 2026-09-07 真机反馈：命令处理中禁用暂停/取消按钮。
                         commandPending = holder.commandPending.value,
-                        // MOB-61: 缺源只读告知仍留在 HomeScreen（信息类，无动作）。
                         missingSourceNotice = holder.missingSourceNotice.value,
                         onAcknowledgeMissingSource = { holder.acknowledgeMissingSourceNotice() },
                         acknowledgedMissingSourceCount = holder.acknowledgedMissingSourceCount.value,
-                        // #418：正在传的这一张的字节进度（与前台服务通知同一个函数）。
                         transferProgress = holder.transferProgress.value,
-                        // #250 / #251：当前这一张——文件名（单行、中间省略）、「12.3 / 189 MB」、字节停滞时的「在等」。
                         transferRow = holder.transferRow.value,
-                        // #418：「取消剩余 N 张」——设置卡一行 + 写明 N 的确认框。
                         cancelRemainingCount = holder.cancelRemainingCount.value,
                         onRequestCancelRemaining = { holder.requestCancelRemaining() },
                         cancelConfirmCount = holder.cancelConfirmCount.value,
-                        // 「已跳过的照片 N 张 · 点击恢复」（SKIPPED_BY_USER）。
                         skippedCount = holder.skippedCount.value,
                         onRestoreSkipped = { holder.restoreSkipped() },
                         onConfirmCancelRemaining = { holder.confirmCancelRemaining() },
                         onDismissCancelRemaining = { holder.dismissCancelRemaining() },
-                        // 规则 P（#418）：FGS 受阻而等待时的人话（null ⇒ 状态行一个字都不加）。
                         waitReasonRes = holder.waitReasonNotice.value,
                         outdated = outdatedSide,
-                        // #413 §7：桌面剩余空间不足 5 GiB 的预警。
                         desktopLowSpace = holder.desktopLowSpace.value,
                         wifiOnly = wifiOnly,
                         onWifiOnlyChange = { enable ->
-                            // MOB-02 §三: 关闭「需要 Wi-Fi」需二次确认
-                            // （移动网络也会备份，可能消耗流量）。
                             if (!enable) pendingWifiOff = true
                             else {
                                 wifiOnly = settingsWriter.persist("wifiOnly", true, backupSettings::save) {
@@ -1552,7 +1046,6 @@ fun PPassApp() {
                         },
                         notifyOnFailure = notifyOnFailure,
                         onNotifyOnFailureChange = { enabled ->
-                            // #1262：onboarding 不再申请通知——这里是唯一的申请入口。
                             val action = if (!enabled) {
                                 com.hawkeyexb.ppass.backup.NotifyEnableAction.ENABLE
                             } else {
@@ -1565,13 +1058,11 @@ fun PPassApp() {
                                 )
                             }
                             when (action) {
-                                // #1020：显示值 = 盘上的值（且有系统通知权限）；写失败回到原来的值并提示。
                                 com.hawkeyexb.ppass.backup.NotifyEnableAction.ENABLE ->
                                     notifyOnFailure = settingsWriter.persist("notifyOnFailure", enabled, notifyOnFailurePrefs::setEnabled) {
                                         notifyOnFailurePrefs.enabled()
                                     } && hasNotificationPermission(context)
                                 com.hawkeyexb.ppass.backup.NotifyEnableAction.REQUEST -> if (!notificationRequestInFlight) {
-                                    // 先记「问过」再弹：系统不再弹时，下次点开关直接去系统设置。
                                     settingsWriter.quiet("notifyOnFailure", "system asked") { notifyOnFailurePrefs.markSystemAsked() }
                                     notificationRequestInFlight = true
                                     notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -1584,20 +1075,6 @@ fun PPassApp() {
                         backgroundBackupState = backgroundBackupState,
                         onResolveBackgroundBackup = resolveBackgroundBackup,
                         onToggleAutoBackup = onToggleAutoBackup,
-                        // UX-06 单方停止：本地断开不依赖 daemon 回应。确认
-                        // 交互（三层防误触）在 StorageComputerDetail 内部
-                        // 完成（红色描边按钮→展开确认卡→「确认断开」），
-                        // 这里不再弹第二层 AlertDialog——onDisconnect 就是
-                        // 真正执行断开。unpair 只是尽力通知 daemon 撤销本
-                        // 设备——设备已被存储端移除/吊销时 authz 只给未配对/
-                        // 已吊销设备留 pair.request 一扇门，unpair 必被拒，
-                        // 此时 daemon 端本就不认本设备，无需再撤销；daemon
-                        // 不可达同理。unpair 失败不再阻塞断开，否则本地
-                        // pairing 永远清不掉，重新扫码入口（Welcome）永久
-                        // 消失（存储端移除设备后的死锁）。
-                        // #956 关闭裁决：通知电脑只尽力一次，收到就收到、没收到就算了；不留任何待以后重发的东西
-                        // （撤掉 #565 的发件箱）。#1239：不等通知——立刻清本地回欢迎页，通知在应用级作用域后台发
-                        // （地址 / 配对 id 清理前已拷进闭包）。清理不受通知结局、超时与取消影响。
                         onDisconnect = {
                             scope.launch {
                                 disconnectAndNotifyInBackground(
@@ -1609,13 +1086,9 @@ fun PPassApp() {
                             }
                             Unit
                         },
-                        // 存储端移除/吊销本设备后：主按钮变「重新扫码连接」——
-                        // 本地照清（无需 unpair，daemon 端本就不认本设备），
-                        // 直达扫码（UI-18），新 token 走 rejoin 门重建。
                         connection = connection,
                         onRepair = onRepairPairing,
                         onStorageDetailOpenChange = { storageDetailOpen = it },
-                        // #1762：素材文件夹二级页（tab 栏随二级页隐藏，与存储电脑详情页同口径）。
                         mediaFolders = mediaFolders,
                         onFolderAdd = {
                             folderToReauthorize = null
@@ -1633,36 +1106,23 @@ fun PPassApp() {
                             folderPicker.launch(null)
                         },
                         onFoldersOpenChange = { storageDetailOpen = it },
-                        // #1789：来源可用性输入（folder-only / 混合 / 空范围口径见 homeAvailability）。
                         hasUsableSource = homeAvailability.hasUsableSource,
                         mixedAlbumIncomplete = homeAvailability.mixedAlbumIncomplete,
                         hasSelectedAlbum = homeAvailability.hasSelectedAlbum,
-                        // #1789：「从文件选择」——SAF 系统文件选择器，取消不建任务（见 filePickLauncher）。
                         onPickFiles = { filePickLauncher.launch(com.hawkeyexb.ppass.ui.SingleTransferFilePicker.intent()) },
-                        // T6: 备份范围——「选择相册」与「发起备份」两个动作。
-                        // #836：按「已选且当前存在」计数，与选相册页同一口径。
                         selectedBucketCount = selectedBucketCount,
                         selectedFolderCount = selectedFolderCount,
                         scopeUnreadable = scopeUnreadable,
                         scopeTimeLabel = scopeValueLabel(context, scopeSince),
                         countsReadable = holder.countsReadable.value,
-                        // #1794：有效范围非空（含已登记目录）就不算「未选定」——判据在 holder 的 scopeSaved 里。
                         scopeSaved = holder.scopeSaved.value,
-                        // MOB-03: 相册选择入口走完整权限链——MOB-02 删首页手动
-                        // 备份按钮时把挂在它身上的权限申请链一起删没了，
-                        // 无权限直接进列表 = MediaStore 空查询 = 全白。
                         onOpenBucketPicker = { enterBucketPicker(s.pairing, firstTime = false) },
                         onPickPhotos = {
-                            // #1840：单次入口只收图片与视频（产品口径 2026-11-17）。
                             pickPhotosLauncher.launch(
                                 androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo),
                             )
                         },
                         pickedBatch = pickedBatch,
-                        // MOB-02 §一: 首页主按钮删除——hero 空闲态按钮 =
-                        // 「选择备份的相册」；onBackupNow 保留给：进行中暂停、
-                        // 失败红卡「再试一次」——不是常驻设置页入口，
-                        // MOB-43（2026-08-27）已拍板不建那个入口。
                         onBackupNow = {
                             val needed = requiredMediaPermissions().filter {
                                 ContextCompat.checkSelfPermission(context, it) !=
@@ -1671,35 +1131,13 @@ fun PPassApp() {
                             if (needed.isEmpty()) holder.backupNow()
                             else launchAlbumAccessPrompt(mediaPermission, withMediaLocation(needed))
                         },
-                        // MOB-02 §二: 部分授权引导（只授权了部分照片 →
-                        // 一键去系统设置；部分授权态不保存范围、不显示假 0/0）。
                         mediaAccess = mediaAccess,
                         onOpenAppSettings = {
                             PLog.i("PPassFlow", "auto-rule: blocked (photo access=$mediaAccess), opening app settings")
                             openAppDetailsSettings(context)
                         },
-                        // UPD-02: 设置行「检查更新」——value 跟随状态机
-                        // （下载中显示百分比 / 待安装显示「可安装」），
-                        // 点击行为按当前状态分流（重新打开已收起的对话框 /
-                        // 手动检查），全部在 controller 一处判定。
-                        updateRowValue = when (val us = updateState) {
-                            is UpdateUiState.Downloading ->
-                                if (us.total > 0) {
-                                    context.getString(
-                                        R.string.update_row_downloading,
-                                        (us.received * 100 / us.total).toInt(),
-                                    )
-                                } else {
-                                    context.getString(R.string.update_downloading_unknown_total)
-                                }
-                            is UpdateUiState.Verifying ->
-                                context.getString(R.string.update_verifying)
-                            is UpdateUiState.ReadyToInstall ->
-                                context.getString(R.string.update_row_ready)
-                            else -> null
-                        },
+                        updateRowValue = updateRowValueOf(context, updateState),
                         onCheckUpdate = { updateController.onCheckRowClick() },
-                        // #1272：「自动备份」规则开关与权限三种结果。
                         autoBackupRuleOn = ruleOn,
                         scopeHasStart = scopeSince != null,
                         onToggleAutoBackupRule = { on -> onToggleRule(s.pairing, on) },
@@ -1709,16 +1147,11 @@ fun PPassApp() {
                             mediaAccess == MediaAccess.NONE -> R.string.auto_backup_rule_none_hint
                             else -> null
                         },
-                        // #1962：系统告示条只在设置页（本页）展示——从 TwoTabs 顶层移进来。
-                        // 把五条提示的输入集中到 NoticeHost，只渲染最高优先级的一条；
-                        // 照片页、大图查看、存储详情等二级页都不再出现。
                         notice = {
                             NoticeHost(
                                 backgroundBackupState = backgroundBackupState,
                                 onResolveBackgroundBackup = resolveBackgroundBackup,
                                 locationRedacted = mediaAccess != MediaAccess.NONE && !mediaLocation,
-                                // 提示只在 Android 10+ 出现（更低版本系统不抹地点，canReadMediaLocation 恒真）；守卫让这一点
-                                // 在代码里成立，而不是靠调用方推理（lint InlinedApi）。
                                 onAllowLocation = {
                                     if (Build.VERSION.SDK_INT >= 29) locationPermission.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)
                                 },
@@ -1740,8 +1173,6 @@ fun PPassApp() {
                             }
                             if (!wifiOnly) {
                                 rescheduleAutoBackup(context)
-                                // #413：引擎可能正因为 Wi‑Fi 在等——用户刚放开限制，人在场，立即重新检查一次，
-                                // 等待原因随之更新（否则「将在连上 Wi-Fi 后进行」会挂到下一次触发）。
                                 requestFlowWake(context, TriggerReason.MANUAL)
                             }
                         }) { Text(stringResource(R.string.wifi_off_confirm_ok)) }
@@ -1755,8 +1186,6 @@ fun PPassApp() {
             }
         }
 
-        // T6: 选范围页——「选择备份内容」与「发起备份」是两个动作。
-        // #1263：范围 = 相册 + 开始时间（从今天起 / 全部）；首次选完直接进首页，没有完成页。
         is Screen.Buckets -> {
             val scopeStore = remember { BackupScopeStore(context) }
             val folderRegistry = remember { com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context) }
@@ -1774,7 +1203,6 @@ fun PPassApp() {
                 }
             }
 
-            // #1794：页内授权后按新权限档重读相册；没有相册权限时读不到，交给页内的现状说明。
             LaunchedEffect(mediaAccess) {
                 buckets = if (mediaAccess == MediaAccess.NONE) {
                     emptyList()
@@ -1817,27 +1245,16 @@ fun PPassApp() {
                 val savedRead = remember { scopeStore.readScope() }
                 val savedSince = remember { scopeStore.sinceSec() }
                 val records = folderRegistry.allRecords()
-                val existingFolderBuckets = records.mapTo(HashSet()) { it.bucketId }
                 val knownSources = scopeStore.knownBucketIds()
-                val effective = com.hawkeyexb.ppass.backup.effectiveBackupScope(
-                    scopeStore.scope(), knownSources, existingFolderBuckets, savedSince,
+                val folderProjection = projectBucketScreenFolders(
+                    context = context,
+                    scopeStore = scopeStore,
+                    records = records,
+                    folderEntries = folderEntries,
+                    pendingFolderUris = pendingFolderUris,
+                    knownSources = knownSources,
+                    savedSince = savedSince,
                 )
-                val folderCards = records.map { record ->
-                    val entry = folderEntries.firstOrNull { it.sourceId == record.id }
-                    FolderBucketUi(
-                        key = record.id,
-                        bucket = MediaScanner.Bucket(record.bucketId, record.displayName, record.items.size),
-                        registered = true,
-                        needsPermission = entry?.needsPermission == true,
-                    )
-                } + pendingFolderUris.map { raw ->
-                    val name = android.net.Uri.parse(raw).lastPathSegment
-                        ?.substringAfterLast(':')?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
-                        ?: context.getString(R.string.folder_settings_title)
-                    FolderBucketUi(raw, MediaScanner.Bucket(0L, name, 0), registered = false)
-                }
-                val selectedFolders = records.filter { effective?.buckets?.contains(it.bucketId) == true }
-                    .mapTo(HashSet()) { it.id }
 
                 BucketScreen(
                     buckets = list,
@@ -1851,16 +1268,14 @@ fun PPassApp() {
                     sinceLabel = scopeSinceOptionLabel(context, savedSince.takeIf { savedRead is ScopeRead.Saved }),
                     firstTime = s.firstTime,
                     knownBuckets = knownSources,
-                    folderBuckets = folderCards,
-                    selectedFolderKeys = selectedFolders,
+                    folderBuckets = folderProjection.folderCards,
+                    selectedFolderKeys = folderProjection.selectedFolders,
                     saving = scopeSaving,
                     albumAccess = mediaAccess,
                     albumAccessCanPrompt = albumAccessCanPrompt,
                     onRequestAlbumAccess = {
-                        // #1794：相册权限只在用户点页内入口时才申请（进页不再先弹框）。
                         launchAlbumAccessPrompt(bucketAlbumPermission, withMediaLocation(requiredMediaPermissions()))
                     },
-                    // #1788：系统不再弹框（rationale=false）时页内动作改「去设置」，去应用详情页开相册权限。
                     onOpenAlbumSettings = { openAppDetailsSettings(context) },
                     onAddFolder = {
                         folderToReauthorize = null
@@ -1887,7 +1302,7 @@ fun PPassApp() {
                         if (scopeSaving) return@BucketScreen
                         scopeSaving = true
                         scope.launch {
-                            val previousEffective = effective?.buckets
+                            val previousEffective = folderProjection.effectiveBuckets
                             val prevSince = if (savedRead is ScopeRead.Saved) savedSince else null
                             val since = sinceToSave(time, prevSince, System.currentTimeMillis())
                             val pendingToAdd = folderKeys.filter { pendingFolderUris.contains(it) }
@@ -1913,8 +1328,6 @@ fun PPassApp() {
                                 return@launch
                             }
                             val sel = selectedAlbumIds.filterNot { com.hawkeyexb.ppass.backup.folder.isFolderId(it) }.toSet() + prepared.first
-                            // #1794：范围页可能在没相册权限时保存——这时读不到相册列表，已保存的相册仍是现状的一部分，
-                            // 一并记进「已知相册」基线，免得下次拿到权限后把它们全标成「新相册」。
                             val allCurrent = (list.map { it.id } +
                                 (savedRead as? ScopeRead.Saved)?.ids.orEmpty().filterNot { com.hawkeyexb.ppass.backup.folder.isFolderId(it) } +
                                 prepared.second.map { it.bucketId }).toSet()
@@ -1956,8 +1369,6 @@ fun PPassApp() {
             }
         }
     }
-    // UI-12: 自定义 Snackbar 视觉——用 PPColor（墨底纸字），跟横幅/红卡
-    // 同一套语义色系，不用 M3 默认的 surfaceInverse 配色。
     SnackbarHost(
         hostState = snackbarHostState,
         modifier = Modifier
@@ -1976,59 +1387,7 @@ fun PPassApp() {
     }
 }
 
-/**
- * 产品口径（2026-11-17）：首次引导只发生一次——只有从未保存过范围（[firstChoicePending]）才给「开启范围备份」；
- * 保存过任何值（包括空集）都是用户的明确选择，不再反复引导。第二步（开启后台备份）不受影响。
- */
-internal fun guideForCurrentScope(guide: PhotosGuide, firstChoicePending: Boolean): PhotosGuide =
-    if (guide == PhotosGuide.EnableScope && !firstChoicePending) PhotosGuide.None else guide
-
-/** #1353：开自动备份时按当前照片权限走哪条路。#1794 加 ChooseScope：没有有效来源时先去范围页选。 */
-internal enum class RuleEnableRoute { Apply, Request, Settings, ChooseScope }
-
-/**
- * 开自动备份往哪走（#1794 按范围实际需不需要相册判断，不再一律要完整相册权限）：
- * 没有有效来源 → 去范围页选来源；只有文件夹来源 → 直接开，不碰相册权限；
- * 范围含相册 → 全部直接开、部分且系统还肯弹框就申请（框里能选「全部允许」）、
- * 部分且被锁（USER_FIXED）去本 App 系统设置页、没给过 / 拒绝就申请。
- * 部分态一定问过至少一次，所以 `canPrompt == false` 只可能是被锁（Android 官方：shouldShowRequestPermissionRationale）。
- */
-internal fun ruleEnableRoute(
-    access: MediaAccess,
-    canPrompt: Boolean,
-    scope: ScopeRead,
-    folderCount: Int,
-): RuleEnableRoute = when {
-    // 与「开完开关要不要引导去范围页」共用同一个判据（backup/BackupScopeTime.kt 的 scopeNeedsFirstChoice）。
-    com.hawkeyexb.ppass.backup.scopeNeedsFirstChoice(scope, folderCount) -> RuleEnableRoute.ChooseScope
-    !ruleScopeUsesAlbums(scope) -> RuleEnableRoute.Apply
-    access == MediaAccess.FULL -> RuleEnableRoute.Apply
-    access == MediaAccess.PARTIAL && !canPrompt -> RuleEnableRoute.Settings
-    else -> RuleEnableRoute.Request
-}
-
-/** 范围里有没有相册来源（读不到按「有」处理：宁可多申请一次，不悄悄少备份相册）。 */
-internal fun ruleScopeUsesAlbums(scope: ScopeRead): Boolean = when (scope) {
-    ScopeRead.NeverSaved -> false
-    is ScopeRead.Saved -> scope.ids.any { !com.hawkeyexb.ppass.backup.folder.isFolderId(it) }
-    is ScopeRead.Unreadable -> true
-}
-
-/**
- * #1788：系统还会不会为相册权限弹框（纯判定，四种入参组合单测直接跑）。
- * shouldShowRequestPermissionRationale 把「从没申请过」与「被永久拒绝」都读成 false，单靠它区分不开——
- * 用本机自己的发射记录补上这一维（读写都在 [com.hawkeyexb.ppass.backup.AlbumAccessPromptPrefs]）：
- * 从没申请过就该弹（首次必然有弹框），申请过且 rationale=true 是拒过一次还能再问，
- * 申请过且 rationale=false 才是真的被锁（只剩应用详情页）。
- */
-internal fun systemCanPromptAlbumAccess(requestedOnce: Boolean, rationale: Boolean): Boolean =
-    !requestedOnce || rationale
-
-/**
- * #1788：系统还会不会为相册权限弹框。rationale 单输入分不清「从没申请过」与「被永久拒绝」
- * （两者都读 false），所以带上本机自己的发射记录；问的是本机实际申请的那支权限——
- * API 33+ 是 READ_MEDIA_IMAGES，更低是 READ_EXTERNAL_STORAGE（那些版本上前者不存在）。
- */
+// shouldShowRequestPermissionRationale 将「从未申请」与「永久拒绝」均返回 false，需结合本地发射记录区分
 internal fun canPromptForFullMediaAccess(context: Context): Boolean {
     val activity = context as? android.app.Activity
     val primary = requiredMediaPermissions().first()
@@ -2055,17 +1414,9 @@ private fun requiredMediaPermissions(): List<String> =
         listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
     }
 
-/**
- * #843：申请相册权限时顺带申请 `ACCESS_MEDIA_LOCATION`（Android 10+），读到含拍摄地点的原样字节。
- * 只加在**申请**里，不进 [requiredMediaPermissions] 的放行判断——拒绝它照常备份，只是不含地点（首页有提示）。
- */
 private fun withMediaLocation(needed: List<String>): Array<String> =
     (if (Build.VERSION.SDK_INT >= 29) needed + Manifest.permission.ACCESS_MEDIA_LOCATION else needed).toTypedArray()
 
-// MOB-02 §四事件④: App 进前台且距上次成功 >24h → 用户在场档补跑。
-
-/** 通知权限现状（API<33 恒真——那些版本装完就有，没有运行时权限这
- *  一说）；只喂 HomeScreen 的不堵路引导卡，不参与任何 onboarding 流程。 */
 private fun hasNotificationPermission(context: Context): Boolean =
     if (Build.VERSION.SDK_INT >= 33) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
@@ -2074,17 +1425,9 @@ private fun hasNotificationPermission(context: Context): Boolean =
         true
     }
 
-/**
- * MOB-94: 相册权限三档的生产查询点。
- *
- * `imagesGranted` 取的是**主相册权限**——API 33+ 是 READ_MEDIA_IMAGES，
- * 更低版本是 READ_EXTERNAL_STORAGE（minSdk 26，那些机器上前者根本不存在，
- * 查它必然 DENIED，会把完整授权误判成全拒）。
- */
 private fun mediaAccess(context: Context): MediaAccess =
-    com.hawkeyexb.ppass.backup.currentMediaAccess(context) // #130：与确定事件通知共用同一个查询点
+    com.hawkeyexb.ppass.backup.currentMediaAccess(context)
 
-/** MOB-02 §二: 一键去系统设置（应用详情页）改完整相册权限。 */
 private fun openAppDetailsSettings(context: Context) {
     val intent = android.content.Intent(
         android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -2093,7 +1436,6 @@ private fun openAppDetailsSettings(context: Context) {
     context.startActivity(intent)
 }
 
-/** 用户给手机起的名字（规则见 [pickDeviceName]）。读不到的设置项按没有处理，不让配对失败。 */
 private fun deviceName(context: Context): String {
     val resolver = context.contentResolver
     return pickDeviceName(
@@ -2103,21 +1445,6 @@ private fun deviceName(context: Context): String {
     )
 }
 
-/**
- * 本地单方断开（UX-06/UX-06b 语义）。断开与「配对已失效重新扫码」共用此清理；
- * 不依赖 daemon 是否可达/是否已撤销本设备。
- *
- * MOB-95（#282）：留什么、清什么**只在** [DisconnectState] 里声明，这里只把
- * 清单里的运行时动作接到 Context 上，不另写任何处置。
- */
-/**
- * #1039：断开 / 重新扫码的清理写失败不许让 App 崩——清单已经逐行跑完（停任务、停监听不受影响），这里只记日志，
- * 调用方照常回欢迎页 / 扫码页（对位 iOS `LiveBackend.disconnect`）。
- */
-/**
- * 主动断开时的那一次通知；结局只写日志。地址、配对 id 在这里（清理前）取出并拷进返回的闭包，
- * 闭包在后台跑时不再读配对存储——清理之后照样能发。
- */
 private fun notifyUnpairOnce(client: DaemonClient, pairing: Pairing): suspend () -> Unit {
     val tag = "desktop=${pairing.daemonNodeId.take(8)}"
     val pairingId = pairing.pairingId
@@ -2162,19 +1489,9 @@ private fun clearLocalPairing(
         },
     )
     com.hawkeyexb.ppass.backup.picked.PickedUploads.discardAll(context)
-    // 登记门禁的真机一半：断开后私有目录里出现清单之外的东西，留一行日志（不拦断开）。
     context.filesDir.parentFile?.let { dataDir ->
         unregisteredStatePaths(dataDir).takeIf { it.isNotEmpty() }?.let {
             PLog.w("PPassDisconnect", "unregistered app state (register in DisconnectState): $it")
         }
     }
 }
-
-internal fun resolveFolderBucketIds(
-    folderKeys: Collection<String>,
-    idByUri: Map<String, String>,
-    records: List<com.hawkeyexb.ppass.backup.folder.FolderRecord>,
-): Set<Long> = folderKeys.mapNotNull { key ->
-    val sourceId = idByUri[key] ?: key
-    records.firstOrNull { it.id == sourceId }?.bucketId
-}.toSet()

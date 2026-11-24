@@ -2,15 +2,11 @@ import PPassCore
 import SwiftUI
 import UIKit
 
-/// 英雄卡（规则 H：主位四选一）+ 分隔线下的进度区 / 状态行 + 右侧唯一的次级按钮。
-/// 是 `List(.insetGrouped)` 里的第一个分组：一行放数字 / 引导，一行放进度与状态。
 struct HeroCard: View {
     @EnvironmentObject var app: AppModel
 
     var body: some View {
         let triplet = app.triplet
-        // scopeSaved 口径对齐 Android `heroScopeSavedOf`：有效范围非空（含已登记目录）就不说「未选定自动备份范围」；
-        // 保存过空集也算「未选定」（旧口径 `app.scope != nil` 会把空范围说成「相册数量读取失败」）。
         let render = HomeProjection.heroRender(app.access, triplet, countsReadable: app.facts.countsReadable, scopeSaved: !app.noAlbums,
                                                hasUsableSource: app.backupAvailability.hasUsableSource,
                                                hasSelectedAlbum: app.sourceAvailability.hasSelectedAlbum,
@@ -19,20 +15,16 @@ struct HeroCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 8) {
                     if !app.autoRule {
-                        // #1272 B：没开自动备份是正常状态，不是故障：不显示权限 / 没选相册，只说一句。
                         Text(L.s("auto_backup_off_hero")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
                     } else {
                     switch render {
                     case .accessBlocked:
                         Text(L.s("auto_backup_blocked_hero")).font(PPFont.cardTitle).foregroundStyle(PPColor.act)
-                        // #1353：权限被收回后的唯一出口：去本 App 的系统设置页改回；开关保持开（对位 Android 英雄卡）。
-                        // #1962：紧凑描边次级按钮，对齐 Android 英雄卡 OutlinedButton（高 40、圆角 14、act 描边 40%）。
                         if app.blockedHeroOffersSettings {
                             HeroCompactActionButton(title: L.s("auto_backup_blocked_action")) { app.openSettingsFromBlockedHero() }
                                 .accessibilityIdentifier("blockedHeroSettings")
                         }
                     case .mixedAlbumIncomplete:
-                        // #1811：文件夹备份还在继续，只说相册侧的状态；出口只有一个「调整范围」。
                         Text(L.s("hero_mixed_album_incomplete")).font(PPFont.cardTitle).foregroundStyle(PPColor.act)
                         HeroCompactActionButton(title: L.s("hero_adjust_scope_action")) { app.adjustScopeFromIncompleteAlbum() }
                             .accessibilityIdentifier("mixedAlbumAdjustScope")
@@ -43,12 +35,9 @@ struct HeroCard: View {
                     case .unreadable:
                         Text(L.s("triplet_unavailable")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
                     case .unreconciled:
-                        // Android：16 粗体 waiting 色——琥珀 = 「在等它自己算完」，不是结论，不用大号衬线。
                         Text(L.s("hero_unreconciled_title")).font(PPFont.cardTitle).foregroundStyle(PPColor.waiting)
                         Text(L.s("hero_unreconciled_body")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
                     case .triplet:
-                        // #1272 §5 / #1962：范围设了「从某天起」且里面还没有照片——空状态一句话
-                        // （拍完回到 P-Pass，前台补捞会把它传上去），对齐 Android `auto_backup_from_today_empty`。
                         if Self.showsFromTodayEmpty(render: render, triplet: triplet, since: app.since) {
                             Text(L.s("auto_backup_from_today_empty")).font(PPFont.cardBody).foregroundStyle(PPColor.ink)
                         } else if let triplet {
@@ -58,22 +47,15 @@ struct HeroCard: View {
                     }
                 }
                 if render != .accessBlocked || !app.autoRule {
-                    // 设计稿：hero 内分隔线 = safe 18%（绿系），与整卡 safe-bg 同色系，不再是系统行分隔线。
                     Rectangle().fill(PPColor.safe.opacity(0.18)).frame(height: 1)
                         .padding(.top, PPUI.Layout.heroDividerAbove).padding(.bottom, PPUI.Layout.heroDividerBelow)
                     progressRow
                 }
-                // #1784：单次传输状态只在英雄区出现——进行中的「正在传 x/y」与结算结果句。
-                // 进程被杀没传完的不算失败（验收 4）：iOS 的手选句柄随进程没了，批次标记 interrupted，
-                // pickedLine 对 interrupted 一律 nil，下面那行「上次挑的 N 张有 M 张没传完」单独说话。
-                // #1789（评审 CG）：手选传输不依赖相册权限——权限卡顶替自动备份时这两行照样在场，
-                // 否则用户从文件选择发起的传输在 blocked 时完全看不见（Android HomeScreen 同一闸门）。
                 if let line = HomeProjection.pickedLine(app.pickedBatch) {
                     Text(line).font(PPFont.sans(PPUI.TextSize.statusLine, .medium, relativeTo: .footnote))
                         .foregroundStyle(PPColor.ink60).padding(.top, 8)
                         .accessibilityIdentifier("pickedStatus")
                 }
-                // #1272：上次挑的几张没传完时进程被杀了——只在这里说一句，数字按实际。
                 if let line = HomeProjection.pickedInterruptedLine(app.pickedBatch) {
                     Text(line).font(PPFont.sans(PPUI.TextSize.statusLine, .medium, relativeTo: .footnote))
                         .foregroundStyle(PPColor.waiting).padding(.top, 8)
@@ -83,7 +65,6 @@ struct HeroCard: View {
             .padding(.vertical, 6)
             .ppTinted(render == .accessBlocked && app.autoRule ? PPColor.actBg : PPColor.safeBg)
         } footer: {
-            // 桌面空间不足：Android 是英雄卡下方、卡外的一行琥珀小字（不加底、不成卡），iOS 对位分组脚注。
             if let free = app.facts.view?.desktopFreeBytes, free < DesktopHealth.lowSpaceBytes {
                 Text(L.s("desktop_low_space_hint"))
                     .font(PPFont.sans(PPUI.TextSize.statusLine, .medium, relativeTo: .footnote))
@@ -93,7 +74,7 @@ struct HeroCard: View {
     }
 
     private func tripletView(_ t: BackupTriplet) -> some View {
-        let safe = HomeProjection.heroNumberIsSafe(app.access, t, pairingLost: app.pairingLost)
+        let safe = HomeProjection.heroNumberIsSafe(app.access, t, connection: app.connection)
         let color = safe ? PPColor.safe : PPColor.ink
         return VStack(alignment: .leading, spacing: 6) {
             ViewThatFits(in: .horizontal) {
@@ -116,9 +97,6 @@ struct HeroCard: View {
         return t.k > 0 ? when + " · " + L.f("pending_count", Int(t.k)) : when
     }
 
-    /// #1962：英雄卡的三元组空态——范围设了「从今天起」（`since = .since`）且 0/0 时，
-    /// 不说数字，只说一句「今天新拍的照片会自动传到电脑」。对齐 Android `HomeScreen.kt` 的
-    /// `t.n == 0L && t.m == 0L && scopeHasStart` 判据；`.all` / 无 since / 非三元组 / 有数字都不算。
     internal static func showsFromTodayEmpty(render: HeroRender, triplet: BackupTriplet?,
                                              since: BackupSince?) -> Bool {
         guard render == .triplet, let t = triplet, t.n == 0, t.m == 0 else { return false }
@@ -126,11 +104,9 @@ struct HeroCard: View {
         return false
     }
 
-    /// 进度区（Android 同构）：左 = 文字列，右 = 唯一的次级按钮（进行中「暂停」/ 已暂停「继续」，其余不出现）。
-    /// 进行中是固定三格——文件名 / 字节行 / 进度条槽——各单行，换文件、准备 ↔ 备份都不改变高度。
     private var progressRow: some View {
         let state = app.uiState
-        let action = HomeProjection.heroAction(state, pairingLost: app.pairingLost)
+        let action = HomeProjection.heroAction(state, connection: app.connection)
         return HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 0) {
                 if state.isRunning { transferSlots(state) } else if let text = statusText(state) {
@@ -155,7 +131,6 @@ struct HeroCard: View {
             let slow = quiet >= TransferText.slowAfterSeconds
             VStack(alignment: .leading, spacing: 0) {
                 if case .fetchingFromICloud(let done, let total, let file, let fraction) = state {
-                    // #1092：原图正从 iCloud 下载，还没有字节流向电脑——不显示「没有新数据」。
                     Text(file).font(PPFont.sans(13.5, .medium)).foregroundStyle(PPColor.ink60)
                         .lineLimit(1).truncationMode(.middle)
                     Text(L.f("state_fetching_icloud", Int(((fraction ?? 0) * 100).rounded()), done, total))
@@ -168,7 +143,6 @@ struct HeroCard: View {
                             .map { L.f("state_sending_detail", $0, done, total) } ?? L.f("state_sending", done, total))
                         .font(PPFont.sans(13)).foregroundStyle(slow ? PPColor.waiting : PPColor.ink60).lineLimit(1)
                 } else {
-                    // 固定三格：没有状态行时也占住这一格，高度不跳。
                     Text(statusText(state) ?? " ").font(PPFont.sans(13.5, .medium)).foregroundStyle(PPColor.ink60).lineLimit(1)
                     Text(" ").font(PPFont.sans(13))
                 }
@@ -189,12 +163,10 @@ struct HeroCard: View {
     private func quietSeconds(now: Date) -> Int {
         guard let m = app.transferMark, m.orderId == app.facts.view?.currentOrderId,
               m.bytes == app.facts.view?.currentBytesSent else { return 0 }
-        // 对齐 Android FINISHING：字节已全部发出、在等电脑确认收下，不动是正常的，不算「没有新数据」。
         if let v = app.facts.view, TransferText.isFinishing(sent: v.currentBytesSent, total: v.currentTotalBytes) { return 0 }
         return max(Int(now.timeIntervalSince(m.at)), 0)
     }
 
-    /// 状态行；nil = 不渲染（10-29 文案 B12：iOS 首页不再有「打开 P-Pass 时自动备份」这一行，后台备份只靠设置页卡片引导）。
     private func statusText(_ s: BackupUiState) -> String? {
         if case .waiting(let r) = s { return L.s(HomeProjection.waitTextKey(r)) }
         if s == .preparing { return L.s("state_preparing") }
@@ -204,7 +176,7 @@ struct HeroCard: View {
         case .paused: return L.s("state_paused")
         case .trouble: return L.s("state_trouble")
         case .allSafe:
-            let allowed = HomeProjection.allSafeTextAllowed(app.access, app.triplet, pairingLost: app.pairingLost,
+            let allowed = HomeProjection.allSafeTextAllowed(app.access, app.triplet, connection: app.connection,
                                                             missingSource: app.facts.missingSourceUnacknowledged)
             return allowed ? L.s("state_safe") : nil
         case .ready, .working, .waiting: return nil
@@ -221,16 +193,12 @@ struct HeroCard: View {
         let hasWait: Bool
         if case .waiting = s { hasWait = true } else { hasWait = false }
         let line = HomeProjection.statusLine(s, pendingK: app.triplet?.k ?? 0)
-        let allowed = HomeProjection.allSafeTextAllowed(app.access, app.triplet, pairingLost: app.pairingLost,
+        let allowed = HomeProjection.allSafeTextAllowed(app.access, app.triplet, connection: app.connection,
                                                         missingSource: app.facts.missingSourceUnacknowledged)
         return Self.heroIdleLineColor(hasWaitReason: hasWait, line: line, allSafeAllowed: allowed)
     }
 }
 
-/// #1962：英雄卡内紧凑描边次级按钮的样式常量——抽成纯数据，模拟器单测直接断言，
-/// 不必渲染视图。对齐 Android `HomeScreen.kt` 英雄卡的 `OutlinedButton`：
-/// 高 40、圆角 14、1pt `PPColor.Act` 40% 描边、`PPColor.Act` 字色、15pt 粗体，
-/// 水平内边距随文字自适应（不再用全宽撑满的 `PPButton(kind: .quiet)`）。
 struct HeroActionButtonStyleConfig: Equatable {
     var height: CGFloat = 40
     var cornerRadius: CGFloat = 14
@@ -245,7 +213,6 @@ struct HeroActionButtonStyleConfig: Equatable {
     var contentColor: Color { PPColor.act }
 }
 
-/// #1962：英雄卡里那一个紧凑描边次级按钮（「去设置」/「调整范围」）。
 struct HeroCompactActionButton: View {
     let title: String
     var style: HeroActionButtonStyleConfig = .standard

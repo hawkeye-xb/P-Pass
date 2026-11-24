@@ -1,11 +1,5 @@
-// T-055 Photos tab — the design file's timeline: month sections are a
-// later pass; this edition is the honest core: a 3-column grid of the
-// family library (timeline.page), thumbnails over thumb.get, tap for
-// the 1024 preview. States speak the meaning colours only.
 package com.hawkeyexb.ppass.ui
 
-import com.hawkeyexb.ppass.log.PLog
-import com.hawkeyexb.ppass.backup.MediaAccess
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Base64
@@ -41,6 +35,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -50,11 +45,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -67,17 +61,19 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.hawkeyexb.ppass.R
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.backup.AndroidOriginalReader
 import com.hawkeyexb.ppass.backup.LocalFirstLoader
 import com.hawkeyexb.ppass.backup.LocalFirstOriginals
+import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.backup.readLocalSourceIndex
+import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.proto.AssetMeta
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.ProtoJson
@@ -95,49 +91,19 @@ import kotlinx.coroutines.withContext
 import me.saket.telephoto.zoomable.rememberZoomableState
 import me.saket.telephoto.zoomable.zoomable
 
-/**
- * MOB-04 红线②：缩略图缓存 = 内存 LruCache，**绝不落盘**（手机是减负端，
- * 不是第二存储端）。上限按 32MB 估算（≈838 张 256px 解码位图，覆盖常见
- * 家庭库首屏 + 翻页缓冲）；不做设备内存分级——低内存设备由系统缓存压力
- * 自动回收 Bitmap，分级只会引入复杂度。任何改动不得引入磁盘 thumb 缓存
- * （守卫测试 CacheRedlineTest 扫描全工程源码）。
- *
- * UX-10: 全 App 唯一内存缩略图缓存（CacheRedlineTest 断言 LruCache 声明
- * 只能有这一处）——BucketScreen 的相册封面缩略图共用这个实例，key 加
- * `"bucket:"` 前缀（远端 hash 值不含冒号，不会撞车），不为局部化缓存
- * 各开各的内存预算。
- */
+// 红线②：内存缩略图缓存，绝不落盘
 internal val thumbCache = LruCache<String, Bitmap>(32 * 1024 * 1024 / 40_000)
 
-/** #1119：断开 / 被拒即清理时清空内存里的小图（那是这台电脑的内容）。 */
 internal fun evictPhotoPreviews() = thumbCache.evictAll()
 
-/** SYNC-04: 前台订阅断线重连的退避序列——有限次数，不是无限重试
- *  （UX-11 同款哲学）。用完最后一档还是连不上就停下来交给用户。 */
 internal val SUBSCRIBE_RETRY_DELAYS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000, 30_000)
-
-/** SYNC-04: 连上并撑过这段时间才断——算一次"曾经连上"，退避计数清零
- *  重来，不带着上次失败攒的重试档位（否则长时间正常使用后的偶发断线
- *  会直接跳到大退避档）。 */
 internal const val SUBSCRIBE_WAS_LIVE_MS = 5_000L
-
-/** SYNC-04: 订阅之外的整页刷新兜底频率——对齐桌面端已有的 60s 兜底，
- *  远低于原来 15s 轮询，只防真实丢事件场景，不是主通道。 */
 internal const val FULL_REFRESH_FALLBACK_MS = 60_000L
 
-/**
- * MOB-04 红线①失效联动的逐出决策（纯函数，JVM 可测）：给定缓存 key
- * 列表与「当前仍在时间线返回集里」的 hash 集合，返回应当逐出的 key。
- * key 格式 = "$hash/$size.px"——hash 相同不同尺寸都保留（都在返回集里）。
- */
+// 红线①失效联动：逐出已不在时间线集合中的缩略图
 internal fun staleThumbKeys(keys: Collection<String>, currentHashes: Set<String>): List<String> =
     keys.filter { it.substringBefore('/') !in currentHashes }
 
-/** SYNC-04: 一次订阅断开之后该怎么做——纯函数，JVM 可测（把状态机从
- *  Compose `LaunchedEffect` 里剥出来，不用起 Compose 测试环境）。
- *  [delayMs] 非空时调用方应该 delay 这么久再重连；`exhausted=true` 时
- *  [delayMs] 为 null，调用方停止静默重试，把状态交给用户（UX-11 哲学：
- *  有界等待→亮错误→交给用户）。*/
 internal data class SubscribeRetryDecision(
     val nextAttempt: Int,
     val exhausted: Boolean,
@@ -149,9 +115,6 @@ internal fun nextSubscribeRetry(
     wasLive: Boolean,
     delays: LongArray = SUBSCRIBE_RETRY_DELAYS_MS,
 ): SubscribeRetryDecision {
-    // 这次连上并撑过了一小段时间才断——算一次"曾经连上"，退避从头算起，
-    // 不带着上次失败攒的重试档位（否则长时间正常使用后的偶发断线会
-    // 直接跳到大退避档，体验上像"越用越慢"）。
     val attempt = if (wasLive) 0 else currentAttempt
     return if (attempt < delays.size) {
         SubscribeRetryDecision(nextAttempt = attempt + 1, exhausted = false, delayMs = delays[attempt])
@@ -163,17 +126,10 @@ internal fun nextSubscribeRetry(
 class TimelineLoader(
     private val client: DaemonClient,
     private val daemon: PeerAddrParts,
-    /** Idempotent bind with the device identity — the loader may run
-     *  before the app's own bind LaunchedEffect (race seen live). */
     private val ensureBound: suspend () -> Unit,
 ) {
-    // MOB-04 红线①失效联动：已加载的时间线 hash 集合（分页累计）。
-    // onTimelineRefreshed 整页重载时重置集合并逐出不在返回集里的缓存
-    // 条目（SYNC-01 对账后 daemon 已删的照片，内存里不能继续闪旧图）；
-    // onTimelineAppended 翻页追加只增不逐。
     private val knownHashes = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
-    /** 时间线整页重载（第一页）——重置已知集合并逐出失效缩略图。 */
     fun onTimelineRefreshed(hashes: Set<String>) {
         knownHashes.clear()
         knownHashes.addAll(hashes)
@@ -182,20 +138,10 @@ class TimelineLoader(
         }
     }
 
-    /** 翻页追加——只增不逐（后页照片仍在库中）。 */
     fun onTimelineAppended(hashes: Set<String>) {
         knownHashes.addAll(hashes)
     }
 
-    /**
-     * SYNC-04: 前台常驻订阅——包一层 ensureBound，语义同 [page]/[thumb]。
-     * 挂起直到这条订阅结束（对端主动关闭/连接坏了/协程被取消）；抛异常
-     * 和正常返回对调用方是同一件事："这次订阅结束了"，按断线退避重连
-     * 处理。[onConnected] 在读到第一个帧（订阅确认）时调用一次——调用方
-     * 拿它区分"正在重连"和"已经连上"两种状态。[onInvalidated] 收到一次
-     * 信号就整页覆盖刷新（不是追加）——这是本卡的核心：SYNC-01 对账
-     * 删掉的照片必须真的从时间线消失。
-     */
     suspend fun subscribe(onConnected: suspend () -> Unit = {}, onInvalidated: suspend () -> Unit) {
         ensureBound()
         client.subscribeTimeline(daemon, onConnected = onConnected, onInvalidated = onInvalidated)
@@ -240,15 +186,9 @@ class TimelineLoader(
         return bmp
     }
 
-    /** The phone's persistent NodeId, after [ensureBound] has completed. */
     fun localNodeIdHex(): String? = client.nodeIdHex()
 }
 
-/**
- * Timeline attribution is solely the server's per-asset source NodeId.
- * Missing source identity is intentionally unclassified: it remains visible
- * only in All and never receives a guessed local/family attribution.
- */
 internal fun filterAssetsBySource(
     assets: List<AssetMeta>,
     filter: TimelineFilter,
@@ -265,23 +205,9 @@ internal fun filterAssetsBySource(
 
 private fun AssetMeta.sourceDeviceOrNull(): String? = srcDevice?.takeIf { it.isNotBlank() }
 
-/**
- * UI-17（#354）：照片 tab 时间线区域上方那几行状态提示该不该露出——纯函数，JVM 可测。
- *
- * #1883：判定输入从三个各自的信号收成唯一状态 [ConnectionState]——详情页与照片页看同一份事实，
- * 同一时刻不可能一个说已连接、一个说已中断。
- *
- * 配对失效（[ConnectionState.needsRepair]，与设置 tab 红卡、设置角标同一个信号）时，出路只有一个：
- * 红卡上的「重新扫码连接」。这时订阅必然一直被拒（not_authorized），如果时间线区域照常显示
- * 「正在重新连接电脑…」/「连不上 + 重试」/「没能连上电脑。(timeline: err.not_authorized)」，
- * 就等于同一屏里一个说要重新扫码、一个说正在重连，还露出原始错误 key。所以配对失效时三者全部收起。
- */
 internal data class PhotosTimelineChrome(
-    /** 「正在重新连接电脑…」小字。 */
     val showReconnecting: Boolean,
-    /** 「和电脑的实时连接断了。」+「重试」。 */
     val showExhaustedRetry: Boolean,
-    /** 中间的「没能连上电脑。(原始错误)」。 */
     val showTimelineError: Boolean,
 )
 
@@ -293,12 +219,8 @@ internal fun photosTimelineChrome(
         PhotosTimelineChrome(showReconnecting = false, showExhaustedRetry = false, showTimelineError = false)
     } else {
         PhotosTimelineChrome(
-            // SYNC-04：跟「耗尽」互斥（耗尽之后不会再是「重连中」）。
             showReconnecting = connection.status == ConnectionState.Status.Reconnecting,
             showExhaustedRetry = connection.status == ConnectionState.Status.Offline,
-            // #1883：这一层只看 error。连上之后旧 error 由 holder 在 onConnected 里补一次整页清掉
-            // （见 TimelineSubscriptionHolder.sessionLoop）——在这里再按连接状态遮一次，会让下面
-            // 「error 非空且一张都没有」那条落到空白页，反而更糟。
             showTimelineError = error != null,
         )
     }
@@ -307,59 +229,34 @@ internal fun photosTimelineChrome(
 @Composable
 internal fun PhotosScreen(
     holder: TimelineSubscriptionHolder,
-    // 2026-08-17 大图查看页导航修复：查看大图/视频时通知外层
-    // （MainActivity）关掉主 [照片]/[设置] tab 栏——大图页参考系统
-    // 相册惯例，不该跟主导航叠在一起。PhotosScreen 仍然自己管
-    // opened/viewer 状态（不改动内部数据流），只是多一条"我现在是否
-    // 在全屏查看"的通知线往上冒泡。
     onViewerOpenChange: (Boolean) -> Unit = {},
-    // #1883：唯一的连接状态（[connectionStateOf] 合成）——照片页与存储电脑详情页
-    // 都从这一份取文案与显示条件，不再各自读 pairingLost / subscribeExhausted /
-    // 失联天数三个信号（那正是「同一屏两个相反结论」的来源）。
     connection: ConnectionState = ConnectionState(ConnectionState.Status.Unknown),
     onReconnect: () -> Unit = {},
-    // #1322：引导位这一刻给哪一张（[photosGuideOf] 按当前开关现算），同一时间最多一张。
     guide: PhotosGuide = PhotosGuide.None,
     computerName: String = "",
     onGuideAction: (PhotosGuide) -> Unit = {},
-    /** #1353：第一步卡的按钮会去系统设置（部分权限、系统不再弹框）时说「去设置」，否则「开启」。 */
     guideActionGoesToSettings: Boolean = false,
     onGuideDismiss: () -> Unit = {},
-    // #1322（方案结论 7）：范围里还没有照片时的一行现状；null = 不显示。不是引导，不受 × 影响。
     scopeEmptyHint: String? = null,
 ) {
-    // SYNC-06: 时间线状态（items/next/loading/error/订阅标志）全部由
-    // TimelineSubscriptionHolder 持有——App 前台期间（不管显示哪个 tab）
-    // 订阅连接保持，本 composable 只渲染这份状态，不再自己创建/销毁订阅。
     val loader = holder.loader
-    // 卡 #124（MOB-73）：取图出口本机优先——来源是本机、账本命中、版本核对一致
-    // 就打开本机相册那份；其它情况全部走老路远端（不报错、不提示降级）。
     val localMedia = rememberLocalSourceLoader(loader, LocalContext.current)
     val items = holder.items
     val next = holder.next
     val loading = holder.loading
     val error = holder.error
-    // 10-29 文案 B13：原始报错只进日志，屏幕上只说「无法连接电脑」和用户能做的事。
     LaunchedEffect(error) { error?.let { PLog.w("PPassTimeline", "photos tab load failed: $it") } }
-    // UI-17: 配对失效时红卡是唯一出路，时间线区域的重连/错误提示一律收起（见 photosTimelineChrome）。
     val chrome = photosTimelineChrome(connection, error)
 
     var viewer by remember { mutableStateOf<MediaViewerSession?>(null) }
-    // T-080: 轻过滤器（设计稿：全部 / 仅本机 / 家人的）。
     var filter by remember { mutableStateOf(TimelineFilter.All) }
-    // 查看器页序是打开瞬间的过滤结果快照，不受订阅的后续刷新重排。
     val localNodeId = loader?.localNodeIdHex()
     val shown = filterAssetsBySource(items, filter, localNodeId)
-    // UI-11：打开/关闭查看器必须同一帧同步通知外层（MainActivity 的 photoViewerOpen），
-    // 不能再经 LaunchedEffect 等重组后的下一帧才通知——否则 TwoTabs 背景色与系统栏图标
-    // 会晚一帧切换，肉眼看到闪烁。所有 viewer 写入点都收口到 updateViewer。
     val updateViewer: (MediaViewerSession?) -> Unit = { next ->
         val resolved = if (loader != null) next else null
         viewer = resolved
         onViewerOpenChange(resolved != null)
     }
-    // 配对断开会让 loader 置空、查看器不再渲染；同步兜底归零，避免 photoViewerOpen 悬空为
-    // true（这里同样不能用 LaunchedEffect，否则又晚一帧）。
     SideEffect {
         if (viewer != null && loader == null) updateViewer(null)
     }
@@ -368,8 +265,6 @@ internal fun PhotosScreen(
     }
     val currentViewer = viewer
     if (currentViewer != null && loader != null) {
-        // Android 系统边缘返回先到这里；HorizontalPager 只处理内容区域横滑。
-        // 查看器关闭后本 Handler 不在 composition，根页面的系统返回继续由 Activity 接管。
         BackHandler(
             enabled = viewerBackAction(viewerOpen = viewer != null) == ViewerBackAction.CloseViewer,
         ) {
@@ -383,20 +278,8 @@ internal fun PhotosScreen(
         androidx.compose.material3.ProvideTextStyle(
             androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
         ) {
-        // 2026-08-17 用户真机反馈："N 张 · 已去重"这行副标题对家人用户
-        // 没有信息量（纯技术术语，桌面端才关心去重）——没有现成的"上次
-        // 同步于 X 分钟前"这类数据源可用（TimelineSubscriptionHolder 不
-        // 追踪时间戳，硬加会是编数据），删掉这行副标题。
-        //
-        // 2026-08-21 用户真机裁决：**大标题「全家的照片」也删掉**——
-        // 「占位置还没有什么意义」。底部 tab 已经写着「照片」，30sp serif
-        // 标题是同一句话说第二遍，还吃掉手机上最金贵的首屏纵向空间。
-        // ⚠️ 这是对设计稿 layout-v1 的一处**有意偏离**（设计稿要求标题
-        // 单独站着），记在 UI-01 卡里，不是漏做。
         Spacer(Modifier.height(8.dp))
 
-        // 设计稿："和家里的电脑失去了联系"红色警示卡——配对被电脑端
-        // 移除/吊销后，照片页也要露出（不能只藏在设置页才看得到）。
         if (connection.needsRepair) {
             Surface(
                 color = PPColor.ActBg,
@@ -436,7 +319,6 @@ internal fun PhotosScreen(
             }
         }
 
-        // #1322（方案结论 6）：引导位——同一时间最多一张，在过滤条上面，不挡浏览、不弹窗（产品负责人 11-04 定位置）。
         if (guide != PhotosGuide.None) {
             LaunchedEffect(guide) { PLog.i("PPassGuide", "photos-guide: shown ${guide.logName}") }
             PhotosGuideCard(
@@ -444,21 +326,10 @@ internal fun PhotosScreen(
                 goesToSettings = guideActionGoesToSettings,
                 onAction = { onGuideAction(guide) },
                 onDismiss = onGuideDismiss,
-                // 提示条左右用 page-gutter，与筛选条、照片网格、失联卡、顶部提示条同一条线（#1405）。
                 modifier = Modifier.fillMaxWidth().padding(PPSize.PageGutter, 0.dp, PPSize.PageGutter, 12.dp),
             )
         }
 
-        // T-080: 轻过滤器 chips（设计稿样式:胶囊,选中=墨底纸字）。
-        // UI-13: 私有 FilterChip（手写药丸）改用 Material3 同名组件——
-        // 之前跟框架组件撞名字纯属巧合式重新发明轮子，见 PhotoFilterChip
-        // 的 wrapper（保留私有壳只是为了封装 colors，不算"手写控件"）。
-        // 提示条、筛选条、照片网格左右同一条线，都用 page-gutter（#1405，产品负责人 11-05 验收）。
-        // #1886：与范围页同因——普通 Row 里后面的胶囊只能吃前面剩下的宽度，大字体下会被挤窄硬裁；
-        // 换成可换行的 FlowRow，放不下时整体落到下一行、各自保持自身宽度。
-        // #1882：与范围页同因——筛选条要画在下方照片网格之上。网格向上滚动时，顶边被裁剩
-        // 1px 的照片格虚拟触控框会外扩 24dp 遮住上面的胶囊，TalkBack 读到的可点区被切小。
-        // zIndex 抬高绘制/命中层级，胶囊的 48dp 触控目标不再被裁。
         FlowRow(
             Modifier.fillMaxWidth().padding(PPSize.PageGutter, 0.dp, PPSize.PageGutter, 12.dp).zIndex(1f),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -475,10 +346,6 @@ internal fun PhotosScreen(
             }
         }
 
-        // SYNC-04：断线重连期间的轻提示——真机验收发现的缺口：重连中
-        // 界面原来完全沉默（飞行模式几秒钟用户会以为是卡死），现在给
-        // 一个不打断浏览的小字提示。跟下面"耗尽"的提示互斥（耗尽之后
-        // 不会再是"重连中"）。
         if (chrome.showReconnecting) {
             Text(
                 stringResource(R.string.photos_live_reconnecting),
@@ -487,8 +354,6 @@ internal fun PhotosScreen(
             )
         }
 
-        // SYNC-04：订阅退避重试耗尽——不挡住已加载的照片，只在上面提示
-        // "连不上"+手动重试（UX-11 同款：有界等待→亮错误→交给用户）。
         if (chrome.showExhaustedRetry) {
             Row(
                 Modifier.fillMaxWidth().padding(PPSize.PageGutter, 0.dp, PPSize.PageGutter, 12.dp),
@@ -507,7 +372,6 @@ internal fun PhotosScreen(
             }
         }
 
-        // #1322（方案结论 7）：范围里还没有照片——过滤条下方次要提示位说一行现状，不带按钮。
         if (scopeEmptyHint != null) {
             LaunchedEffect(Unit) { PLog.i("PPassGuide", "photos-guide: scope empty hint") }
             Text(
@@ -518,12 +382,9 @@ internal fun PhotosScreen(
         }
 
         when {
-            // SYNC-06: loader 尚未就绪（换配对后的极短窗口）——不渲染交互。
             loader == null -> Center(stringResource(R.string.photos_loading))
             loading -> Center(stringResource(R.string.photos_loading))
             error != null && chrome.showTimelineError -> Center(stringResource(R.string.photos_unreachable))
-            // UI-17: 配对失效且一张都没加载到——什么都不放，上面的红卡就是全部内容
-            // （落到下一条会显示「照片库还是空的——先备份一批吧」，又是一个不同的出路）。
             error != null && items.isEmpty() -> Unit
             items.isEmpty() -> Center(stringResource(R.string.home_empty_albums))
             shown.isEmpty() -> Center(stringResource(R.string.photos_filter_empty))
@@ -533,7 +394,6 @@ internal fun PhotosScreen(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                // Month sections: the design's timeline shape.
                 for ((month, group) in groupByMonth(shown)) {
                     item(key = "hdr-$month", span = { GridItemSpan(3) }) {
                         Text(
@@ -555,8 +415,6 @@ internal fun PhotosScreen(
                 if (next != null) {
                     item(key = "pager") {
                         LaunchedEffect(next) {
-                            // SYNC-06: 翻页也走 holder——items/next 归 holder 管，
-                            // 本 composable 只触发，不直接改状态。
                             next?.let { holder.appendNextPage(it) }
                         }
                     }
@@ -567,11 +425,6 @@ internal fun PhotosScreen(
     }
 }
 
-/**
- * 卡 #124（MOB-73）：「本机优先」的取图出口。索引在第一次查找时才从账本读
- * （只读接口 readCurrentOrders，运行时还没起来就隔 5 秒再试），不落盘、不改账本。
- * [loader] 还没就绪时远端这一路给 null——那时网格本来也不渲染。
- */
 @Composable
 private fun rememberLocalSourceLoader(
     loader: TimelineLoader?,
@@ -593,7 +446,6 @@ private fun rememberLocalSourceLoader(
     }
 }
 
-/** taken_at (ms) → "2026年7月"-style month label using the device locale. */
 private fun groupByMonth(items: List<AssetMeta>): List<Pair<String, List<AssetMeta>>> {
     val fmt = java.text.SimpleDateFormat("yyyy.MM", java.util.Locale.getDefault())
     return items.groupBy { fmt.format(java.util.Date(it.takenAt * 1000)) }
@@ -607,9 +459,6 @@ private fun ThumbCell(
     isMine: Boolean,
     onOpen: () -> Unit,
 ) {
-    // LINT-01: ProduceStateDoesNotAssignValue 误报——赋值裹在
-    // `if (value == null)` 条件分支里，lint 静态检查看不出（缓存命中时
-    // 本来就不该重新赋值，是有意为之）。
     @Suppress("ProduceStateDoesNotAssignValue")
     val bmp by produceState<Bitmap?>(initialValue = thumbCache.get("${asset.hash}/256"), asset.hash) {
         if (value == null) {
@@ -628,24 +477,19 @@ private fun ThumbCell(
                 modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
             )
         }
-        // MOB-79: 网格里视频和照片长得一模一样，用户点进去才知道是视频。
-        // Wire format 是规范化过的 "video"/"photo"（见 PhotosScreen.kt:508
-        // 的注释），但也兼容旧 daemon 可能发送的 MIME 值如 "video/mp4"。
         if (asset.mediaType.startsWith("video")) {
             VideoBadge(Modifier.align(Alignment.BottomEnd).padding(6.dp))
         }
     }
 }
 
-/** MOB-79: 网格缩略图角标——半透明深底 + 白色播放三角，右下角，跟系统
- *  相册/主流图库同一套视觉语言，一眼区分视频和照片。 */
 @Composable
 private fun VideoBadge(modifier: Modifier = Modifier) {
     androidx.compose.foundation.Canvas(modifier.size(22.dp)) {
         val r = size.minDimension / 2f
         drawCircle(color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.45f), radius = r)
         val triSize = r * 0.9f
-        val cx = center.x + r * 0.08f // 视觉居中：三角形重心偏左，右移一点点更居中
+        val cx = center.x + r * 0.08f
         val path = androidx.compose.ui.graphics.Path().apply {
             moveTo(cx - triSize * 0.45f, center.y - triSize * 0.55f)
             lineTo(cx - triSize * 0.45f, center.y + triSize * 0.55f)
@@ -656,13 +500,8 @@ private fun VideoBadge(modifier: Modifier = Modifier) {
     }
 }
 
-/** RET-01/MOB-06: 查看页可用动作——设计稿收敛为两个：保存 / 分享。 */
 private enum class ViewerOp { Save, Share }
 
-/**
- * 大图页归因文案（2026-08-17 用户拍板）：网格不标来源，只有大图才显示
- * 「来自 XX的手机 · 日期」。`src_device` 只提供身份，不提供设备显示名；
- * 因此目前只据它诚实地区分本机与外部来源，未知来源不擅自归因。 */
 @Composable
 internal fun attributionText(isMine: Boolean, takenAtSeconds: Long): String {
     val date = java.text.SimpleDateFormat("MM-dd", java.util.Locale.getDefault())
@@ -674,20 +513,7 @@ internal fun attributionText(isMine: Boolean, takenAtSeconds: Long): String {
     }
 }
 
-/**
- * IDX-03: 查看器头部的尺寸位——**只在尺寸真的已知时**才有字。
- *
- * 为什么判据是 `<= 0` 而不是 null：线上这个字段是 `u32`
- * （`crates/proto/src/msgs.rs` 的 `AssetMeta`），daemon 侧
- * `a.width.unwrap_or(0)`（`crates/daemon/src/query.rs`）已经把「库里是
- * NULL」压成 `0` 才发出来。手机收到的从来不是 null，是 0——把 `Proto.kt`
- * 改成 `Int?` 一个字都改不动这件事（IDX-03 判断 ④，留白记在卡上）。
- * 好在这个哨兵值没有歧义：没有任何一张照片是 0 像素宽的。
- *
- * 为什么不写「尺寸未知」：头部只有这一个信息位，视频本来就常常没有尺寸，
- * 那不是异常态，空着比写字干净（判断 ③）。`0×0` 是个看起来像真数据的
- * 假数据，比不显示更糟——用户会以为照片坏了。
- */
+// 协议层 AssetMeta.width/height 用 0 表示数据库 NULL，<= 0 即未知尺寸
 internal fun dimensionsText(width: Int, height: Int): String? =
     if (width > 0 && height > 0) "$width×$height" else null
 
@@ -706,16 +532,11 @@ private fun MediaViewer(
     HorizontalPager(
         state = pagerState,
         modifier = Modifier.fillMaxSize(),
-        // #1800：预取前后各一页——手指刚滑动时相邻页已经在 composition 里，
-        // 翻页不会先白一帧；缩放仍归 Telephoto，横向手势在未放大时才交给 Pager。
         beyondViewportPageCount = 1,
     ) { page ->
         val asset = session.assets[page]
         val isMine = localNodeId?.let { asset.sourceDeviceOrNull() == it } == true
-        // Wire format is normalized "video"/"photo"; retain the prefix for
-        // older daemons that might send a MIME type such as video/mp4.
         if (asset.mediaType.startsWith("video")) {
-            // 卡 #124 范围只到照片四条路；视频仍走原来的远端路径（视频的本机源另卡）。
             VideoScreen(loader, asset, isMine = isMine, onClose = onClose)
         } else {
             PhotoViewer(localMedia, asset, isMine = isMine, onClose = onClose)
@@ -730,26 +551,14 @@ private fun PhotoViewer(
     isMine: Boolean,
     onClose: () -> Unit,
 ) {
-    // MOB-04 红线③（大图）：当前查看 = 1024 缩略图走内存缓存（见下）；
-    // 未来加原图查看时——拉原图只走**临时文件即看即清或纯内存流式**，
-    // 绝不建长期原图缓存。手机是减负端不是第二存储端。备忘：
-    // docs/product/2026-08-12-cache-redlines.md。
-    // RET-01: 取回=使用动作。原图按需下载到 cacheDir/share/（即用即清），
-    // 不落任何长期缓存。
-    // LINT-01: ProduceStateDoesNotAssignValue 误报——本函数确实在
-    // producer lambda 顶层赋值了一次（`value = ...`），lint 对
-    // `?:` 兜底表达式的赋值路径分析仍然把它标记为“未赋值”。
-    // 两档都取不到（含预检不合格被拒）时显示占位文案，不再一直停在「正在读取」。
+    // 红线③：大图查看与导出仅用内存缓存或临时文件即看即清
     var previewMissing by remember(asset.hash) { mutableStateOf(false) }
     @Suppress("ProduceStateDoesNotAssignValue")
     val bmp by produceState<Bitmap?>(initialValue = null, asset.hash) {
-        // 卡 #124：本机那份还在就先读本地，取不到再按老路走远端。
         value = runCatching { localMedia.thumb(asset, ThumbSize.S1024, isMine) }.getOrNull()
             ?: thumbCache.get("${asset.hash}/256")
         previewMissing = value == null
     }
-    // Telephoto 处理缩放后的平移和与 Pager 的 nested scrolling 协商：图片放大后
-    // 水平拖动留在图片本身，未放大时剩余的横向手势才交给 HorizontalPager。
     val zoomableState = rememberZoomableState()
     var pullDownPx by remember(asset.hash) { mutableStateOf(0f) }
     val pullThresholdPx = with(LocalDensity.current) { 96.dp.toPx() }
@@ -785,10 +594,6 @@ private fun PhotoViewer(
     var notice by remember { mutableStateOf<String?>(null) }
     val share = remember { shareDir(context) }
 
-    // RET-01: 「用其他应用打开」/ MOB-06:「分享」面板关闭后清理临时文件
-    // （MOB-04 红线）。有些系统查看器不回传 result——不依赖回调，每次使用
-    // 前先清旧残留 + 进程重启由 cacheDir 语义兜底。分享与打开共用同一个
-    // launcher：回调语义都是「面板关闭后清空 share 目录」。
     val openLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
@@ -801,9 +606,7 @@ private fun PhotoViewer(
         notice = null
         scope.launch {
             try {
-                // RET-01：即用即清旧残留（本机命中与远端下载共用同一条）。
                 share.listFiles()?.forEach { it.delete() }
-                // 卡 #124：本机那份还在就复制本机原图，否则按老路下载。
                 val file = localMedia.fetchOriginal(asset, isMine, File(share, "asset-${asset.hash.take(16)}"))
                 when (op) {
                     ViewerOp.Save -> {
@@ -815,7 +618,6 @@ private fun PhotoViewer(
                         )
                     }
                     ViewerOp.Share -> {
-                        // MOB-06: ACTION_SEND 系统分享面板（微信/邮件/云盘…）
                         openLauncher.launch(
                             shareIntent(
                                 context, file, asset,
@@ -834,30 +636,24 @@ private fun PhotoViewer(
         }
     }
 
-    // #1926：整屏底色、安全区 inset 与系统栏图标明暗已由外层 TwoTabs 唯一顶层 PPScreen
-    // 按 photoViewerOpen 切到 SurfaceDark；这里不再嵌套第二层 PPScreen。
     Box(Modifier.fillMaxSize().background(PPColor.SurfaceDark)) {
         androidx.compose.material3.ProvideTextStyle(
             androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
         ) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
+        val chromeSpec = viewerChromeSpecOf(busy = busy)
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // #1800：关闭是本页唯一的退出动作，交给 Material3 IconButton——
-            // 48dp 触控区、涟漪、role=Button 与 contentDescription 都由组件给出。
             IconButton(onClick = onClose) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(R.string.back),
+                    contentDescription = stringResource(chromeSpec.closeDescriptionRes),
                     tint = PPColor.Paper,
                 )
             }
-            // 设计稿 M9：头部只有尺寸信息，分享挪到底部按钮。
-            // IDX-03：尺寸未知（视频 / 探测不到）时整个 Text 不出现——
-            // 宁可空着，也不画 `0×0` 那个假数字。
             dimensionsText(asset.width, asset.height)?.let {
                 Text(
                     it, fontSize = 14.sp,
@@ -865,18 +661,12 @@ private fun PhotoViewer(
                 )
             }
         }
-        // 归因信息按需出现——网格不标来源，只有大图才显示。
         Text(
             attributionText(isMine, asset.takenAt),
             fontSize = 13.sp, color = PPColor.PaperDim,
             modifier = Modifier.padding(horizontal = 10.dp),
         )
         Spacer(Modifier.height(8.dp))
-        // MOB-22: 图片区必须用 weight(1f) 而不是 fillMaxSize()。
-        // 在 Column 里 fillMaxSize 会吃掉全部剩余高度，把下面的
-        // 「保存到相册 / 分享」两个按钮整个顶出屏幕——按钮其实渲染了，
-        // 只是看不见（2026-08-19 真机实测：查看页只剩图片，没有任何动作）。
-        // weight(1f) = 占据剩余空间但先给同级的固定高度元素让位。
         Box(
             Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(20.dp)),
             contentAlignment = Alignment.Center,
@@ -899,7 +689,6 @@ private fun PhotoViewer(
                 )
             }
         }
-        // RET-01: 取回=使用动作——保存到相册 / 用其他应用打开。
         notice?.let {
             Text(
                 it, fontSize = 13.sp, color = PPColor.PaperDim,
@@ -913,13 +702,13 @@ private fun PhotoViewer(
         ) {
             ViewerAction(
                 label = stringResource(R.string.save_to_gallery),
-                enabled = !busy,
+                enabled = chromeSpec.actionsEnabled,
                 onClick = { runAssetAction(ViewerOp.Save) },
                 modifier = Modifier.weight(1f),
             )
             ViewerAction(
                 label = stringResource(R.string.share),
-                enabled = !busy,
+                enabled = chromeSpec.actionsEnabled,
                 onClick = { runAssetAction(ViewerOp.Share) },
                 modifier = Modifier.weight(1f),
             )
@@ -929,11 +718,6 @@ private fun PhotoViewer(
     }
 }
 
-/** RET-01: 查看页动作按钮（纸底墨字胶囊，与 FilterChip 同族）。
- *  #1800：底层换 Material3 `Button`——点击涟漪、`enabled` 的禁用语义与
- *  role=Button 都交给组件，只保留品牌配色与胶囊形状；不再手写 clickable。
- *  #1886：`height` 是**最小**高度（`heightIn(min = ...)`）——大字体下标签换行时按钮要能自己长高，
- *  写死固定高度会把换行后的第二行裁掉。 */
 @Composable
 internal fun ViewerAction(
     label: String,
@@ -969,14 +753,6 @@ internal fun ViewerAction(
     }
 }
 
-/** 设计稿的过滤胶囊：高 36,圆角 999,选中=墨底纸字,未选=亚麻底墨字。
- *  UI-13: 底层用 Material3 `FilterChip`（选中态/涟漪/a11y role 都是
- *  组件自带的），只定制 `colors`/`shape` 让视觉贴住设计稿——不再是一个
- *  重新发明的手写药丸。
- *  #1886：36 是**最小**高度（`heightIn(min = 36.dp)`），不是固定高度——大字体下
- *  标签换行时胶囊要能自己长高，否则换行后的第二行被底边裁掉（视觉只剩「Incl」）。
- *  触控区不靠这个高度撑：Material 3 `FilterChip` 自带的
- *  `minimumInteractiveComponentSize` 已把可点区撑到 48dp。 */
 @Composable
 internal fun PhotoFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
     androidx.compose.material3.FilterChip(
@@ -1000,32 +776,19 @@ internal fun PhotoFilterChip(label: String, selected: Boolean, onClick: () -> Un
     )
 }
 
-/** #1322：照片页引导位给哪一张（方案结论 6）。决定页之后的引导都是可选的，按当前开关现算，不按「走到第几步」记。 */
 internal enum class PhotosGuide(val logName: String) {
-    /** 没开范围备份（「自动备份」关，或开着但一个相册都没选）。现有「还没有选择相册」并入这一步。 */
     EnableScope("scope"),
-
-    /** 范围备份已开、第一张已传成功、后台备份没开。 */
     EnableBackground("background"),
     None("none"),
 }
 
-/** [photosGuideOf] 的输入：都是此刻的真实状态。 */
 internal data class GuideFacts(
-    /** 「自动备份」规则开着，且范围里至少有一个相册（读不出来的范围按「有」算，设置行另说「读不到」）。 */
     val scopeOn: Boolean,
-    /** 范围备份成功传过至少一张（账本里最后成功时间不为 0）。 */
     val firstUploaded: Boolean,
-    /** 用户开了后台备份（意图；系统没放行另有提示接手）。 */
     val backgroundOn: Boolean,
-    /** 「onboarding 已走完」：用户点过引导位的 ×。按手机记，断开、换电脑都不重置。 */
     val finished: Boolean,
 )
 
-/**
- * 方案结论 6：没开范围备份 → 引导开启；范围备份已开、第一张已传、后台没开 → 引导开后台；都开了 → 结束。
- * 点过 × 就整条结束。起点按现状：决定页直接选了范围备份的，不会出现「开启范围备份」。
- */
 internal fun photosGuideOf(f: GuideFacts): PhotosGuide = when {
     f.finished -> PhotosGuide.None
     !f.scopeOn -> PhotosGuide.EnableScope
@@ -1033,13 +796,8 @@ internal fun photosGuideOf(f: GuideFacts): PhotosGuide = when {
     else -> PhotosGuide.None
 }
 
-/**
- * 方案结论 7：范围备份开着、范围里一张照片都还没有（如「从今天起」而今天还没拍）→ 过滤条下方一行现状。
- * 这是状态提示，不是引导：不看 [GuideFacts.finished]（点过 × 照样说）；有了第一张就不说。[inScope] 为 null = 还没数出来，不说。
- */
 internal fun scopeEmptyHintShown(f: GuideFacts, inScope: Long?): Boolean = f.scopeOn && inScope == 0L
 
-/** 引导位：一句话 + 动作 + ×，用现成提示条 [ClosableNoticeCard]（产品负责人 11-04）。 */
 @Composable
 private fun PhotosGuideCard(
     guide: PhotosGuide,
@@ -1055,7 +813,6 @@ private fun PhotosGuideCard(
         PhotosGuide.EnableBackground -> stringResource(R.string.photos_guide_background)
         PhotosGuide.None -> return
     }
-    // 复用现成提示条（NoticeCard 的 × 一行版式 ClosableNoticeCard，C1）：外形、颜色、边距与设置页提示条一致，不另起组件。
     Box(modifier) {
         ClosableNoticeCard(
             body = text,
