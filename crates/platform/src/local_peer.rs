@@ -90,6 +90,7 @@ pub struct UserDirFacts {
 /// 身份跟随 junction / 映射盘外连。
 fn is_valid_dir_fact_path_with(
     path: &std::path::Path,
+    mapped_drive: &dyn Fn(&std::path::Path) -> bool,
     reparse_point: &dyn Fn(&std::path::Path) -> bool,
     network_volume: &dyn Fn(&std::path::Path) -> bool,
 ) -> bool {
@@ -123,11 +124,15 @@ fn is_valid_dir_fact_path_with(
         && bytes[6] == b'\\';
     // 3. POSIX 本地绝对路径（单个 `/` 开头；在 Windows 宿主上 `is_absolute()` 为 false）。
     let posix = bytes[0] == b'/' && path.is_absolute();
-    // #1927：格式合法后，还要在 `canonicalize()` / `real_path` 之前拦掉指向远端 /
-    // 设备命名空间的重解析点，以及网络卷 / 映射网络盘——服务形态下这些都会让服务
-    // 账户以服务身份外连 SMB/NTLM（`user_dirs` 进入 `real_path` 前就要拒）。
-    // 两个判据以探针注入，单测能单独反证任一分支去掉后变红。
-    (normal_drive || verbatim_drive || posix) && !reparse_point(path) && !network_volume(path)
+    // #1927 / #1993：严格按「零 I/O 映射盘符根 → 不跟随扫描远端重解析点 → 完整网络卷」顺序拦截：
+    // 1) `mapped_drive` 只看盘符根 `GetDriveTypeW`，对 `Z:\...` 零外连短路，不进 `reparse_point` 触发 stat；
+    // 2) `reparse_point` 逐段不跟随检查重解析点，必须在任何会对完整路径 `symlink_metadata` 的 `network_volume`
+    //    之前运行，防止 `C:\entry\sub`（`entry` → `\\attacker\share`）被 `network_volume` 穿过中间链接外连；
+    // 3) `network_volume` 最后兜底非盘符挂载的网络卷（macOS `/Volumes/...`、Linux `/mnt/...` 等）。
+    (normal_drive || verbatim_drive || posix)
+        && !mapped_drive(path)
+        && !reparse_point(path)
+        && !network_volume(path)
 }
 
 impl UserDirFacts {
@@ -217,29 +222,33 @@ impl UserDirFacts {
     /// 也必须同样合法（Windows 的 `library` 按 [`UserDirFacts`] 的定义就是 `None`）。
     /// 连接方存在而事实不齐或不合法 ⇒ 调用方必须拒绝本次选择，不拿自己的目录代答、不按形状猜。
     ///
-    /// #1927：生产入口固定用平台的真实探测器（[`crate::contains_remote_reparse_point`] /
-    /// [`crate::is_network_volume_or_ancestor`]），判断逻辑在可注入的
-    /// [`Self::selection_ready_with`] 里，单测能单独反证任一条判据被去掉。
+    /// #1927 / #1993：生产入口固定用平台的真实探测器（[`crate::is_mapped_network_drive`] /
+    /// [`crate::contains_remote_reparse_point`] / [`crate::is_network_volume_or_ancestor`]），
+    /// 判断逻辑在可注入的 [`Self::selection_ready_with`] 里，单测能单独反证任一条判据或顺序。
     pub fn selection_ready(&self) -> bool {
-        self.selection_ready_with(&|p| crate::contains_remote_reparse_point(p), &|p| {
-            crate::is_network_volume_or_ancestor(p)
-        })
+        self.selection_ready_with(
+            &|p| crate::is_mapped_network_drive(p),
+            &|p| crate::contains_remote_reparse_point(p),
+            &|p| crate::is_network_volume_or_ancestor(p),
+        )
     }
 
-    /// [`Self::selection_ready`] 的可测版本：重解析点 / 网络卷探针可注入。
+    /// [`Self::selection_ready`] 的可测版本：映射网络盘 / 重解析点 / 网络卷探针可注入。
     fn selection_ready_with(
         &self,
+        mapped_drive: &dyn Fn(&std::path::Path) -> bool,
         reparse_point: &dyn Fn(&std::path::Path) -> bool,
         network_volume: &dyn Fn(&std::path::Path) -> bool,
     ) -> bool {
         let req = |p: &Option<std::path::PathBuf>| {
             p.as_deref().is_some_and(|path| {
-                is_valid_dir_fact_path_with(path, reparse_point, network_volume)
+                is_valid_dir_fact_path_with(path, mapped_drive, reparse_point, network_volume)
             })
         };
         let opt = |p: &Option<std::path::PathBuf>| {
-            p.as_deref()
-                .is_none_or(|path| is_valid_dir_fact_path_with(path, reparse_point, network_volume))
+            p.as_deref().is_none_or(|path| {
+                is_valid_dir_fact_path_with(path, mapped_drive, reparse_point, network_volume)
+            })
         };
         req(&self.home)
             && req(&self.desktop)
@@ -732,8 +741,10 @@ mod floor_tests {
     /// #1927：`selection_ready` 的重解析点 / 网络卷拦截走可注入探针——任一探针命中
     /// 某个用户目录都必须让整体不就绪；两侧都放行时合法本地绝对目录应就绪，默认入口
     /// 也确实把平台判据接了进来。
-    /// 反证：去掉 `selection_ready_with` 里的 `!reparse_point(path)` 或
-    /// `!network_volume(path)` ⇒ 对应的「命中即不就绪」断言变红。
+    /// #1927 / #1993：`selection_ready` 的映射网络盘 / 重解析点 / 网络卷三阶顺序拦截走可注入探针：
+    /// 1) 映射网络盘命中时，必须零 I/O 短路拒绝，不得调用 `reparse_point` 或 `network_volume`；
+    /// 2) 远端重解析点命中时，必须在不跟随扫描阶段短路拒绝，不得调用会穿过中间 junction 做 stat 的 `network_volume`；
+    /// 3) 仅非盘符网络卷命中时，同样必须让整体不就绪；三者都放行时合法本地绝对目录应就绪。
     #[test]
     fn selection_ready_rejects_remote_reparse_and_network_volume_via_probes() {
         use super::UserDirFacts;
@@ -747,19 +758,73 @@ mod floor_tests {
         let facts = UserDirFacts::from_home(host_home);
         // 全部是合法本地绝对路径，探针都放行 ⇒ 就绪。
         assert!(
-            facts.selection_ready_with(&|_| false, &|_| false),
+            facts.selection_ready_with(&|_| false, &|_| false, &|_| false),
             "合法本地绝对目录 + 探针放行应就绪"
         );
-        // 仅重解析点探针对 downloads 命中 ⇒ 不就绪。
-        let downloads = facts.downloads.clone().unwrap();
+        // 1) 映射网络盘探针对 pictures 命中 ⇒ 不就绪，且该目录不得再走进 reparse_point 或 network_volume 触发 stat。
+        let pictures = facts.pictures.clone().unwrap();
+        let pictures_for_reparse = pictures.clone();
+        let pictures_for_net = pictures.clone();
+        let reparse_calls_on_mapped = std::cell::Cell::new(0usize);
+        let net_calls_on_mapped = std::cell::Cell::new(0usize);
         assert!(
-            !facts.selection_ready_with(&move |p: &Path| p == downloads.as_path(), &|_| false),
+            !facts.selection_ready_with(
+                &move |p: &Path| p == pictures.as_path(),
+                &|p: &Path| {
+                    if p == pictures_for_reparse.as_path() {
+                        reparse_calls_on_mapped.set(reparse_calls_on_mapped.get() + 1);
+                    }
+                    false
+                },
+                &|p: &Path| {
+                    if p == pictures_for_net.as_path() {
+                        net_calls_on_mapped.set(net_calls_on_mapped.get() + 1);
+                    }
+                    false
+                },
+            ),
+            "映射网络盘命中用户目录必须不就绪"
+        );
+        assert_eq!(
+            reparse_calls_on_mapped.get(),
+            0,
+            "命中映射网络盘的用户目录必须在调用 reparse_point 探针前短路拒绝"
+        );
+        assert_eq!(
+            net_calls_on_mapped.get(),
+            0,
+            "命中映射网络盘的用户目录必须在调用 network_volume 探针前短路拒绝"
+        );
+
+        // 2) 重解析点探针对 downloads 命中 ⇒ 不就绪，且该目录不得先走进 network_volume（防穿过中间 junction 触发 SMB 外连）。
+        let downloads = facts.downloads.clone().unwrap();
+        let downloads_for_net = downloads.clone();
+        let net_calls_on_reparse = std::cell::Cell::new(0usize);
+        assert!(
+            !facts.selection_ready_with(
+                &|_| false,
+                &move |p: &Path| p == downloads.as_path(),
+                &|p: &Path| {
+                    if p == downloads_for_net.as_path() {
+                        net_calls_on_reparse.set(net_calls_on_reparse.get() + 1);
+                    }
+                    false
+                },
+            ),
             "重解析点命中用户目录必须不就绪"
         );
-        // 仅网络卷探针对 pictures 命中 ⇒ 不就绪。
-        let pictures = facts.pictures.clone().unwrap();
+        assert_eq!(
+            net_calls_on_reparse.get(),
+            0,
+            "命中远端重解析点的用户目录必须在调用 network_volume 探针前短路拒绝，避免穿过中间链接外连"
+        );
+
+        // 3) 仅完整网络卷探针对 videos 命中 ⇒ 不就绪。
+        let videos = facts.videos.clone().unwrap();
         assert!(
-            !facts.selection_ready_with(&|_| false, &move |p: &Path| p == pictures.as_path()),
+            !facts.selection_ready_with(&|_| false, &|_| false, &move |p: &Path| {
+                p == videos.as_path()
+            }),
             "网络卷命中用户目录必须不就绪"
         );
         // 默认入口对合法本地绝对路径就绪：证明探针确实接进了 `selection_ready`。

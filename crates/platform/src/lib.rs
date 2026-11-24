@@ -364,7 +364,7 @@ pub(crate) fn classify_reparse_target(raw: &str) -> ReparseTargetClass {
         };
         return ReparseTargetClass::DriveLetter { root, normalized };
     }
-    if body.len() >= 7 && body[..7].eq_ignore_ascii_case("Volume{") {
+    if starts_with_ignore_ascii_case(body, "Volume{") {
         if let Some(close) = body.find('}') {
             let guid = &body[..=close]; // `Volume{...}`
             let rest = body[close + 1..].trim_start_matches(['\\', '/']);
@@ -422,6 +422,11 @@ fn windows_contains_remote_reparse_point(p: &Path) -> bool {
 
     // 传入的本身就是 UNC / 设备路径：不 stat（会外连），直接按远端处理。
     if local_peer::UserDirFacts::is_unc_or_device_path(p) {
+        return true;
+    }
+    // #1993：纵深防御——盘符根是映射网络盘（`Z:\...` / `\\?\Z:\...`）时先走零外连的
+    // `GetDriveTypeW` 短路，避免任何直接调用者先对 `Z:\` 发起 `symlink_metadata` 触发 SMB I/O。
+    if is_mapped_network_drive(p) {
         return true;
     }
     let mut current = p.to_path_buf();
@@ -498,6 +503,32 @@ fn drive_type_is_remote(root: &str) -> bool {
     unsafe { GetDriveTypeW(w.as_ptr()) == DRIVE_REMOTE }
 }
 
+/// #1993：纯零文件系统 I/O 的映射网络盘符根判定（Windows 下仅对盘符根调 `GetDriveTypeW == DRIVE_REMOTE`，
+/// 不调用 `symlink_metadata` / `GetVolumePathNameW`；非 Windows 恒 `false`）。
+///
+/// 之所以与 [`is_network_volume_or_ancestor`] 拆开：后者在非映射盘符路径上会对完整路径及其祖先做
+/// `symlink_metadata`，若本地盘符下含指向远端共享的中间 junction（如 `C:\entry\photos`），先调
+/// `is_network_volume_or_ancestor` 会穿过中间 junction 触发 SMB 外连。调用方必须按
+/// `is_mapped_network_drive`（零外连）→ `contains_remote_reparse_point`（不跟随扫描）→
+/// `is_network_volume_or_ancestor`（完整卷检查）的顺序执行。
+pub fn is_mapped_network_drive(p: &Path) -> bool {
+    if local_peer::UserDirFacts::is_unc_or_device_path(p) {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        if let Some(root) = drive_letter_root(&p.to_string_lossy()) {
+            return drive_type_is_remote(&root);
+        }
+        false
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = p;
+        false
+    }
+}
+
 /// #1927：`p` 所在卷是不是网络卷——包括**尚未创建**的新建子目录（回到最近一个已
 /// 存在的祖先判卷类型）与映射网络盘符（Windows 下先对盘符根查 `GetDriveTypeW`，即便
 /// 子目录还不存在也能零外连识破 `Z:\new_lib`）。
@@ -508,13 +539,8 @@ pub fn is_network_volume_or_ancestor(p: &Path) -> bool {
     if local_peer::UserDirFacts::is_unc_or_device_path(p) {
         return false;
     }
-    #[cfg(windows)]
-    {
-        if let Some(root) = drive_letter_root(&p.to_string_lossy()) {
-            if drive_type_is_remote(&root) {
-                return true;
-            }
-        }
+    if is_mapped_network_drive(p) {
+        return true;
     }
     // 从 p 向最近一个已存在的祖先探测卷类型（新建子目录尚不存在时退回父目录）。
     let mut cur: Option<&Path> = Some(p);
@@ -2163,11 +2189,23 @@ mod tests {
         assert_eq!(drive_letter_root(r"\\?\D:\Pics").as_deref(), Some("D:\\"));
         assert_eq!(drive_letter_root(r"E:\").as_deref(), Some("E:\\"));
         assert_eq!(drive_letter_root("/Users/alice"), None);
-        // 相对目标归为相对（既非远端也非盘符）。
+        // 相对目标归为相对（既非远端也非盘符），含第 7 字节落在多字节 UTF-8 字符内部的非 ASCII 相对路径（#1993）。
         assert_eq!(
             classify_reparse_target(r"..\other\photos"),
             ReparseTargetClass::Relative
         );
+        for non_ascii_rel in [
+            r"..\照片库\2026",
+            r"..\相册\家庭",
+            r"照片库\2026",
+            r"a\照片库\2026",
+        ] {
+            assert_eq!(
+                classify_reparse_target(non_ascii_rel),
+                ReparseTargetClass::Relative,
+                "{non_ascii_rel:?} 第 7 字节非 UTF-8 字符边界时不得 panic，应判为 Relative"
+            );
+        }
         // 卷 GUID 目标保留为可继续扫描的 verbatim 根（是否远端由盘类型补判）。
         match classify_reparse_target(r"\??\Volume{00000000-0000-0000-0000-000000000000}\photos") {
             ReparseTargetClass::VolumeGuid { root, normalized } => {
