@@ -111,9 +111,9 @@
 "bucket_save" = "Save";
 "scope_time_since_date" = "From %1$@ onward";
 "scope_time_all" = "Include older photos";
-"scope_value_since" = "%1$@ onward";
-"scope_value_all" = "Including older photos";
-"backup_scope_with_time" = "%1$@, %2$@";
+"scope_value_since" = " · %1$@+";
+"scope_value_all" = "All";
+"backup_scope_with_time" = "%1$@%2$@";
 "home_empty_albums" = "No backed-up photos yet. They'll appear here.";
 "bucket_new" = "New";
 "backup_scope" = "Backup range";

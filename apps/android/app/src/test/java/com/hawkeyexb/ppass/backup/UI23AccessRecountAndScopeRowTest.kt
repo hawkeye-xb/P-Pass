@@ -121,6 +121,15 @@ class UI23AccessRecountAndScopeRowTest {
         assertTrue(code("ui/HomeScreen.kt").contains("R.string.backup_scope_none"))
     }
 
+    @Test
+    fun scope_sources_joined_with_middle_dot_and_uses_compact_folder_plural() {
+        // #1995（产品负责人选项 A）：相册与素材文件夹用「 · 」连接，文件夹使用短词条 backup_scope_folder_n。
+        val home = code("ui/HomeScreen.kt")
+        assertTrue("来源用「 · 」连接", home.contains("joinToString(\" · \")"))
+        assertTrue("文件夹使用短词条", home.contains("R.plurals.backup_scope_folder_n"))
+        assertFalse("不再使用长词条 folder_settings_title", home.contains("folder_settings_title"))
+    }
+
     // ── helpers（剥注释行，同 ForegroundCatchupOnResumeTest）─────────────
 
     private fun code(rel: String): String {

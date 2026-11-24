@@ -70,7 +70,21 @@
 			<key>NSStringFormatValueTypeKey</key>
 			<string>ld</string>
 			<key>other</key>
-			<string>%1$ld 个相册</string>
+			<string>%1$ld 相册</string>
+		</dict>
+	</dict>
+	<key>backup_scope_folder_n</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@n@</string>
+		<key>n</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>ld</string>
+			<key>other</key>
+			<string>%1$ld 文件夹</string>
 		</dict>
 	</dict>
 	<key>photos_lost_body_days</key>

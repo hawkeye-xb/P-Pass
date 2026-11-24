@@ -950,9 +950,9 @@ internal fun HomeScreen(
                                     pluralStringResource(R.plurals.backup_scope_n, it, it)
                                 }
                                 val folders = if (selectedFolderCount > 0) {
-                                    "${stringResource(R.string.folder_settings_title)} $selectedFolderCount"
+                                    pluralStringResource(R.plurals.backup_scope_folder_n, selectedFolderCount, selectedFolderCount)
                                 } else null
-                                val sources = listOfNotNull(albums, folders).joinToString(" + ")
+                                val sources = listOfNotNull(albums, folders).joinToString(" · ")
                                 if (sources.isEmpty()) stringResource(R.string.backup_scope_none)
                                 else if (scopeTimeLabel != null) stringResource(R.string.backup_scope_with_time, sources, scopeTimeLabel)
                                 else sources
