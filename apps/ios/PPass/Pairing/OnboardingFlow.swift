@@ -11,11 +11,11 @@ struct OnboardingFlow: View {
     enum Step: Equatable { case welcome, scan, manual(fromScan: Bool), status(PairStep) }
     enum PairStep: Equatable {
         case waiting
-        /// #1118：提交成功之后才有的验证码页（电脑名 + 6 位数字 + 电脑标识）。扫码后不经任何询问直接到这里（中间只有发请求的等待）。
+        /// 提交成功之后才有的验证码页（电脑名 + 6 位数字 + 电脑标识）。扫码后不经任何询问直接到这里（中间只有发请求的等待）。
         case code(PairCodeShown)
-        /// refused：titleKey = 标题（`PairNote.titleKey`，B6 / C10）；note = 原因行（自带操作，nil = 只有标题，10-29 文案 B5）；
-        /// errorCode = 原因行下的小字「错误代码：…」（B13）。
-        /// failed：哪一种失败页（B7）；诊断原文进日志（#1264）。
+        /// refused：titleKey = 标题（`PairNote.titleKey`）；note = 原因行（自带操作，nil = 只有标题）；
+        /// errorCode = 原因行下的小字「错误代码：…」。
+        /// failed：哪一种失败页；诊断原文进日志。
         case refused(titleKey: String, note: String?, errorCode: String? = nil), needsUpdate(OutdatedSide), failed(PairFailure)
     }
 
@@ -33,7 +33,7 @@ struct OnboardingFlow: View {
             }
         }
         .onAppear(perform: applyRoute)
-        // #1964：电脑端移除本机配对、被拒即清理之后说明一次（对位 Android PairingRemovedNoticeStore）。
+        // 电脑端移除本机配对、被拒即清理之后说明一次（对位 Android PairingRemovedNoticeStore）。
         .alert(L.s("pairing_lost_title"), isPresented: $app.showPairingRemovedNotice) {
             Button(L.s("missing_source_notice_dismiss")) { app.dismissPairingRemovedNotice() }
         } message: {
@@ -41,11 +41,11 @@ struct OnboardingFlow: View {
         }
     }
 
-    /// 同 Android WelcomeScreen：顶部字标「P-PASS」，标题衬线 36 压在下半屏，三步是三行 ink-40 小字（不成卡），
-    /// 主按钮 64 高 / 19 字，下面「手动输入」14 粗体 ink-60。无插图。
     /// 手动输入页「返回」去哪（Android `leaveManual`）。
     static func manualBackTarget(fromScan: Bool) -> Step { fromScan ? .scan : .welcome }
 
+    /// 同 Android WelcomeScreen：顶部字标「P-PASS」，标题衬线 36 压在下半屏，三步是三行 ink-40 小字（不成卡），
+    /// 主按钮 64 高 / 19 字，下面「手动输入」14 粗体 ink-60。无插图。
     private var welcome: some View {
         GeometryReader { geo in
             ScrollView {
@@ -104,7 +104,7 @@ struct OnboardingFlow: View {
     }
 
     private func applyRoute() {
-        // #1964：配对失效卡「重新连接」时相机已授权 → 直达扫码页（对位 Android #355），不停在欢迎页。
+        // 配对失效卡「重新连接」时相机已授权 → 直达扫码页（对位 Android），不停在欢迎页。
         if app.resumeToScan {
             app.consumeResumeToScan()
             step = .scan
@@ -177,7 +177,7 @@ struct ManualPairScreen: View {
             }
         }
         .onAppear {
-            // 自动化（模拟器端到端，仅 DEBUG 构建，#1152）：环境变量直接给配对串，等同于用户粘贴后点「连接」。
+            // 自动化（模拟器端到端，仅 DEBUG 构建）：环境变量直接给配对串，等同于用户粘贴后点「连接」。
             if let code = DebugLaunchInput.pairCode {
                 text = code
                 if let c = PairCode.normalized(code) { onSubmit(c) }
@@ -192,7 +192,7 @@ struct PairStatusScreen: View {
     let onRetry: () -> Void
 
     var body: some View {
-        // #1964：对位 Android 的垂直居中；`minHeight: geo.size.height` 让内容矮时居中、大字号超高时照常可滚，不被裁掉。
+        // 对位 Android 的垂直居中；`minHeight: geo.size.height` 让内容矮时居中、大字号超高时照常可滚，不被裁掉。
         GeometryReader { geo in
             ScrollView {
                 content
@@ -219,21 +219,21 @@ struct PairStatusScreen: View {
         VStack(spacing: 14) {
             switch step {
             case .waiting:
-                // 10-29 文案 B8：等待页只有标题和转圈。
+                // 等待页只有标题和转圈。
                 ProgressView().controlSize(.large).padding(.bottom, 6)
                 message(title: L.s("pair_waiting_title"))
             case .code(let shown):
                 PairCodeView(shown: shown)
             case .refused(let titleKey, let note, let errorCode):
-                // 10-29 文案 B5：正文就是原因行（自带操作）；电脑上点了拒绝时没有原因行。
+                // 正文就是原因行（自带操作）；电脑上点了拒绝时没有原因行。
                 message(title: L.s(titleKey), body: note,
                         footnote: errorCode.map { L.f("error_code_line", $0) })
             case .needsUpdate(let side):
-                // #1069：配对过程中发现版本不兼容——标题「需要更新」，正文说清是哪一端的 P-Pass。
+                // 配对过程中发现版本不兼容——标题「需要更新」，正文说清是哪一端的 P-Pass。
                 message(title: L.s("pair_needs_update_title"),
                         body: L.s(side == .phone ? "state_waiting_phone_outdated" : "state_waiting_desktop_outdated"))
             case .failed(let kind):
-                // #1264：异常原文不上屏（tokens.json rules 第 10 条），只在日志里。10-29 文案 B7：按种类各一页。
+                // 异常原文不上屏（tokens.json rules 第 10 条），只在日志里；按失败种类各一页。
                 switch kind {
                 case .unreachable: message(title: L.s("pair_failed_title"), body: L.s("pair_failed_body"))
                 case .notACode: message(title: L.s("not_a_code"))

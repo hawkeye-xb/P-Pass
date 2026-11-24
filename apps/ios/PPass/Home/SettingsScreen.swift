@@ -10,7 +10,7 @@ struct SettingsScreen: View {
     @State private var asking = false
     @State private var showFilePicker = false
 
-    enum Route: Hashable { case bucket, storage, diagnostics, more }
+    enum Route: CaseIterable, Hashable { case bucket, storage, diagnostics, more }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -114,8 +114,14 @@ struct SettingsScreen: View {
                 case .backup: backupRows
                 case .selection:
                     ForEach(SettingsLayout.selectionRows, id: \.self) { entry in
-                        entry.listRow {
+                        Button {
                             entry.request(photos: { app.pickerRequested = true }, files: { showFilePicker = true })
+                        } label: {
+                            Text(L.s(entry.labelKey))
+                                .font(Self.labelFont)
+                                .foregroundStyle(PPColor.ink)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                         }
                         .accessibilityIdentifier(entry.accessibilityID)
                     }
@@ -133,7 +139,10 @@ struct SettingsScreen: View {
         ForEach(SettingsLayout.backupRows(autoRule: app.autoRule), id: \.self) { item in
             switch item {
             case .rule: ruleRow
-            case .scope: row(L.s("backup_scope"), value: scopeValue, route: .bucket)
+            case .scope:
+                if let route = item.route {
+                    row(L.s("backup_scope"), value: scopeValue, route: route)
+                }
             case .background:
                 Toggle(L.s("auto_backup_pause"), isOn: Binding(get: { app.autoBackup }, set: { app.setAutoBackup($0) }))
                     .font(Self.labelFont).tint(PPColor.safe)
@@ -181,7 +190,10 @@ struct SettingsScreen: View {
                     Text(L.s("rule_notify_denied_hint")).font(Self.hintFont).foregroundStyle(PPColor.ink40)
                 }
             }
-        case .more: row(L.s("more_label"), value: "", route: .more)
+        case .more:
+            if let route = condition.route {
+                row(L.s("more_label"), value: "", route: route)
+            }
         }
     }
 
@@ -195,6 +207,7 @@ struct SettingsScreen: View {
         }
         .listStyle(.insetGrouped)
         .ppList()
+        .ppNavBar()
         .navigationTitle(L.s("more_label"))
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -246,10 +259,10 @@ struct SettingsScreen: View {
 
     private func row(_ title: String, value: String, route: Route) -> some View {
         NavigationLink(value: route) {
-            HStack(spacing: 12) {
-                Text(title).font(Self.labelFont).foregroundStyle(PPColor.ink)
-                Spacer(minLength: 8)
+            LabeledContent {
                 Text(value).font(Self.valueFont).foregroundStyle(PPColor.ink40).lineLimit(2).multilineTextAlignment(.trailing)
+            } label: {
+                Text(title).font(Self.labelFont).foregroundStyle(PPColor.ink)
             }
         }
     }

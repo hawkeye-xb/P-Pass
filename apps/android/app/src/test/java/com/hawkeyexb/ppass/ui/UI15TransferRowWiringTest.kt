@@ -1,6 +1,8 @@
 package com.hawkeyexb.ppass.ui
 
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UI15TransferRowWiringTest {
@@ -36,7 +38,20 @@ class UI15TransferRowWiringTest {
         val slots = heroBusySlotsOf(preparing, transferRow = null, transferProgress = null)
         assertEquals(null, slots.fileNameOverride)
         assertEquals(HeroBusySecondLine.Kind.EMPTY, slots.secondLine.kind)
-        assertEquals(2, slots.singleLineCount)
-        assertEquals(6, slots.progressSlotHeightDp)
+        assertTrue("忙碌块默认两行都钉成单行", slots.singleLine)
+        assertEquals("单行模式下文字 maxLines = 1", 1, heroBusyTextMaxLines(slots))
+        assertEquals("没有进度时进度槽按 6dp 占位", 6.dp, heroBusyProgressSlotHeight(slots))
+    }
+
+    @Test
+    fun the_busy_slots_are_driven_by_the_projection_not_hardcoded_in_the_screen() {
+        val slots = heroBusySlotsOf(
+            StatusLine.Working(BackupUiState.Sending(done = 1, total = 3)),
+            transferRow = null,
+            transferProgress = 0.5f,
+        )
+        val wrapped = slots.copy(singleLine = false, progressSlotHeightDp = 10)
+        assertEquals("关掉单行约束后文字恢复多行", Int.MAX_VALUE, heroBusyTextMaxLines(wrapped))
+        assertEquals("进度槽高度跟着投影里的值走", 10.dp, heroBusyProgressSlotHeight(wrapped))
     }
 }

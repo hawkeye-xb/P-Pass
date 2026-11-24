@@ -184,7 +184,7 @@ struct Thumb: View {
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(alignment: .bottomTrailing) {
                 if item.isVideo {
-                    Image(systemName: "play.fill").font(.system(size: 10, weight: .bold))
+                    Image(systemName: "play.fill").font(PPFont.icon(10, .bold))
                         .foregroundStyle(PPColor.paper)
                         .frame(width: 22, height: 22)
                         .background(PPColor.surfaceDark.opacity(0.62), in: Circle())

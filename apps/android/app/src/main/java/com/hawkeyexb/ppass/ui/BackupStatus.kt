@@ -2,6 +2,8 @@ package com.hawkeyexb.ppass.ui
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.backup.BackgroundBackupState
 import com.hawkeyexb.ppass.backup.BackupTriplet
@@ -123,9 +125,17 @@ internal data class HeroBusySlots(
     val secondLineColor: Color,
     val progress: Float?,
     val progressColor: Color,
-    val singleLineCount: Int = 2,
+    /** 忙碌块的两行文字是否都钉成单行（超出省略），避免文件名把卡片撑高。 */
+    val singleLine: Boolean = true,
+    /** 进度槽高度；没有进度可画时也按这个高度占位，忙碌块换行时卡片不跳动。 */
     val progressSlotHeightDp: Int = 6,
 )
+
+/** 忙碌块文字的 maxLines：单行模式下超出省略。 */
+internal fun heroBusyTextMaxLines(slots: HeroBusySlots): Int = if (slots.singleLine) 1 else Int.MAX_VALUE
+
+/** 进度条与占位槽共用的高度，保证两种状态占同样的位置。 */
+internal fun heroBusyProgressSlotHeight(slots: HeroBusySlots): Dp = slots.progressSlotHeightDp.dp
 
 internal fun heroBusySlotsOf(
     line: StatusLine.Working,
