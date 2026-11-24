@@ -25,7 +25,6 @@
   "ui.rename_saved": "Renamed to {name}",
   "ui.rename_failed": "The name wasn't changed. Try again.",
   "ui.settings": "Settings",
-  "ui.language": "Language",
   "ui.language_system": "Follow system",
   "ui.language_zh": "Chinese",
   "ui.language_en": "English",

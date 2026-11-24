@@ -166,11 +166,7 @@ def scan(root: Path) -> list[str]:
         errors.append(f"apps/ios/.../IOS.strings 存在零引用死词条（{len(dead_ios)} 个）：{dead_ios[:10]}")
 
     # (d) apps/desktop/src/i18n/*.json：必须在桌面前端产品源码或 Rust 中出现（排除注册表自身字面量）
-    # UI-19 特例保护：设置页暂时隐藏但能力未删且受 languageSetting.test.js 保护的 ui.language
-    dead_desk = [
-        k for k in sorted(desk_en_keys)
-        if k not in desktop_live_keys and k != "ui.language"
-    ]
+    dead_desk = [k for k in sorted(desk_en_keys) if k not in desktop_live_keys]
     if dead_desk:
         errors.append(f"apps/desktop/src/i18n/*.json 存在零引用死词条（{len(dead_desk)} 个）：{dead_desk[:10]}")
 
@@ -330,20 +326,26 @@ def run_self_test() -> int:
         (tmppath / "apps/desktop/src/i18n/zh.json").write_text('{"ui.test_desk": "桌面"}', encoding="utf-8")
         (tmppath / "apps/android/app/src/main/MobileOnly.kt").unlink()
 
-        # 10. 反例：树上带 crates/diag/src/keys.rs 注册表时，未被实际使用的 key 仍必须判红 -> 必须红
+        # 10. 反例：树上带 crates/diag/src/keys.rs 注册表时，未被实际使用的 key 仍必须判红；正例：被其他 .rs 引用时必须存活
         (tmppath / "crates/diag/src").mkdir(parents=True, exist_ok=True)
-        (tmppath / "crates/diag/src/keys.rs").write_text('msg_keys! { UI_UNUSED => "ui.registry_only" }\n', encoding="utf-8")
-        (tmppath / "apps/desktop/src/i18n/en.json").write_text('{"ui.test_desk": "Desk", "ui.registry_only": "Reg"}', encoding="utf-8")
-        (tmppath / "apps/desktop/src/i18n/zh.json").write_text('{"ui.test_desk": "桌面", "ui.registry_only": "注册"}', encoding="utf-8")
+        (tmppath / "crates/diag/src/keys.rs").write_text(
+            'msg_keys! {\n    UI_UNUSED => "ui.registry_only",\n    UI_USED => "ui.used_const",\n}\n',
+            encoding="utf-8",
+        )
+        (tmppath / "crates/daemon/src").mkdir(parents=True, exist_ok=True)
+        (tmppath / "crates/daemon/src/lib.rs").write_text('pub fn test() { let _ = diag::keys::UI_USED; }\n', encoding="utf-8")
+        (tmppath / "apps/desktop/src/i18n/en.json").write_text('{"ui.test_desk": "Desk", "ui.registry_only": "Reg", "ui.used_const": "Used"}', encoding="utf-8")
+        (tmppath / "apps/desktop/src/i18n/zh.json").write_text('{"ui.test_desk": "桌面", "ui.registry_only": "注册", "ui.used_const": "使用"}', encoding="utf-8")
         errs = scan(tmppath)
-        if not any("apps/desktop/src/i18n" in e and "ui.registry_only" in e for e in errs):
-            print("Self-test failed: key registered in keys.rs but unused in code was wrongly kept alive", file=sys.stderr)
+        if not any("apps/desktop/src/i18n" in e and "ui.registry_only" in e for e in errs) or any("ui.used_const" in e for e in errs):
+            print("Self-test failed: keys.rs mapping failed to catch unused key or wrongly flagged used constant key", file=sys.stderr)
             return 1
 
         # 还原
         (tmppath / "apps/desktop/src/i18n/en.json").write_text('{"ui.test_desk": "Desk"}', encoding="utf-8")
         (tmppath / "apps/desktop/src/i18n/zh.json").write_text('{"ui.test_desk": "桌面"}', encoding="utf-8")
         (tmppath / "crates/diag/src/keys.rs").unlink()
+        (tmppath / "crates/daemon/src/lib.rs").unlink()
 
     print("ok: check-dead-i18n self-test passed (all counter-proof cases red, clean pass)")
     return 0

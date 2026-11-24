@@ -25,7 +25,6 @@
   "ui.rename_saved": "已改名为 {name}",
   "ui.rename_failed": "名称没有修改。请再试一次。",
   "ui.settings": "设置",
-  "ui.language": "语言",
   "ui.language_system": "跟随系统",
   "ui.language_zh": "中文",
   "ui.language_en": "English",
