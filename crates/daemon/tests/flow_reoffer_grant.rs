@@ -294,8 +294,20 @@ impl Desk {
             Ok(receipt) => Ok(receipt.receipt_id),
             Err(e) => Err(e.wire_code().to_string()),
         };
-        // 让轮询引发的推送也落进收集器。
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        // #1087：不再固定 sleep(200ms) 赌收集器已收到推送，而是显式等待对应终态推送落进收集器。
+        let _ = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let seen = match &result {
+                    Ok(rid) => self.delivered_receipts().iter().any(|r| r == rid),
+                    Err(_) => !self.failed_reasons().is_empty(),
+                };
+                if seen {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
         result
     }
 
@@ -552,8 +564,18 @@ async fn reoffer_inside_the_receipt_window(stop_at: FetchStage) {
     let reoffer = desk.offer(&p2).await;
     gate.open();
     desk.await_first_terminal_push().await;
-    // (b) 的重发自己先推一条 delivered；等旧任务也走完再看。
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // #1087：(b) 的重发自己先推一条 delivered；改为等回执落库且 staging 清理完毕，
+    // 而不是固定 sleep(500ms) 赌旧任务走完。
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if desk.receipt_now().await.is_some() && desk.staging_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("旧任务结束后必须落库回执并清空 staging");
     let receipt_before_poll = desk.receipt_now().await;
     let final_status = desk.poll_to_terminal(&p2).await;
     desk.dump(&format!("{stop_at:?}"));

@@ -137,10 +137,14 @@ async fn junk_and_hidden_files_are_not_ingested() {
     write_media(&f, ".DS_Store", b"junk").await;
     write_media(&f, "Thumbs.db", b"junk").await;
     write_media(&f, "notes.txt", b"hello").await;
+    // #1087：反向断言不靠固定 sleep(800ms) 猜窗口——写一张同目录参照媒体文件，
+    // 等它被 watcher 真实入库后，验证索引里只有参照文件，非媒体/隐藏文件全部被忽略。
+    write_media(&f, "SENTINEL_JUNK_CHECK.jpg", b"sentinel-jpeg-bytes").await;
 
-    // 静默窗口之后索引仍为空。
-    tokio::time::sleep(Duration::from_millis(800)).await;
-    assert_eq!(asset_count(&f).await, 0, "非媒体/隐藏文件不得 ingest");
+    wait_until(|| count_eq(&f, 1), "sentinel media after junk files").await;
+    let rows = f.db.list_asset_paths().await.unwrap();
+    assert_eq!(rows.len(), 1, "非媒体/隐藏文件不得 ingest: {rows:?}");
+    assert_eq!(rows[0].1, "originals/SENTINEL_JUNK_CHECK.jpg");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -151,12 +155,21 @@ async fn ingest_self_events_are_idempotent() {
     write_media(&f, "IMG_0003.jpg", b"same-bytes").await;
     wait_until(|| count_eq(&f, 1), "first ingest").await;
 
-    // 等一个额外的防抖窗口，让自产事件的二次扫描跑完。
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    // #1087：用第二张参照文件推动下一轮防抖扫描，代替固定 sleep(600ms)。
+    write_media(&f, "IMG_0003_SENTINEL.jpg", b"distinct-sentinel-bytes").await;
+    wait_until(|| count_eq(&f, 2), "sentinel batch after self-events").await;
+    let rows = f.db.list_asset_paths().await.unwrap();
     assert_eq!(
-        asset_count(&f).await,
+        rows.len(),
+        2,
+        "自产事件扫描必须幂等（Duplicate 跳过）: {rows:?}"
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|(_, p)| p == "originals/IMG_0003.jpg")
+            .count(),
         1,
-        "自产事件扫描必须幂等（Duplicate 跳过）"
+        "IMG_0003.jpg 只能入库一次"
     );
 }
 
