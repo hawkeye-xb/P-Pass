@@ -488,13 +488,17 @@ mod tests {
         assert_eq!(filter_parent_paths(set).len(), 1);
     }
 
-    /// E2 IDX-06 (#442): a file the watcher ingests gets both thumbnail
+    /// E2 IDX-06 (#442, #1506): a file the watcher ingests gets both thumbnail
     /// sizes and `thumb_state=1` from pre-generation alone — no `thumb.get`
-    /// is ever issued in this test.
+    /// is ever issued in this test. Waits on the generation event rather than
+    /// a fixed 10s wall-clock budget.
     #[tokio::test(flavor = "multi_thread")]
     async fn ingest_hands_the_new_asset_to_thumbnail_pregen() {
-        use crate::thumb_pregen::tests::{fixture, write_jpeg};
-        let f = fixture(None, Duration::from_secs(600), &[]).await;
+        use crate::thumb_pregen::tests::{
+            fixture, observed_thumb_gen, wait_generated, wait_state, write_jpeg,
+        };
+        let (generator, mut rx) = observed_thumb_gen(Arc::new(media_codec::make_thumbs));
+        let f = fixture(Some(generator), Duration::from_secs(600), &[]).await;
         let (bus, _rx) = crate::events::bus();
         let watcher = LibraryWatcher::new(f.engine.db.clone(), f.library(), [7u8; 32], bus)
             .with_thumb_pregen(f.engine.start_thumb_pregen(crate::PREGEN_WORKERS));
@@ -510,28 +514,24 @@ mod tests {
             .unwrap()
             .expect("indexed");
         let hash: [u8; 32] = hash.as_slice().try_into().unwrap();
+        let events = wait_generated(&mut rx, 1, "watcher ingest")
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            events[0].hash, hash,
+            "watcher must pregen the ingested asset"
+        );
+        wait_state(&f, &hash, 1, "watcher ingest").await;
+
         let paths = media_codec::thumb_paths(&f.engine.thumbs_root, &hash);
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        loop {
-            let state = f
-                .engine
-                .db
-                .get_asset(&hash)
-                .await
-                .unwrap()
-                .unwrap()
-                .thumb_state;
-            if state == 1 && paths.t256.is_file() && paths.t1024.is_file() {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "no pre-generated thumbs after ingest (thumb_state={state}, 256={}, 1024={})",
-                paths.t256.is_file(),
-                paths.t1024.is_file()
-            );
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        assert!(
+            paths.t256.is_file(),
+            "256 thumb missing after thumb_state=1"
+        );
+        assert!(
+            paths.t1024.is_file(),
+            "1024 thumb missing after thumb_state=1"
+        );
         image::open(&paths.t256).expect("real 256 thumb");
         image::open(&paths.t1024).expect("real 1024 thumb");
     }

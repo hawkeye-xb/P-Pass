@@ -342,7 +342,7 @@ pub(crate) mod tests {
             .thumb_state
     }
 
-    async fn wait_state(f: &Fixture, hash: &[u8; 32], want: i64, what: &str) {
+    pub(crate) async fn wait_state(f: &Fixture, hash: &[u8; 32], want: i64, what: &str) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while state(f, hash).await != want {
             assert!(
@@ -351,6 +351,65 @@ pub(crate) mod tests {
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+
+    pub(crate) struct ObservedThumbEvent {
+        pub hash: [u8; 32],
+        pub thread_name: String,
+        pub outcome: media_codec::ThumbOutcome,
+    }
+
+    /// #1358 / #1506：把真实/桩缩略图生成器包一层事件通道——测试等真实生成结束事件
+    /// 而非 10 秒墙钟，且遇到 `Unavailable` / `Placeholder` 时立刻带原因报错，不空等超时。
+    pub(crate) fn observed_thumb_gen(
+        inner: ThumbGen,
+    ) -> (
+        ThumbGen,
+        tokio::sync::mpsc::UnboundedReceiver<ObservedThumbEvent>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let wrapped: ThumbGen = Arc::new(move |hash: &[u8; 32], src: &Path, root: &Path| {
+            let thread_name = std::thread::current().name().unwrap_or("").to_owned();
+            let res = inner(hash, src, root);
+            let _ = tx.send(ObservedThumbEvent {
+                hash: *hash,
+                thread_name,
+                outcome: res.outcome.clone(),
+            });
+            res
+        });
+        (wrapped, rx)
+    }
+
+    pub(crate) async fn wait_generated(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<ObservedThumbEvent>,
+        count: usize,
+        what: &str,
+    ) -> Result<Vec<ObservedThumbEvent>, String> {
+        let mut events = Vec::with_capacity(count);
+        for i in 0..count {
+            let ev = tokio::time::timeout(Duration::from_secs(60), rx.recv())
+                .await
+                .map_err(|_| {
+                    format!(
+                        "{what}: timed out waiting for thumb generation event {}/{count}",
+                        i + 1
+                    )
+                })?
+                .ok_or_else(|| {
+                    format!("{what}: thumb generation channel closed after {i}/{count} events")
+                })?;
+            if !matches!(ev.outcome, media_codec::ThumbOutcome::Generated) {
+                return Err(format!(
+                    "{what}: thumb generation failed immediately (hash={}, thread={}, outcome={:?})",
+                    hex::encode(ev.hash),
+                    ev.thread_name,
+                    ev.outcome
+                ));
+            }
+            events.push(ev);
+        }
+        Ok(events)
     }
 
     fn get(hash: &[u8; 32]) -> ThumbGet {
@@ -376,14 +435,7 @@ pub(crate) mod tests {
     /// both sizes with the real codec, on the low-priority pool's threads.
     #[tokio::test(flavor = "multi_thread")]
     async fn backfill_generates_every_state_0_row_on_pool_threads() {
-        let threads = Arc::new(Mutex::new(Vec::new()));
-        let t = Arc::clone(&threads);
-        let generator: ThumbGen = Arc::new(move |hash: &[u8; 32], src: &Path, root: &Path| {
-            t.lock()
-                .unwrap()
-                .push(std::thread::current().name().unwrap_or("").to_owned());
-            media_codec::make_thumbs(hash, src, root)
-        });
+        let (generator, mut rx) = observed_thumb_gen(Arc::new(media_codec::make_thumbs));
         let rows: Vec<_> = (1..=3u8)
             .map(|i| (h(i), format!("originals/p{i}.jpg"), 0))
             .collect();
@@ -395,6 +447,9 @@ pub(crate) mod tests {
         let pregen = f.engine.start_thumb_pregen(PREGEN_WORKERS);
         pregen.backfill(false);
 
+        let events = wait_generated(&mut rx, rows.len(), "backfill")
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
         for (hash, _, _) in &rows {
             wait_state(&f, hash, 1, "backfill").await;
             let paths = media_codec::thumb_paths(&f.engine.thumbs_root, hash);
@@ -403,11 +458,52 @@ pub(crate) mod tests {
                 assert!(img.width().max(img.height()) <= edge);
             }
         }
-        let threads = threads.lock().unwrap().clone();
-        assert_eq!(threads.len(), 3, "one generation per row");
+        assert_eq!(events.len(), 3, "one generation per row");
         assert!(
-            threads.iter().all(|n| n.starts_with("thumb-")),
-            "pre-generation must run on the low-priority pool, ran on {threads:?}"
+            events.iter().all(|e| e.thread_name.starts_with("thumb-")),
+            "pre-generation must run on the low-priority pool, ran on {:?}",
+            events.iter().map(|e| &e.thread_name).collect::<Vec<_>>()
+        );
+    }
+
+    /// #1358 / #1506 反证：解码子进程缺失（`Unavailable`）时必须立刻带原因返回 Err，
+    /// 不再傻等 10 秒墙钟超时后报无头绪的 `thumb_state never reached 1`。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wait_generated_fails_fast_with_reason_on_unavailable() {
+        let inner: ThumbGen =
+            Arc::new(
+                |hash: &[u8; 32], _src: &Path, root: &Path| media_codec::ThumbResult {
+                    paths: media_codec::thumb_paths(root, hash),
+                    outcome: media_codec::ThumbOutcome::Unavailable {
+                        reason: "ppf-decoder missing".into(),
+                    },
+                },
+            );
+        let (generator, mut rx) = observed_thumb_gen(inner);
+        let a = h(0xee);
+        let f = fixture(
+            Some(generator),
+            Duration::from_secs(600),
+            &[(a, "originals/missing-decoder.jpg".into(), 0)],
+        )
+        .await;
+        let pregen = f.engine.start_thumb_pregen(PREGEN_WORKERS);
+        let started = Instant::now();
+        pregen.ingested("originals/missing-decoder.jpg");
+
+        let err = wait_generated(&mut rx, 1, "unavailable-check")
+            .await
+            .err()
+            .expect("Unavailable 必须立即判错");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "不得傻等 10s 墙钟超时，耗时 {:?}",
+            started.elapsed()
+        );
+        assert!(err.contains("Unavailable"), "错误应暴露真实原因: {err}");
+        assert!(
+            err.contains("ppf-decoder missing"),
+            "错误应携带子进程原因: {err}"
         );
     }
 
