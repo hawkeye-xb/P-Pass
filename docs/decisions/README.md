@@ -12,7 +12,7 @@ ADR，验收人拍板后再拆卡实现。代码注释里出现的 ADR-003、ADR
 | 2026-11-03 | [自动备份规则缓存的到期判据](2026-11-03-flow-rule-cache-sentinel.md) | 已采纳 |
 | 2026-11-03 | [onboarding 闸门与「连过这台电脑」判据](2026-11-03-onboarding-gate.md) | 已采纳 |
 | 2026-11-05 | [发布链 hdiutil 遇到「Resource busy」时退避重试](2026-11-05-release-hdiutil-busy-retry.md) | 已采纳 |
-| 2026-11-06 | [macOS runner 全仓统一 macos-26](2026-11-06-macos-runner-26.md) | 已采纳 |
+| 2026-11-06 | [macOS runner 全仓统一 macos-26](2026-11-06-macos-runner-26.md) | 已废弃 |
 | 2026-11-06 | [发版闸接进 release.yml：按「[验收] <正式 tag>」找台账](2026-11-06-release-acceptance-gate.md) | 已采纳 |
 | 2026-11-06 | [test 版本号自动补丁与发版路径惰性登记](2026-11-06-release-test-next-patch-and-inert-paths.md) | 已采纳 |
 | 2026-11-06 | [test-channel：写入与收敛分权，收敛单点跑一次、失败只告警](2026-11-06-release-test-channel-single-writer.md) | 已采纳 |
@@ -29,6 +29,7 @@ ADR，验收人拍板后再拆卡实现。代码注释里出现的 ADR-003、ADR
 | 2026-11-18 | [NET-29 用虚拟时钟验证「一次 serve 只等一个 deadline」](2026-11-18-net29-virtual-clock.md) | 已采纳 |
 | 2026-11-18 | [沙箱预检的「未知」不许写成「已起来」：超时三态化，不进成功缓存](2026-11-18-sandbox-preflight-unknown-state.md) | 已采纳 |
 | 2026-11-21 | [研发工作流升级 V3：结果真值门禁、核心黑名单与串行合入重验](2026-11-21-v3-outcome-driven-collab-flow.md) | 已采纳 |
+| 2026-11-25 | [macOS runner 全仓统一升级为 xcode-27](2026-11-25-macos-runner-xcode-27.md) | 已采纳 |
 
 ## 写法
 
