@@ -28,6 +28,11 @@
 #   7. main-red.yml 在首次 runner 排队掉线时需执行 `gh run rerun <id> --failed`，
 #      最小权限必须恰为 `{issues: write, actions: write, contents: read}`（actions 退回 read
 #      会让自动重跑 403 失败；扩出额外写权限违背最小权限原则）。反证：actions 改回 read 必须判红。
+#   8. #2049：`.github/workflows/*.yml` 中任何调用 `./.github/actions/system-codecs` 且显式指定
+#      `with.packages` 的步骤，其包列表必须包含 `libde265-dev`（`decode-worker` / `media-codec`
+#      链接 `-lde265` 依赖 `libde265.so` 符号链接，Ubuntu 26.04 的 `libheif-dev` 不再顺带安装它）；
+#      `system-codecs/action.yml` 默认值自身也必须含 `libde265-dev`。反证：删掉 `artifacts.yml`
+#      或 `system-codecs/action.yml` 中的 `libde265-dev` 都必须判红。
 # YAML 1.1 把键 `on` 读成布尔 True，取触发表按 d.get('on', d.get(True)) 两头都认。
 # 缺 PyYAML 一律判红（exit 1），不 SKIP。
 # 反证：在临时目录里复制 workflows 与 desktop-checks action 造变异（去掉 Windows job 的 pull_request 条件 / 某条 lane 的
@@ -59,6 +64,7 @@ import os, re, subprocess, sys, yaml
 root = sys.argv[1]
 wf = os.path.join(root, ".github", "workflows")
 action_path = os.path.join(root, ".github", "actions", "desktop-checks", "action.yml")
+codecs_action_path = os.path.join(root, ".github", "actions", "system-codecs", "action.yml")
 LANES = ["ci-rust.yml", "ci-desktop.yml", "ci-android.yml", "ci-ios.yml", "ci-docs.yml"]
 WIN_NAMES = {"test (windows)", "clippy (windows)", "desktop (windows-latest)"}
 CANCEL_RE = re.compile(r"^\$\{\{\s*github\.event_name\s*!=\s*'push'\s*(&&[^|]*)?\}\}$", re.S)
@@ -311,6 +317,52 @@ if isinstance(main_red, dict):
             f"main-red.yml: permissions 应恰为 {expected_mr_perms!r}（gh run rerun 需 actions: write，且遵循最小权限），实为 {mr_perms!r}"
         )
 
+# #2049：system-codecs 默认包与所有显式覆盖 with.packages 的调用点都必须包含 libde265-dev
+#（decode-worker / media-codec 链接 -lde265 需要该 dev 包提供的 libde265.so）。
+try:
+    with open(codecs_action_path, encoding="utf-8") as f:
+        codecs_action = yaml.safe_load(f)
+except Exception as e:
+    bad.append(f"system-codecs/action.yml: 读不出 YAML（{e}）")
+    codecs_action = None
+if isinstance(codecs_action, dict):
+    default_pkgs = (((codecs_action.get("inputs") or {}).get("packages")) or {}).get("default", "")
+    if not isinstance(default_pkgs, str) or "libde265-dev" not in default_pkgs.split():
+        bad.append(
+            f"system-codecs/action.yml: inputs.packages.default 必须包含 libde265-dev，实为 {default_pkgs!r}"
+        )
+
+for fname in sorted(os.listdir(wf)):
+    if not fname.endswith((".yml", ".yaml")):
+        continue
+    fpath = os.path.join(wf, fname)
+    try:
+        with open(fpath, encoding="utf-8") as f:
+            doc = yaml.safe_load(f)
+    except Exception as e:
+        bad.append(f"{fname}: 读不出 YAML（{e}）")
+        continue
+    if not isinstance(doc, dict):
+        continue
+    for jkey, job in (doc.get("jobs") or {}).items():
+        if not isinstance(job, dict):
+            continue
+        for idx, step in enumerate(job.get("steps") or []):
+            if not isinstance(step, dict):
+                continue
+            if step.get("uses") != "./.github/actions/system-codecs":
+                continue
+            with_cfg = step.get("with")
+            if isinstance(with_cfg, dict) and "packages" in with_cfg:
+                pkgs = with_cfg.get("packages")
+                tokens = pkgs.split() if isinstance(pkgs, str) else []
+                if "libde265-dev" not in tokens:
+                    sname = step.get("name", f"step[{idx}]")
+                    bad.append(
+                        f"{fname}: job「{jkey}」步骤「{sname}」调用 system-codecs 显式覆盖 with.packages "
+                        f"但漏带 libde265-dev（会导致链接 -lde265 失败），实为 {pkgs!r}"
+                    )
+
 for b in bad:
     print(b)
 sys.exit(1 if bad else 0)
@@ -333,9 +385,10 @@ trap 'rm -rf "$TMP"' EXIT
 mutant() {
   local desc="$1" file="$2" expr="$3" dir
   dir="$TMP/m$RANDOM$RANDOM"
-  mkdir -p "$dir/.github/workflows" "$dir/.github/actions/desktop-checks"
+  mkdir -p "$dir/.github/workflows" "$dir/.github/actions/desktop-checks" "$dir/.github/actions/system-codecs"
   cp "$ROOT"/.github/workflows/*.yml "$dir/.github/workflows/"
   cp "$ROOT/.github/actions/desktop-checks/action.yml" "$dir/.github/actions/desktop-checks/"
+  cp "$ROOT/.github/actions/system-codecs/action.yml" "$dir/.github/actions/system-codecs/"
   sed -E "$expr" "$dir/$file" > "$dir/$file.new" && mv "$dir/$file.new" "$dir/$file"
   if cmp -s "$dir/$file" "$ROOT/$file"; then
     ko "变异没生效（sed 没改到东西）：$desc"
@@ -400,15 +453,20 @@ mutant "main-red.yml 的 actions: write 退回 read" .github/workflows/main-red.
   "s/^  actions: write\$/  actions: read/"
 mutant "main-red.yml 越权新增 pull-requests: write" .github/workflows/main-red.yml \
   "s/^  contents: read\$/  contents: read\n  pull-requests: write/"
+mutant "artifacts.yml linux-bin 覆盖 system-codecs packages 漏带 libde265-dev" .github/workflows/artifacts.yml \
+  "s/packages: libheif-dev libheif-plugin-libde265 libde265-dev ffmpeg/packages: libheif-dev libheif-plugin-libde265 ffmpeg/"
+mutant "system-codecs/action.yml 默认 packages 漏带 libde265-dev" .github/actions/system-codecs/action.yml \
+  "s/ libde265-dev//"
 
 # #2021：构造「被调 workflow 顶层越级（加 issues: read）+ 所有子 job 均显式写 contents: read」，
 # 覆盖「没有任何子 job 继承顶层 permissions 时，顶层越级仍必须被抓到」。
 mutant_callee_top_perm() {
   local desc="$1" dir
   dir="$TMP/m$RANDOM$RANDOM"
-  mkdir -p "$dir/.github/workflows" "$dir/.github/actions/desktop-checks"
+  mkdir -p "$dir/.github/workflows" "$dir/.github/actions/desktop-checks" "$dir/.github/actions/system-codecs"
   cp "$ROOT"/.github/workflows/*.yml "$dir/.github/workflows/"
   cp "$ROOT/.github/actions/desktop-checks/action.yml" "$dir/.github/actions/desktop-checks/"
+  cp "$ROOT/.github/actions/system-codecs/action.yml" "$dir/.github/actions/system-codecs/"
   python3 - "$dir/.github/workflows/ci-docs.yml" <<'PY'
 import sys, yaml
 

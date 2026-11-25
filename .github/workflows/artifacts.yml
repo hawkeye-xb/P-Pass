@@ -169,7 +169,7 @@ jobs:
       - name: System codecs (libheif + HEVC plugin, ffmpeg)
         uses: ./.github/actions/system-codecs
         with:
-          packages: libheif-dev libheif-plugin-libde265 ffmpeg
+          packages: libheif-dev libheif-plugin-libde265 libde265-dev ffmpeg
 
       - name: Build release binaries
         run: cargo build --release -p daemon -p testclient -p decode-worker
