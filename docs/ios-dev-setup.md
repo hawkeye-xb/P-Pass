@@ -7,7 +7,7 @@
 
 | 东西 | 为什么 | 怎么装 |
 |---|---|---|
-| macOS + Xcode 26（CI 用 macos-26 镜像，Xcode 26.x） | 构建、模拟器、真机签名 | App Store 装 Xcode；`sudo xcode-select -s /Applications/Xcode.app`；Xcode Settings → Components 下载一个 iOS 模拟器 runtime |
+| macOS + Xcode 27（CI 用 `xcode-27` 镜像，Xcode 27.x；本机开发 Xcode 26 亦可） | 构建、模拟器、真机签名 | App Store 装 Xcode；`sudo xcode-select -s /Applications/Xcode.app`；Xcode Settings → Components 下载一个 iOS 模拟器 runtime |
 | `xcodegen`（CI 钉 2.45.3） | `PPass.xcodeproj` 由 `apps/ios/project.yml` 生成、不入库 | `brew install xcodegen` |
 | `rustup` + 两个 iOS target | 传输 XCFramework（provider / BLAKE3 / 控制面）由 Rust 编出两个切片 | rustup 官网安装（别用 brew 的 rust）；`rustup target add aarch64-apple-ios aarch64-apple-ios-sim`。工具链版本由仓库根 `rust-toolchain.toml` 钉死，进仓库目录自动装 |
 | `jq` | `tools/ios/test.sh`、`sim.sh` 解析 simctl 输出 | `brew install jq` |

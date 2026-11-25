@@ -69,7 +69,7 @@ concurrency:
 
 jobs:
   macos-arm64-bin:
-    runs-on: macos-26 # 统一 macos-26，见 docs/decisions/2026-11-06-macos-runner-26.md（追新不追旧）
+    runs-on: xcode-27 # 统一 xcode-27，见 docs/decisions/2026-11-25-macos-runner-xcode-27.md（追新不追旧）
     # 只手动触发：macOS runner 私有仓计费 10x，而这只是自用裸二进制。
     # 需要 macOS 包时 `gh workflow run artifacts.yml`（或 Actions 页 Run workflow）。
     if: github.event_name == 'workflow_dispatch'

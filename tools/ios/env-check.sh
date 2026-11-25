@@ -26,7 +26,7 @@ if [ "$(uname -s)" = Darwin ]; then ok "macOS $(sw_vers -productVersion)（$(una
 if command -v xcodebuild >/dev/null 2>&1 && XB=$(xcodebuild -version 2>/dev/null); then
   ok "$(echo "$XB" | tr '\n' ' ')"
   major=$(echo "$XB" | sed -n 's/^Xcode \([0-9]*\).*/\1/p')
-  [ "${major:-0}" -ge 26 ] 2>/dev/null || printf '  提示  CI 用 Xcode 26（macos-26 镜像）；当前 %s，较旧版本未验证\n' "${major:-?}"
+  [ "${major:-0}" -ge 27 ] 2>/dev/null || printf '  提示  CI 用 Xcode 27（xcode-27 镜像）；当前 %s，本机开发仍可跑模拟器与真机，分发归档由 CI 完成\n' "${major:-?}"
 else
   miss "Xcode（xcodebuild 不可用）" "App Store 装 Xcode，并 sudo xcode-select -s /Applications/Xcode.app（或在 Xcode Settings → Locations 选）"
 fi

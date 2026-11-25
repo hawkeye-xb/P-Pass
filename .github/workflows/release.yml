@@ -314,7 +314,7 @@ jobs:
 
   macos-arm64:
     name: "macOS arm64 (签名门控)"
-    runs-on: macos-26 # 统一 macos-26，见 docs/decisions/2026-11-06-macos-runner-26.md（追新不追旧）
+    runs-on: xcode-27 # 统一 xcode-27，见 docs/decisions/2026-11-25-macos-runner-xcode-27.md（追新不追旧）
     # #772：22 次成功发版里本 job 平均 11.4 分钟、最长 13 分钟（含缓存）；冷缓存的整套
     # release 构建 + notarytool 自身的 15 分钟上限都要装得下，取 45。没有这一行时挂住要等
     # GitHub 默认 360 分钟（v2026.10.3 的 codesign 就挂了 14 分钟才被人工取消）。
@@ -1141,7 +1141,7 @@ jobs:
     # （其余端构建与验证并行，挡在 create-draft；只有 iOS 要先等验证）。
     needs: [plan-builds, verify-rust, verify-docs, verify-e2e, verify-desktop, verify-android, verify-ios]
     if: ${{ !cancelled() && needs.plan-builds.result == 'success' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && (github.event_name != 'workflow_dispatch' || contains(format('{0},', inputs.platforms || 'all'), 'ios') || (inputs.platforms == '' || inputs.platforms == 'all')) && needs.plan-builds.outputs.ios == 'build' }}
-    runs-on: macos-26
+    runs-on: xcode-27 # 统一 xcode-27，见 docs/decisions/2026-11-25-macos-runner-xcode-27.md
     # 冷缓存要编两个 iOS 切片（release）+ 归档 + 上传 + 等 ASC 出现，同 ci-ios 放宽到 70。
     timeout-minutes: 70
     permissions:

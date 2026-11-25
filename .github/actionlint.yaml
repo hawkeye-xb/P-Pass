@@ -7,4 +7,5 @@
 # 升级 actionlint 到认识该标签的版本后可删掉对应条目。
 self-hosted-runner:
   labels:
-    - macos-26 # #345 ci-ios.yml
+    - macos-26 # #345 历史兼容
+    - xcode-27 # #2031 GitHub 托管 macOS 27 / Xcode 27 镜像
