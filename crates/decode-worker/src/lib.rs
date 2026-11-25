@@ -1,6 +1,7 @@
 //! 解码子进程（`ppf-decoder`）的全部逻辑与 daemon 共用的线协议。
 
 pub mod decode;
+pub mod hevc_mp4;
 pub mod proto;
 
 use std::io::{self, Read, Write};

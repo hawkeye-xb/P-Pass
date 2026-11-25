@@ -74,6 +74,67 @@ fn video_decoder_missing_worker_is_unavailable() {
     assert!(matches!(err, CodecError::SandboxUnavailable(_)), "{err:?}");
 }
 
+fn run_video_request(payload: &[u8], ext: &str, max_edge: u32) -> decode_worker::proto::Response {
+    let mut req_bytes = Vec::new();
+    decode_worker::proto::write_request_header(
+        &mut req_bytes,
+        decode_worker::proto::KIND_VIDEO,
+        max_edge,
+        ext,
+        payload.len() as u64,
+    )
+    .unwrap();
+    req_bytes.extend_from_slice(payload);
+    let mut out = Vec::new();
+    media_codec::video::run_video(&mut &req_bytes[..], &mut out).unwrap();
+    decode_worker::proto::read_response(&mut &out[..], max_edge).unwrap()
+}
+
+/// #2047 回归：Windows 服务沙盒或裸机无系统 HEVC MFT（以及非 Windows 无原生 video_decode）时，
+/// `run_video` 必须回退到内置 `libde265` ISOBMFF 首帧软解，对 `.mov` 与 `.mp4` 均解出真彩首帧。
+#[test]
+fn run_video_decodes_hevc_mov_and_mp4_via_builtin_fallback() {
+    for (file, ext) in [("tiny_hevc.mov", "mov"), ("tiny_hevc.mp4", "mp4")] {
+        let bytes = std::fs::read(fixture(file)).unwrap();
+        let resp = run_video_request(&bytes, ext, 1024);
+        let decode_worker::proto::Response::Pixels {
+            width,
+            height,
+            rgba,
+        } = resp
+        else {
+            panic!("{file} 应由内置 libde265 解出首帧像素，实际返回: {resp:?}");
+        };
+        assert_eq!((width, height), (64, 48), "{file} 首帧尺寸应为 64x48");
+        let img = image::DynamicImage::ImageRgba8(
+            image::RgbaImage::from_raw(width, height, rgba).unwrap(),
+        );
+        assert_non_flat(&img);
+    }
+
+    // max_edge 缩小契约：最长边受请求约束。
+    let bytes = std::fs::read(fixture("tiny_hevc.mov")).unwrap();
+    let decode_worker::proto::Response::Pixels { width, height, .. } =
+        run_video_request(&bytes, "mov", 32)
+    else {
+        panic!("缩放请求也应解出像素");
+    };
+    assert!(width <= 32 && height <= 32 && width > 0 && height > 0);
+
+    // 畸形输入安全返回 STATUS_DECODE_FAILED，绝不 panic。
+    let bad = run_video_request(b"not-an-isobmff-video-at-all", "mov", 1024);
+    assert!(
+        matches!(
+            bad,
+            decode_worker::proto::Response::Failed {
+                status: decode_worker::proto::STATUS_DECODE_FAILED,
+                ..
+            }
+        ),
+        "畸形输入应返回 DecodeFailed: {bad:?}"
+    );
+}
+
 /// 根因入口（卡「修复 E3」/ ADR 决定 6 的可判红判据）：无 ffmpeg 的 Windows 上，
 /// `make_thumbs` 经 `thumb.rs::first_frame` 必须走新 video decoder 出真图。
 /// 反证：把 `first_frame` 的 video 分支改回 `Err(FfmpegMissing)` → 本测试红。
@@ -90,6 +151,11 @@ fn make_thumbs_without_ffmpeg_uses_video_decoder() {
     std::env::set_var("PATH", r"C:\Windows\System32");
     let dir = tempfile::tempdir().unwrap();
     let r = make_thumbs(&[0x46; 32], &fixture("tiny.mp4"), &dir.path().join("t"));
+    let r_hevc = make_thumbs(
+        &[0x47; 32],
+        &fixture("tiny_hevc.mov"),
+        &dir.path().join("t_hevc"),
+    );
     std::env::set_var("PATH", saved_path);
     assert_eq!(
         r.outcome,
@@ -97,6 +163,12 @@ fn make_thumbs_without_ffmpeg_uses_video_decoder() {
         "无 ffmpeg 的 Windows 上 mp4 必须经 first_frame 的 video decoder 分支出真图，而不是占位图"
     );
     assert_non_flat(&image::open(&r.paths.t256).unwrap());
+    assert_eq!(
+        r_hevc.outcome,
+        ThumbOutcome::Generated,
+        "无 ffmpeg 的 Windows 上 HEVC .mov 必须经 ppf-video-decoder 内置 libde265 出真图"
+    );
+    assert_non_flat(&image::open(&r_hevc.paths.t256).unwrap());
 }
 
 /// 解析 PE（PE32 / PE32+）的 Import Directory，返回所有静态导入的 DLL 名（小写）。
