@@ -1,0 +1,3 @@
+Pairing confirmation errors now appear directly inside the dialog.
+Network drives and remote folders are blocked with a clear reason when choosing a library.
+Fixed security issues; please update soon.
