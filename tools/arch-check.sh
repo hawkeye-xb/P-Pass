@@ -757,10 +757,18 @@ apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/VideoScreen.kt	4
 STOCK
 )
 echo "==> M.4: mobile business views use typography tokens, not raw font sizes"
+M4_ANDROID_FILES=$(mktemp)
+{
+  if [ ${#M2_DIRS[@]} -gt 0 ]; then
+    list_files "${M2_DIRS[@]}" -- '*.kt'
+  fi
+  if [ -d "$ROOT/apps/android/app/src/main/java" ]; then
+    list_files "$ROOT/apps/android/app/src/main/java" -- 'MainActivity.kt'
+  fi
+} | perl -0ne 'print unless $seen{$_}++' >"$M4_ANDROID_FILES"
 M4_ANDROID_HITS=""
-if [ ${#M2_DIRS[@]} -gt 0 ]; then
-  M4_ANDROID_HITS=$(list_files "${M2_DIRS[@]}" -- '*.kt' \
-    | perl -0ne 'print unless m{/ui/theme/|/(?:Theme|Tokens)\.kt\x00\z}' \
+if [ -s "$M4_ANDROID_FILES" ]; then
+  M4_ANDROID_HITS=$(perl -0ne 'print unless m{/ui/theme/|/(?:Theme|Tokens)\.kt\x00\z}' <"$M4_ANDROID_FILES" \
     | scan_files "$M4_ANDROID_RE" 1 '' 1 | sort -t"$(printf '\t')" -k1,1 -k2,2n || true)
 fi
 
@@ -805,7 +813,7 @@ M4_IOS_DIRS=()
 for d in App Home Photos Pairing Diagnostics; do
   [ -d "$ROOT/apps/ios/PPass/$d" ] && M4_IOS_DIRS+=("$ROOT/apps/ios/PPass/$d")
 done
-M4_IOS_RE='\.system\(\s*size\s*:'
+M4_IOS_RE='(?:\.system\(\s*size\s*:|\bPPFont\.icon\s*\()'
 M4_IOS_HITS=""
 if [ ${#M4_IOS_DIRS[@]} -gt 0 ]; then
   M4_IOS_HITS=$(list_files "${M4_IOS_DIRS[@]}" -- '*.swift' \
@@ -852,37 +860,65 @@ fi
 # 自测：tools/test-arch-check.sh（正反例 + 豁免样例）。
 echo "==> M.5: secondary pages use native top bars (Android TopAppBar / iOS .toolbar)"
 M5_ANDROID_HITS=""
-if [ ${#M2_DIRS[@]} -gt 0 ]; then
+if [ -s "$M4_ANDROID_FILES" ]; then
   M5_LIST=$(mktemp)
-  list_files "${M2_DIRS[@]}" -- '*.kt' \
-    | perl -0ne 'print unless m{/(?:PhotosScreen|VideoScreen)\.kt\x00\z}' >"$M5_LIST"
+  perl -0ne 'print unless m{/(?:PhotosScreen|VideoScreen)\.kt\x00\z}' <"$M4_ANDROID_FILES" >"$M5_LIST"
   if [ -s "$M5_LIST" ]; then
     M5_ANDROID_HITS=$(xargs -0 perl -0777 -e '
       my $root = shift;
       for my $f (@ARGV) {
         open(my $fh, "<", $f) or next;
         local $/; my $t = <$fh>; close $fh;
-        $t =~ s{^[ \t]*(?://|/\*|\*(?:\s|\z))[^\n]*}{}mg;
+        $t =~ s{/\*.*?\*/}{ my $s = $&; $s =~ s/[^\n]/ /g; $s }gse;
+        $t =~ s{//[^\n]*}{}g;
         my $icon = qr{Icons\.(?:AutoMirrored\.)?(?:Filled|Outlined|Rounded|Sharp|TwoTone|Default)\.(?:ArrowBack|ArrowBackIos|KeyboardArrowLeft|ChevronLeft)\b};
         my $glyph = qr{"‹"|"〈"};
-        my $i;
+        my $top = qr{\b(?:CenterAligned|Medium|Large)?TopAppBar\b};
+        (my $rel = $f) =~ s{^\Q$root\E/}{};
         if ($t =~ $glyph) {
-          # 手写的 ‹ / 〈 是顶替图标用的文字字形，任何页面都不该出现；
-          # 即使旁边有 TopAppBar 也仍是手搓返回，直接报。
-          $i = $-[0];
-        } elsif ($t =~ $icon) {
-          next if $t =~ /\b(?:CenterAligned|Medium|Large)?TopAppBar\b/;
-          $i = $-[0];
-        } else {
+          my $ln = (substr($t, 0, $-[0]) =~ tr/\n//) + 1;
+          print "$rel\t$ln\n";
           next;
         }
-        my $ln = (substr($t, 0, $i) =~ tr/\n//) + 1;
-        (my $rel = $f) =~ s{^\Q$root\E/}{};
-        print "$rel\t$ln\n";
+        my @icons;
+        while ($t =~ /$icon/g) { push @icons, $-[0]; }
+        next unless @icons;
+        # #2018：多页文件按函数作用域判定——每个含返回图标的 fun 内部必须自带 TopAppBar，
+        # 不因同文件其它页面有 TopAppBar 而整文件放行。
+        my @spans;
+        while ($t =~ /\bfun\b[^{;]*\{/g) {
+          my $start = $-[0];
+          my $open = $+[0] - 1;
+          my $depth = 1;
+          my $p = $open + 1;
+          my $len = length($t);
+          while ($p < $len && $depth > 0) {
+            my $c = substr($t, $p, 1);
+            if ($c eq "{") { $depth++; }
+            elsif ($c eq "}") { $depth--; }
+            $p++;
+          }
+          push @spans, [$start, $p];
+        }
+        for my $pos (@icons) {
+          my $enclosing;
+          for my $sp (@spans) {
+            next unless $sp->[0] <= $pos && $pos < $sp->[1];
+            if (!defined($enclosing) || ($sp->[1] - $sp->[0]) < ($enclosing->[1] - $enclosing->[0])) {
+              $enclosing = $sp;
+            }
+          }
+          my $scope = defined($enclosing) ? substr($t, $enclosing->[0], $enclosing->[1] - $enclosing->[0]) : $t;
+          next if $scope =~ $top;
+          my $ln = (substr($t, 0, $pos) =~ tr/\n//) + 1;
+          print "$rel\t$ln\n";
+          last;
+        }
       }' "$ROOT" <"$M5_LIST" | sort -t"$(printf '\t')" -k1,1 -k2,2n || true)
   fi
   rm -f "$M5_LIST"
 fi
+rm -f "$M4_ANDROID_FILES"
 M5_IOS_HITS=""
 if [ ${#M4_IOS_DIRS[@]} -gt 0 ]; then
   M5_IOS_LIST=$(mktemp)

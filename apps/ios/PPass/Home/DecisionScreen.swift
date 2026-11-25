@@ -6,10 +6,9 @@ import SwiftUI
 /// 次入口是欢迎页「手动输入」同一种文字链接。
 struct SingleTransferSelectionRow: View {
     let title: String
-    var inList = false
     let action: () -> Void
 
-    var minimumHeight: CGFloat? { inList ? nil : PPUI.Layout.rowMinHeight }
+    var minimumHeight: CGFloat { PPUI.Layout.rowMinHeight }
     var disclosureSymbol: String { "chevron.right" }
 
     var body: some View {
@@ -24,7 +23,7 @@ struct SingleTransferSelectionRow: View {
                     .foregroundStyle(PPColor.ink40)
                     .accessibilityHidden(true)
             }
-            .padding(.horizontal, inList ? 0 : 16)
+            .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, minHeight: minimumHeight, alignment: .leading)
             .contentShape(Rectangle())
         }
