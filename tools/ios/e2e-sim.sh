@@ -138,7 +138,7 @@ OWNER_PID=$!
 
 # ── 模拟器（专用） ──────────────────────────────────────────────────────────
 RT=$(xcrun simctl list runtimes available -j \
-  | jq -r '[.runtimes[] | select(.platform == "iOS" and .isAvailable)] | sort_by(.version | split(".") | map(tonumber)) | last | .identifier // empty')
+  | jq -r '[.runtimes[] | select(.platform == "iOS" and .isAvailable) | select((.supportedDeviceTypes == null) or any(.supportedDeviceTypes[]; .name == "iPhone 17"))] | sort_by(.version | split(".") | map(tonumber? // 0)) | last | .identifier // empty')
 [ -n "$RT" ] || { echo "error: 没有可用的 iOS runtime" >&2; exit 1; }
 SIM_UDID=$(xcrun simctl list devices available -j | jq -r --arg rt "$RT" --arg n "$SIM_NAME" '.devices[$rt] // [] | map(select(.name == $n)) | first | .udid // empty')
 [ -n "$SIM_UDID" ] || SIM_UDID=$(xcrun simctl create "$SIM_NAME" "iPhone 17" "$RT")

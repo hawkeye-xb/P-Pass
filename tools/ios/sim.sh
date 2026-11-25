@@ -17,8 +17,17 @@ set -euo pipefail
 NAME="${IOS_SIM_NAME:-iPhone 17}"
 
 latest_runtime() {
+  # xcode-27 等新镜像除通用 iOS-27-2 外还带硬件专属 runtime（如 iOS-27-2-iPhone19-4 仅支持 iPhone Duo）。
+  # 只在支持目标机型 $NAME 的可用 iOS runtime 里取最新版本；旧 simctl 若无 supportedDeviceTypes 字段则兼容放行。
   xcrun simctl list runtimes available -j \
-    | jq -r '[.runtimes[] | select(.platform == "iOS" and .isAvailable)] | sort_by(.version | split(".") | map(tonumber)) | last | .identifier // empty'
+    | jq -r --arg n "$NAME" '
+        [ .runtimes[]
+          | select(.platform == "iOS" and .isAvailable)
+          | select((.supportedDeviceTypes == null) or any(.supportedDeviceTypes[]; .name == $n))
+        ]
+        | sort_by(.version | split(".") | map(tonumber? // 0))
+        | last
+        | .identifier // empty'
 }
 
 cmd_udid() {
