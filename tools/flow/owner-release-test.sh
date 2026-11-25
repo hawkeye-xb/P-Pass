@@ -36,6 +36,8 @@ python3 -B -I "${FLOW_DIR}/flow.py" doctor || exit 1
 usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 FORMAL_MSG="正式版只能由产品负责人发布（docs/RELEASING.md §3 第 5 步：在网页上审 draft 后 Publish）；owner 脚本只打 test tag"
 TIMEOUT="${PPASS_OWNER_RELEASE_TIMEOUT:-14400}"
+WATCH_RETRY_INTERVAL="${PPASS_OWNER_WATCH_RETRY_INTERVAL:-10}"
+WATCH_INTERVAL="${PPASS_OWNER_WATCH_INTERVAL:-60}"
 RUN_WAIT="${PPASS_OWNER_RUN_WAIT:-600}"  # 触发后等 Release run 出现的上限（秒）
 MAIN_CI_WAIT="${PPASS_OWNER_MAIN_CI_WAIT:-3600}"   # 等 origin/main 的检查跑完的上限（秒）
 MAIN_CI_EMPTY_WAIT="${PPASS_OWNER_MAIN_CI_EMPTY_WAIT:-180}"  # 一条检查都没有时，等它们注册的时长
@@ -254,12 +256,43 @@ EOF
 done
 [ -n "$run" ] || { keep_branch_hint; die_stuck "触发 ${TAG} 后 ${RUN_WAIT}s 没等到 Release run，判定不了"; }
 okmsg "Release run ${run}"
-bash "${REPO_ROOT}/tools/release/with-timeout.sh" "gh run watch ${run}" "$TIMEOUT" 1 -- \
-  gh run watch "$run" -R "$REPO" --exit-status --interval 60 >"${OUT}/watch.log" 2>&1
-concl="$(gh run view "$run" -R "$REPO" --json conclusion --jq .conclusion 2>/dev/null)"
-if [ "$concl" != success ]; then
+: >"${OUT}/watch.log"
+start_ts="$(date +%s)"
+status=""
+concl=""
+while :; do
+  now_ts="$(date +%s)"
+  remaining=$((TIMEOUT - (now_ts - start_ts)))
+  if [ "$remaining" -gt 0 ]; then
+    bash "${REPO_ROOT}/tools/release/with-timeout.sh" "gh run watch ${run}" "$remaining" 1 -- \
+      gh run watch "$run" -R "$REPO" --exit-status --interval "$WATCH_INTERVAL" >>"${OUT}/watch.log" 2>&1 || true
+  fi
+  meta="$(gh run view "$run" -R "$REPO" --json status,conclusion \
+    --jq '"status:" + (.status // ""), "conclusion:" + (.conclusion // "")' 2>>"${OUT}/watch.log" | tr -d '\r')" || meta=""
+  status="$(printf '%s\n' "$meta" | sed -n '1s/^status://p')"
+  concl="$(printf '%s\n' "$meta" | sed -n '2s/^conclusion://p')"
+  if [ "$status" = completed ]; then
+    break
+  fi
+  now_ts="$(date +%s)"
+  remaining=$((TIMEOUT - (now_ts - start_ts)))
+  if [ "$remaining" -le 0 ]; then
+    break
+  fi
+  sleep_s="$WATCH_RETRY_INTERVAL"
+  [ "$sleep_s" -le "$remaining" ] || sleep_s="$remaining"
+  say "gh run watch ${run} 中断（远端 status=${status:-未知}），${sleep_s}s 后重连继续等（剩余上限 ${remaining}s）"
+  [ "$sleep_s" -le 0 ] || sleep "$sleep_s"
+done
+if [ "$status" != completed ] || [ "$concl" != success ]; then
   keep_branch_hint
   gh run view "$run" -R "$REPO" --log-failed 2>&1 | tail -n 120 >"${OUT}/failed.log"
+  if [ ! -s "${OUT}/failed.log" ] && [ -s "${OUT}/watch.log" ]; then
+    tail -n 120 "${OUT}/watch.log" >"${OUT}/failed.log"
+  fi
+  if [ "$status" != completed ]; then
+    die_stuck "Release ${TAG}（run ${run}）等待 ${TIMEOUT}s 仍未完成（status=${status:-未知}，结论 ${concl:-未出}），test 包没发出来。若发版前验证就红了，没有建 tag，同一个版本号可直接重试；若 tag 已建（构建阶段红），tag 保留不动，修好后下一次用 -test.$((N + 1))" --log "${OUT}/failed.log"
+  fi
   die_stuck "Release ${TAG}（run ${run}）结论 ${concl:-未出}，test 包没发出来。若发版前验证就红了，没有建 tag，同一个版本号可直接重试；若 tag 已建（构建阶段红），tag 保留不动，修好后下一次用 -test.$((N + 1))" --log "${OUT}/failed.log"
 fi
 cleanup_branch
