@@ -1,12 +1,7 @@
-// T-056: video playback — fetch the original via asset.blob_ticket + the shared fetch_blob
-// into the cache dir, then play it in-app. The page opens on the cover and a play button
-// labelled with the file size; nothing is fetched until that button is tapped (VideoPlayback). MOB-47 upgraded the MVP:
-// the system `VideoView` is replaced by the official Media3 ExoPlayer /
-// PlayerView, which ships real playback controls (play/pause, progress
-// bar, seek) and error state, and is released on dispose so nothing leaks.
-// Still download-then-play: a streaming progressive DataSource that reads
-// the transfer plane with range requests is a deliberate out-of-scope
-// enhancement (the card pins `loader.download` semantics unchanged).
+// T-056/MOB-47/#1963: 视频查看页——打开只展示封面、大小标签与保存/分享操作（不自动下载）；
+// 点播放或保存/分享时按需优先直读本机原片（MediaStore / SAF），未命中则流式下载到缓存并展示
+// 线性进度条 + 百分比。仅点播放才切入 Media3 ExoPlayer / PlayerView（带 play/pause、进度条、
+// seek 与错误态，onDispose 里 release 防止泄漏）；未点播放前点保存/分享保持封面态不自动起播。
 package com.hawkeyexb.ppass.ui
 
 import android.net.Uri
@@ -25,14 +20,18 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -56,30 +55,34 @@ import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.hawkeyexb.ppass.R
+import com.hawkeyexb.ppass.backup.LocalFirstLoader
 import com.hawkeyexb.ppass.proto.AssetMeta
 import java.io.File
 import kotlinx.coroutines.launch
 
-/** RET-01/MOB-06: 查看页可用动作——保存到相册 / 用其他应用打开 / 分享。 */
-private enum class VideoOp { Save, OpenWith, Share }
+/** RET-01/MOB-06: 查看页可用动作——保存到相册 / 分享。 */
+private enum class VideoOp { Save, Share }
 
 @Composable
-fun VideoScreen(
+internal fun VideoScreen(
     loader: TimelineLoader,
+    localMedia: LocalFirstLoader<Bitmap>,
     asset: AssetMeta,
     isMine: Boolean,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
-    // 翻到这一页只建状态机、取封面，不下载；点了播放才走 [VideoPlayback.play]。
+    // 翻到这一页只建状态机、取封面，不下载；点播放走 [VideoPlayback.play]，点保存/分享走 [VideoPlayback.prepareOriginal]。
+    // 优先直读本机已有视频（MediaStore 或已授权 SAF 目录），未命中再走缓存/远端下载。
     // MOB-115: 命中缓存要求长度 == asset.bytes（截断的旧缓存会被删掉重下）。
-    val playback = remember(asset.hash) {
+    val playback = remember(asset.hash, isMine) {
         VideoPlayback(
             tag = asset.hash.take(16),
             declared = asset.bytes,
             cache = File(context.cacheDir, "video-${asset.hash.take(16)}.mp4"),
             freeBytes = { allocatableCacheBytes(context) },
             download = { dest, onProgress -> loader.download(asset.hash, dest, asset.bytes, onProgress) },
+            resolveLocalUri = { localMedia.localVideoUri(asset, isMine) },
         )
     }
     val state by playback.phase.collectAsState()
@@ -88,46 +91,60 @@ fun VideoScreen(
     val cover by produceState<Bitmap?>(initialValue = thumbCache.get("${asset.hash}/256"), asset.hash) {
         runCatching { loader.thumb(asset.hash, ThumbSize.S1024) }.getOrNull()?.let { value = it }
     }
-    // RET-01: 取回=使用动作——视频 Ready 后同样可保存到相册 / 用其他
-    // 应用打开（播放缓存文件即用即清，cacheDir 语义由系统兜底）。
+    // RET-01/#1963: 未点播放前同样可直接点「保存到相册 / 分享」——按需拉取（本机命中则直读 URI，免下载），且拉取完不自动起播。
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
 
     fun runAssetAction(op: VideoOp) {
         if (busy) return
-        val ready = state as? VideoPhase.Ready ?: return
         busy = true
         notice = null
         scope.launch {
             try {
+                val source = playback.prepareOriginal()
+                if (source == null) {
+                    notice = context.getString(
+                        if (playback.phase.value == VideoPhase.NoRoom) R.string.video_no_space
+                        else R.string.share_download_failed,
+                    )
+                    return@launch
+                }
                 when (op) {
                     VideoOp.Save -> {
-                        val saved = saveToGallery(context, ready.file, asset)
+                        val saved = when (source) {
+                            is VideoSource.LocalUri -> saveUriToGallery(context, Uri.parse(source.uri), asset)
+                            is VideoSource.CachedFile -> saveToGallery(context, source.file, asset)
+                        }
                         // MOB-24: 存过就直说，别让用户以为没生效又点一次。
                         notice = context.getString(
                             if (saved.alreadyExisted) R.string.already_in_gallery
-                            else R.string.saved_to_gallery
+                            else R.string.saved_to_gallery,
                         )
                     }
-                    VideoOp.OpenWith, VideoOp.Share -> {
-                        val share = shareDir(context)
-                        share.listFiles()?.forEach { it.delete() }
-                        val tmp = File(share, "video-${asset.hash.take(16)}.mp4")
-                        ready.file.copyTo(tmp, overwrite = true)
-                        val intent = if (op == VideoOp.OpenWith) {
-                            openWithAppIntent(context, tmp, asset)
-                        } else {
-                            // MOB-06: ACTION_SEND 系统分享面板（微信/邮件/云盘…）
-                            shareIntent(
-                                context, tmp, asset,
+                    VideoOp.Share -> {
+                        var tmp: File? = null
+                        val intent = when (source) {
+                            is VideoSource.LocalUri -> shareUriIntent(
+                                context, Uri.parse(source.uri), asset,
                                 context.getString(R.string.share_to),
                             )
+                            is VideoSource.CachedFile -> {
+                                val share = shareDir(context)
+                                share.listFiles()?.forEach { it.delete() }
+                                val copied = File(share, "video-${asset.hash.take(16)}.mp4")
+                                source.file.copyTo(copied, overwrite = true)
+                                tmp = copied
+                                shareIntent(
+                                    context, copied, asset,
+                                    context.getString(R.string.share_to),
+                                )
+                            }
                         }
                         try {
                             context.startActivity(intent)
                         } catch (_: android.content.ActivityNotFoundException) {
-                            tmp.delete()
+                            tmp?.delete()
                             notice = context.getString(R.string.no_app_for_file)
                         }
                     }
@@ -158,11 +175,10 @@ fun VideoScreen(
                         tint = PPColor.Paper,
                     )
                 }
-                // MOB-06: 右上角分享——ACTION_SEND 系统分享面板（微信/邮件/云盘…）。
-                // 仅 Ready 后可分享（未取到前无文件可发）。
+                // MOB-06/#1963: 右上角分享——未点播放前亦可直接点击，按需直读本机或拉取后呼起系统分享面板。
                 IconButton(
                     onClick = { runAssetAction(VideoOp.Share) },
-                    enabled = !busy && state is VideoPhase.Ready,
+                    enabled = videoActionsEnabled(busy),
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Share,
@@ -189,7 +205,7 @@ fun VideoScreen(
                     // PlayerView 自带播放/暂停/进度条/seek/错误态，播放器在
                     // onDispose 里 release，退出查看器不泄漏（logcat 无
                     // MediaCodec/ExoPlayer 泄漏即验收项）。
-                    is VideoPhase.Ready -> VideoPlayer(s.file)
+                    is VideoPhase.Ready -> VideoPlayer(s.source)
                     else -> VideoCover(
                         cover = cover,
                         sizeLabel = Formatter.formatShortFileSize(context, asset.bytes.coerceAtLeast(0)),
@@ -202,26 +218,23 @@ fun VideoScreen(
                     )
                 }
             }
-            // RET-01: 视频 Ready 才显示动作（未取到前无原图可存/可开）。
-            if (state is VideoPhase.Ready) {
-                notice?.let { ViewerNoticeText(it) }
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    ViewerAction(
-                        label = stringResource(R.string.save_to_gallery),
-                        enabled = !busy,
-                        onClick = { runAssetAction(VideoOp.Save) },
-                        modifier = Modifier.weight(1f),
-                    )
-                    ViewerAction(
-                        label = stringResource(R.string.open_with_app),
-                        enabled = !busy,
-                        onClick = { runAssetAction(VideoOp.OpenWith) },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+            notice?.let { ViewerNoticeText(it) }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                ViewerAction(
+                    label = stringResource(R.string.save_to_gallery),
+                    enabled = videoActionsEnabled(busy),
+                    onClick = { runAssetAction(VideoOp.Save) },
+                    modifier = Modifier.weight(1f),
+                )
+                ViewerAction(
+                    label = stringResource(R.string.share),
+                    enabled = videoActionsEnabled(busy),
+                    onClick = { runAssetAction(VideoOp.Share) },
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
     }
@@ -229,12 +242,24 @@ fun VideoScreen(
 
 @Composable
 internal fun VideoFetchingStatus(percent: Int) {
-    Text(
-        stringResource(R.string.video_loading, percent),
-        color = PPColor.PaperDim,
-        fontSize = 16.sp,
-        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-    )
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        // Material3 1.3 LinearProgressIndicator 默认带 gapSize 与停靠圆点，清零呈连续直条
+        LinearProgressIndicator(
+            progress = { percent / 100f },
+            modifier = Modifier.width(220.dp),
+            color = PPColor.Paper,
+            trackColor = PPColor.PaperDim.copy(alpha = 0.3f),
+            gapSize = 0.dp,
+            drawStopIndicator = {},
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            stringResource(R.string.video_loading, percent),
+            color = PPColor.PaperDim,
+            fontSize = 16.sp,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
+    }
 }
 
 /** 视频页的初始样子：封面 + 居中的播放按钮（按钮上是原片大小）。没下载前只有这些。 */
@@ -271,18 +296,21 @@ internal fun VideoCover(cover: Bitmap?, sizeLabel: String, notice: String?, onPl
     }
 }
 
-/** MOB-47: 单个视频文件的 Media3 播放器。player 的生命周期绑定在
+/** MOB-47/#1963: 单个视频来源的 Media3 播放器（支持本机 URI 直读与缓存文件）。player 的生命周期绑定在
  *  composition 上——[DisposableEffect] onDispose 里 `release()`，退出查看器
  *  / 切 asset 时播放器立即释放（不依赖 AndroidView 的 destroy）。 */
 @Composable
-private fun VideoPlayer(file: File) {
+private fun VideoPlayer(source: VideoSource) {
     val context = LocalContext.current
-    // 按文件实例记住 player：同一 asset 的 Ready 文件对象稳定，切走即随
-    // composition 销毁。download-then-play：文件已完整落在 cacheDir，播放
-    // 不阻塞主线程（ExoPlayer 内部线程）。
-    val player = remember(file) {
+    val mediaUri = remember(source) {
+        when (source) {
+            is VideoSource.LocalUri -> Uri.parse(source.uri)
+            is VideoSource.CachedFile -> Uri.fromFile(source.file)
+        }
+    }
+    val player = remember(mediaUri) {
         ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+            setMediaItem(MediaItem.fromUri(mediaUri))
             prepare()
             playWhenReady = true
         }

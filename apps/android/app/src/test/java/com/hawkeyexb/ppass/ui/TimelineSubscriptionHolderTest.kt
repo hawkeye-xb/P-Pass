@@ -6,6 +6,7 @@
 //  ④ 退避耗尽停止静默重试，手动重试重新发起。
 package com.hawkeyexb.ppass.ui
 
+import com.hawkeyexb.ppass.proto.AssetMeta
 import com.hawkeyexb.ppass.proto.TimelinePage
 import com.hawkeyexb.ppass.transport.Pairing
 import kotlinx.coroutines.CompletableDeferred
@@ -233,5 +234,71 @@ class TimelineSubscriptionHolderTest {
         runCurrent()
         assertEquals(1, ch.calls)
         assertTrue(holder.state.subscribeConnected)
+    }
+
+    @Test
+    fun pullToRefreshReloadsFirstPageAndClearsError() = runTest {
+        var pageCalls = 0
+        val release = CompletableDeferred<Unit>()
+        val refreshGate = CompletableDeferred<Unit>()
+        val ch = object : TimelineChannel {
+            override val loader: TimelineLoader? get() = null
+            override suspend fun loadPage(cursor: String?): TimelinePage {
+                pageCalls++
+                return if (pageCalls == 1) {
+                    TimelinePage(items = listOf(AssetMeta(hash = "old", mediaType = "photo", bytes = 1)))
+                } else {
+                    refreshGate.await()
+                    TimelinePage(items = listOf(AssetMeta(hash = "new", mediaType = "photo", bytes = 2)))
+                }
+            }
+            override suspend fun subscribe(onConnected: suspend () -> Unit, onInvalidated: suspend () -> Unit) {
+                onConnected()
+                release.await()
+            }
+            override fun onRefreshed(hashes: Set<String>) {}
+            override fun onAppended(hashes: Set<String>) {}
+        }
+        val holder = TimelineSubscriptionHolder(
+            scope = backgroundScope,
+            currentPairing = { pairing },
+            channelFor = { ch },
+        )
+        holder.start()
+        runCurrent()
+        assertEquals(listOf("old"), holder.items.map { it.hash })
+        assertFalse(holder.refreshing)
+
+        holder.refresh()
+        runCurrent()
+        assertTrue("下拉刷新进行中 refreshing 必须为 true，保证刷新指示器可见", holder.refreshing)
+
+        refreshGate.complete(Unit)
+        runCurrent()
+        assertEquals("下拉刷新应重拉首屏", 2, pageCalls)
+        assertEquals(listOf("new"), holder.items.map { it.hash })
+        assertFalse("刷新完成后 refreshing 必须回到 false", holder.refreshing)
+        assertNull(holder.error)
+    }
+
+    @Test
+    fun pullToRefreshWhenExhaustedAlsoRetriesSubscription() = runTest {
+        val ch = FailingChannel()
+        val holder = TimelineSubscriptionHolder(
+            scope = backgroundScope,
+            currentPairing = { pairing },
+            channelFor = { ch },
+        )
+        holder.start()
+        advanceTimeBy(61_000)
+        runCurrent()
+        assertTrue(holder.state.subscribeExhausted)
+        val beforeCalls = ch.calls
+
+        holder.refresh()
+        runCurrent()
+        assertFalse("下拉刷新在退避耗尽时应重新拉起订阅", holder.state.subscribeExhausted)
+        assertTrue(ch.calls > beforeCalls)
+        assertFalse(holder.refreshing)
     }
 }

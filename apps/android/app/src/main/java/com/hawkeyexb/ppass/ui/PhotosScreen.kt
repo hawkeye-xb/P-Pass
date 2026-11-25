@@ -13,6 +13,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -32,17 +33,21 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -77,6 +82,7 @@ import com.hawkeyexb.ppass.backup.LocalFirstLoader
 import com.hawkeyexb.ppass.backup.LocalFirstOriginals
 import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.backup.readLocalSourceIndex
+import com.hawkeyexb.ppass.backup.resolveLocalMediaUri
 import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.proto.AssetMeta
 import com.hawkeyexb.ppass.proto.Methods
@@ -229,7 +235,7 @@ internal fun photosTimelineChrome(
         )
     }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 internal fun PhotosScreen(
     holder: TimelineSubscriptionHolder,
@@ -391,6 +397,11 @@ internal fun PhotosScreen(
             )
         }
 
+        PullToRefreshBox(
+            isRefreshing = holder.refreshing,
+            onRefresh = { holder.refresh() },
+            modifier = Modifier.fillMaxWidth().weight(1f),
+        ) {
         when {
             loader == null -> Center(stringResource(R.string.photos_loading))
             loading -> Center(stringResource(R.string.photos_loading))
@@ -432,6 +443,7 @@ internal fun PhotosScreen(
             }
         }
         }
+        }
     }
 }
 
@@ -445,6 +457,7 @@ private fun rememberLocalSourceLoader(
         LocalFirstOriginals(
             reader = AndroidOriginalReader(app),
             loadIndex = { withContext(Dispatchers.IO) { readLocalSourceIndex() } },
+            resolveUri = { mediaType, mediaId -> resolveLocalMediaUri(app, mediaType, mediaId) },
         )
     }
     return remember(loader, originals) {
@@ -547,7 +560,7 @@ private fun MediaViewer(
         val asset = session.assets[page]
         val isMine = localNodeId?.let { asset.sourceDeviceOrNull() == it } == true
         if (asset.mediaType.startsWith("video")) {
-            VideoScreen(loader, asset, isMine = isMine, onClose = onClose)
+            VideoScreen(loader, localMedia, asset, isMine = isMine, onClose = onClose)
         } else {
             PhotoViewer(localMedia, asset, isMine = isMine, onClose = onClose)
         }
@@ -841,12 +854,28 @@ internal fun ViewerNoticeText(text: String) {
 
 @Composable
 private fun Center(text: String, live: Boolean = false) {
-    Box(Modifier.fillMaxSize().padding(34.dp), contentAlignment = Alignment.Center) {
-        Text(
-            text, fontSize = PPSize.BodyMin, lineHeight = 26.sp,
-            color = PPColor.Ink40,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            modifier = if (live) Modifier.semantics { liveRegion = LiveRegionMode.Polite } else Modifier,
-        )
+    // Material3 PullToRefreshBox 依赖子项嵌套滚动；加载/不可达/空/筛选空也必须可纵向滚动才能下拉刷新。
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val viewportHeight = maxHeight
+        Box(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = viewportHeight)
+                    .padding(34.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text, fontSize = PPSize.BodyMin, lineHeight = 26.sp,
+                    color = PPColor.Ink40,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = if (live) Modifier.semantics { liveRegion = LiveRegionMode.Polite } else Modifier,
+                )
+            }
+        }
     }
 }

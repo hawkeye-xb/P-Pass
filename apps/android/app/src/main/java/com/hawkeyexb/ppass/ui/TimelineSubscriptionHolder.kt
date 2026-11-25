@@ -136,6 +136,9 @@ internal class TimelineSubscriptionHolder(
     var loading by mutableStateOf(false)
         private set
 
+    var refreshing by mutableStateOf(false)
+        private set
+
     var error by mutableStateOf<String?>(null)
         private set
 
@@ -145,6 +148,7 @@ internal class TimelineSubscriptionHolder(
     private var job: Job? = null
     private var sessionJob: Job? = null
     private var pollerJob: Job? = null
+    private var refreshJob: Job? = null
     private var active = false
     private var targetPairing: Pairing? = null
     private var channel: TimelineChannel? = null
@@ -175,7 +179,29 @@ internal class TimelineSubscriptionHolder(
         sessionJob = null
         pollerJob?.cancel()
         pollerJob = null
+        refreshJob?.cancel()
+        refreshJob = null
+        refreshing = false
         state = state.copy(subscribeConnected = false)
+    }
+
+    fun refresh() {
+        if (!active || refreshing) return
+        val ch = channel ?: return
+        refreshing = true
+        refreshJob?.cancel()
+        refreshJob = scope.launch {
+            try {
+                refreshFullPage(ch)
+                if (state.subscribeExhausted) retry()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                error = t.message
+            } finally {
+                refreshing = false
+            }
+        }
     }
 
     fun retry() {

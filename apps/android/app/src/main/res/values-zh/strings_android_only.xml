@@ -75,7 +75,6 @@
     <!-- UI-12: "知道了"忽略动作：只是不再提醒，不等于问题已解决，也
          不等于把自动备份关掉。 -->
     <string name="notice_dismiss_label">知道了</string>
-    <string name="open_with_app">用其他应用打开</string>
     <string name="no_app_for_file">手机上没有能打开这个文件的应用。</string>
     <string name="share_to">分享到…</string>
     <!-- #1762 素材文件夹：设置入口 + 最小二级页（添加 / 查看 / 移除 / 重新授权）。只在 Android。 -->
