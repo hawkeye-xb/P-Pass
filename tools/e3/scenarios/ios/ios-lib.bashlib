@@ -38,8 +38,7 @@ ios_ensure_installed() { # $1 = OUT；默认构建+安装当前代码，PPASS_SK
   local out="$1"
   if [ "${PPASS_SKIP_BUILD:-0}" != 1 ]; then
     local ios="$REPO_ROOT/apps/ios"
-    [ -d "$ios/TransportFFITests/Generated/TransportFFI.xcframework" ] \
-      || "$REPO_ROOT/tools/build-ios-transport-xcframework.sh" "$ios/TransportFFITests/Generated" >>"$out/build.log" 2>&1
+    "$REPO_ROOT/tools/build-ios-transport-xcframework.sh" "$ios/TransportFFITests/Generated" >>"$out/build.log" 2>&1
     (cd "$ios" && xcodegen generate --quiet) >>"$out/build.log" 2>&1
     xcodebuild build -project "$ios/PPass.xcodeproj" -scheme PPass -configuration Debug \
       -destination "generic/platform=iOS" -allowProvisioningUpdates \

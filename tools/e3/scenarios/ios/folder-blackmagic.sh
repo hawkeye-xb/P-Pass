@@ -27,8 +27,7 @@ setup() {
   # UI 测试（点选择器）要先 build-for-testing；人工/外部驱动分支直接点真选择器，用不上 UI 测试，跳过
   if [ "${PPASS_E3_PICK_MANUAL:-0}" != 1 ]; then
     local ios="$REPO_ROOT/apps/ios"
-    [ -d "$ios/TransportFFITests/Generated/TransportFFI.xcframework" ] \
-      || "$REPO_ROOT/tools/build-ios-transport-xcframework.sh" "$ios/TransportFFITests/Generated" >>"$EV/build.log" 2>&1
+    "$REPO_ROOT/tools/build-ios-transport-xcframework.sh" "$ios/TransportFFITests/Generated" >>"$EV/build.log" 2>&1
     (cd "$ios" && xcodegen generate --quiet) >>"$EV/build.log" 2>&1
     xcodebuild build-for-testing -project "$ios/PPass.xcodeproj" -scheme PPassUI -configuration Debug \
       -destination "id=$IOS_HW_UDID" -allowProvisioningUpdates \

@@ -39,9 +39,7 @@ LOG="$OUT/e2e.log"
 exec > >(tee "$LOG") 2>&1
 
 # ── 构建 ────────────────────────────────────────────────────────────────────
-if [ ! -d "$IOS/TransportFFITests/Generated/TransportFFI.xcframework" ] || [ ! -f "$IOS/TransportFFITests/Generated/swift/transport.swift" ]; then
-  "$ROOT/tools/build-ios-transport-xcframework.sh" "$IOS/TransportFFITests/Generated"
-fi
+"$ROOT/tools/build-ios-transport-xcframework.sh" "$IOS/TransportFFITests/Generated"
 (cd "$IOS" && xcodegen generate --quiet)
 
 echo "==> 构建 App（Debug，模拟器）"

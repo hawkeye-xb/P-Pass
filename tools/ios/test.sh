@@ -40,10 +40,8 @@ if [ "${PPASS_IOS_TEST_PLAN_ONLY:-0}" = 1 ]; then
   exit 0
 fi
 
-# App 依赖传输 XCFramework（TransportFFITests/Generated，不入库）：缺就先生成（增量编译，已有则跳过）。
-if [ ! -d "$IOS/TransportFFITests/Generated/TransportFFI.xcframework" ] || [ ! -f "$IOS/TransportFFITests/Generated/swift/transport.swift" ]; then
-  "$ROOT/tools/build-ios-transport-xcframework.sh" "$IOS/TransportFFITests/Generated"
-fi
+# App 依赖传输 XCFramework（TransportFFITests/Generated，不入库）：交由构建脚本按输入树摘要决定是否重编。
+"$ROOT/tools/build-ios-transport-xcframework.sh" "$IOS/TransportFFITests/Generated"
 
 (cd "$IOS" && xcodegen generate --quiet)
 

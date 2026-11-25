@@ -37,8 +37,7 @@ setup() {
   ios_pair_allow_start "$EV" "$DESK"
   # 按 Home 的 UI 测试要先 build-for-testing
   local ios="$REPO_ROOT/apps/ios"
-  [ -d "$ios/TransportFFITests/Generated/TransportFFI.xcframework" ] \
-    || "$REPO_ROOT/tools/build-ios-transport-xcframework.sh" "$ios/TransportFFITests/Generated" >>"$EV/build.log" 2>&1
+  "$REPO_ROOT/tools/build-ios-transport-xcframework.sh" "$ios/TransportFFITests/Generated" >>"$EV/build.log" 2>&1
   (cd "$ios" && xcodegen generate --quiet) >>"$EV/build.log" 2>&1
   xcodebuild build-for-testing -project "$ios/PPass.xcodeproj" -scheme PPassUI -configuration Debug \
     -destination "id=$IOS_HW_UDID" -allowProvisioningUpdates \
