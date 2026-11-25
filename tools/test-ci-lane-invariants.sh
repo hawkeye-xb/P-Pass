@@ -24,6 +24,9 @@
 #      （none < read < write）。GitHub 在 run 启动前静态校验，越级时整次 run 直接
 #      startup_failure——0 个 job、没有任何日志。反证：给 ci-docs.yml 的 acceptance-gate
 #      加回 `issues: read`，必须判红。
+#   7. main-red.yml 在首次 runner 排队掉线时需执行 `gh run rerun <id> --failed`，
+#      最小权限必须恰为 `{issues: write, actions: write, contents: read}`（actions 退回 read
+#      会让自动重跑 403 失败；扩出额外写权限违背最小权限原则）。反证：actions 改回 read 必须判红。
 # YAML 1.1 把键 `on` 读成布尔 True，取触发表按 d.get('on', d.get(True)) 两头都认。
 # 缺 PyYAML 一律判红（exit 1），不 SKIP。
 # 反证：在临时目录里复制 workflows 与 desktop-checks action 造变异（去掉 Windows job 的 pull_request 条件 / 某条 lane 的
@@ -280,6 +283,21 @@ if isinstance(release, dict):
                         f"（GitHub 启动校验会判 startup_failure：删掉被调方的越级权限，不给 caller 扩权）"
                     )
 
+# main-red.yml 最小权限锁死（自动重跑 runner 掉线需 actions: write，不得欠权也不得扩权）。
+try:
+    with open(os.path.join(wf, "main-red.yml"), encoding="utf-8") as f:
+        main_red = yaml.safe_load(f)
+except Exception as e:
+    bad.append(f"main-red.yml: 读不出 YAML（{e}）")
+    main_red = None
+if isinstance(main_red, dict):
+    mr_perms = main_red.get("permissions")
+    expected_mr_perms = {"issues": "write", "actions": "write", "contents": "read"}
+    if mr_perms != expected_mr_perms:
+        bad.append(
+            f"main-red.yml: permissions 应恰为 {expected_mr_perms!r}（gh run rerun 需 actions: write，且遵循最小权限），实为 {mr_perms!r}"
+        )
+
 for b in bad:
     print(b)
 sys.exit(1 if bad else 0)
@@ -365,6 +383,10 @@ mutant "release.yml 的 stable 也并进 test-channel 组" .github/workflows/rel
   "s/format\('release-stable-.*inputs\.tag\)/'test-channel'/"
 mutant "ci-docs 的 acceptance-gate 加回越级的 issues: read" .github/workflows/ci-docs.yml \
   "/^  acceptance-gate:\$/,/^    steps:\$/ s/^      contents: read\$/      contents: read\n      issues: read/"
+mutant "main-red.yml 的 actions: write 退回 read" .github/workflows/main-red.yml \
+  "s/^  actions: write\$/  actions: read/"
+mutant "main-red.yml 越权新增 pull-requests: write" .github/workflows/main-red.yml \
+  "s/^  contents: read\$/  contents: read\n  pull-requests: write/"
 
 if [ "$fail" -eq 0 ]; then
   echo "== ci-lane-invariants: green ✅ =="

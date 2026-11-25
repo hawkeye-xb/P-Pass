@@ -40,13 +40,19 @@ case "$1 $2" in
   "api repos/"*)
     p="$2"
     case "$p" in
-      */actions/runs/*/jobs) emit "$F/jobs.json" "$jqx" ;;
+      */actions/runs/*/jobs*) emit "$F/jobs.json" "$jqx" ;;
       */actions/runs/*) emit "$F/run.json" "$jqx" ;;
       */actions/workflows/*/runs*) emit "$F/wfruns.json" "$jqx" ;;
       */compare/*) emit "$F/compare.json" "$jqx" ;;
       */commits\?*) emit "$F/commits.json" "$jqx" ;;
       *) echo "stub gh: unsupported $p" >&2; exit 2 ;;
     esac ;;
+  "run rerun"*)
+    if [ "${FAKE_RERUN_FAIL:-0}" = "1" ]; then
+      echo "stub gh: rerun failed" >&2
+      exit 1
+    fi
+    printf '%s\n' "$@" >"$F/rerun.args" ;;
   "issue list") emit "$F/issues.json" "$jqx" ;;
   "issue create")
     n=900
@@ -64,7 +70,7 @@ reset() {
   rm -f "$FAKE"/*
   echo '[]' >"$FAKE/issues.json"
   cat >"$FAKE/run.json" <<'J'
-{"head_sha":"bbbbbbbb2222222222222222222222222222222222","html_url":"https://x/run/77","created_at":"2026-11-06T10:00:00Z","workflow_id":5}
+{"head_sha":"bbbbbbbb2222222222222222222222222222222222","html_url":"https://x/run/77","created_at":"2026-11-06T10:00:00Z","workflow_id":5,"run_attempt":1}
 J
   cat >"$FAKE/wfruns.json" <<'J'
 {"workflow_runs":[
@@ -83,7 +89,7 @@ J
  {"sha":"d2d2d2d2d2","commit":{"message":"feat: 近期二 (#202)"}}]
 J
   cat >"$FAKE/jobs.json" <<'J'
-{"jobs":[{"name":"lint","conclusion":"failure","html_url":"https://x/job/1"},{"name":"test","conclusion":"success","html_url":"https://x/job/2"}]}
+{"jobs":[{"name":"lint","conclusion":"failure","html_url":"https://x/job/1","steps":[{"name":"Set up job","status":"completed","conclusion":"success"},{"name":"Clippy","status":"completed","conclusion":"failure"}]},{"name":"test","conclusion":"success","html_url":"https://x/job/2","steps":[{"name":"Test","status":"completed","conclusion":"success"}]}]}
 J
 }
 
@@ -173,6 +179,106 @@ check "反证：同样的开着的卡，success 才关" bash -c "grep -q 'issue 
 reset
 run timed_out
 check "反证：timed_out 算红，开卡" bash -c "grep -q 'issue create' '$FAKE/calls'"
+
+echo "── 云端 runner 排队掉线（0 步未执行）自动重跑一次 ──"
+# 正例 1a：直接单 job 0 步掉线（steps 为空，run_attempt=1）
+reset
+cat >"$FAKE/jobs.json" <<'J'
+{"jobs":[
+  {"name":"test","conclusion":"success","html_url":"https://x/job/1","steps":[{"name":"Test","status":"completed","conclusion":"success"}]},
+  {"name":"macos-job","conclusion":"failure","html_url":"https://x/job/2","steps":[]}
+]}
+J
+run failure
+check "run_attempt=1 且失败 job steps 为空：触发 gh run rerun 77 --failed，不开 P0 卡" \
+  bash -c "[ -f '$FAKE/rerun.args' ] && grep -qx '77' '$FAKE/rerun.args' && grep -qx -- '--failed' '$FAKE/rerun.args' && [ ! -f '$FAKE/create.args' ] && ! grep -q 'issue create\|issue comment' '$FAKE/calls'"
+
+# 正例 1b：上游 macOS job cancelled + steps=[]，末尾 CI * gate 汇总步判 failure
+reset
+echo '[{"number":321,"title":"[MAIN-RED] CI Rust"}]' >"$FAKE/issues.json"
+cat >"$FAKE/jobs.json" <<'J'
+{"jobs":[
+  {"name":"changes (要不要跑 Rust 重型门禁)","conclusion":"success","html_url":"https://x/job/1","steps":[{"name":"Set up job","status":"completed","conclusion":"success"}]},
+  {"name":"test (platform, macos)","conclusion":"cancelled","html_url":"https://x/job/2","steps":[]},
+  {"name":"CI Rust gate","conclusion":"failure","html_url":"https://x/job/3","steps":[
+    {"name":"Set up job","status":"completed","conclusion":"success"},
+    {"name":"汇总上游结论","status":"completed","conclusion":"failure"}
+  ]}
+]}
+J
+run failure
+check "run_attempt=1 且仅上游 runner 0 步掉线 + gate 汇总红：触发重跑，不开卡也不追加已有卡评论" \
+  bash -c "[ -f '$FAKE/rerun.args' ] && grep -qx '77' '$FAKE/rerun.args' && grep -qx -- '--failed' '$FAKE/rerun.args' && [ ! -f '$FAKE/create.args' ] && [ ! -f '$FAKE/comment.args' ]"
+
+# 正例 1c：失败 job 仅有 skipped/queued 步（未真正跑任何步骤），run_attempt=1 → 触发重跑
+reset
+cat >"$FAKE/jobs.json" <<'J'
+{"jobs":[
+  {"name":"ios (xcodegen + xcodebuild test)","conclusion":"failure","html_url":"https://x/job/2","steps":[
+    {"name":"Set up job","status":"queued","conclusion":null},
+    {"name":"Checkout","status":"skipped","conclusion":"skipped"}
+  ]}
+]}
+J
+run failure
+check "run_attempt=1 且失败 job 仅有 queued/skipped 步：触发重跑且不开卡" \
+  bash -c "[ -f '$FAKE/rerun.args' ] && [ ! -f '$FAKE/create.args' ]"
+
+# 反例 2a：run_attempt >= 2 仍然 0 步掉线 → 不再无限重跑，立即开 P0 卡
+reset
+jq '.run_attempt = 2' "$FAKE/run.json" >"$FAKE/run.tmp" && mv "$FAKE/run.tmp" "$FAKE/run.json"
+cat >"$FAKE/jobs.json" <<'J'
+{"jobs":[
+  {"name":"test (platform, macos)","conclusion":"cancelled","html_url":"https://x/job/2","steps":[]},
+  {"name":"CI Rust gate","conclusion":"failure","html_url":"https://x/job/3","steps":[
+    {"name":"汇总上游结论","status":"completed","conclusion":"failure"}
+  ]}
+]}
+J
+run failure
+check "反证：run_attempt=2 仍 0 步掉线时不再重跑，立即开 [MAIN-RED] P0 卡" \
+  bash -c "[ ! -f '$FAKE/rerun.args' ] && [ -f '$FAKE/create.args' ] && grep -qx '\[MAIN-RED\] CI Rust' '$FAKE/create.args' && grep -q 'https://x/job/2' '$FAKE/create.args'"
+
+# 反例 2b：run_attempt=1 但既有 0 步掉线 job，又有真实步骤失败的业务 job → 不得重跑掩盖，立即开 P0 卡
+reset
+cat >"$FAKE/jobs.json" <<'J'
+{"jobs":[
+  {"name":"test (platform, macos)","conclusion":"cancelled","html_url":"https://x/job/2","steps":[]},
+  {"name":"test (windows)","conclusion":"failure","html_url":"https://x/job/4","steps":[
+    {"name":"Set up job","status":"completed","conclusion":"success"},
+    {"name":"Test (nextest)","status":"completed","conclusion":"failure"}
+  ]},
+  {"name":"CI Rust gate","conclusion":"failure","html_url":"https://x/job/3","steps":[
+    {"name":"汇总上游结论","status":"completed","conclusion":"failure"}
+  ]}
+]}
+J
+run failure
+check "反证：run_attempt=1 但混合真实步骤失败 job 时不重跑，立即开 [MAIN-RED] P0 卡" \
+  bash -c "[ ! -f '$FAKE/rerun.args' ] && [ -f '$FAKE/create.args' ] && grep -q 'https://x/job/4' '$FAKE/create.args'"
+
+# 反例 2c：已开始执行业务步骤后中途中断（前序步 success、当前步 in_progress/null）→ 不算 0 步掉线，立即开 P0 卡
+reset
+cat >"$FAKE/jobs.json" <<'J'
+{"jobs":[
+  {"name":"ios (xcodegen + xcodebuild test)","conclusion":"timed_out","html_url":"https://x/job/5","steps":[
+    {"name":"Set up job","status":"completed","conclusion":"success"},
+    {"name":"App unit tests","status":"in_progress","conclusion":null}
+  ]}
+]}
+J
+run timed_out
+check "反证：已执行步骤后中途超时（conclusion=null）不误判为掉线，立即开 [MAIN-RED] P0 卡" \
+  bash -c "[ ! -f '$FAKE/rerun.args' ] && [ -f '$FAKE/create.args' ] && grep -q 'https://x/job/5' '$FAKE/create.args'"
+
+# 反例 2d：run_attempt=1 且 0 步掉线，但 gh run rerun 失败（如权限不足）→ 降级照常开 P0 卡，绝不吞掉告警
+reset
+cat >"$FAKE/jobs.json" <<'J'
+{"jobs":[{"name":"macos-job","conclusion":"failure","html_url":"https://x/job/2","steps":[]}]}
+J
+FAKE_RERUN_FAIL=1 run failure
+check "反证：gh run rerun 失败时降级开 [MAIN-RED] P0 卡，不静默漏报" \
+  bash -c "[ -f '$FAKE/create.args' ] && grep -qx '\[MAIN-RED\] CI Rust' '$FAKE/create.args'"
 
 echo
 printf '通过 %d / 失败 %d\n' "$PASS" "$FAIL"
