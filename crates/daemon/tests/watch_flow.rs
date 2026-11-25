@@ -50,20 +50,42 @@ async fn asset_count(f: &Fixture) -> i64 {
     f.db.count_assets().await.unwrap()
 }
 
-/// 轮询直到 `probe` 为真或超时（默认 10s——容忍 FSEvents 延迟 + 防抖）。
+/// 轮询直到 `probe` 为真或超时（60s 仅作防挂死上限，不靠短超时赌快慢）。
 async fn wait_until<F, Fut>(probe: F, what: &str)
 where
     F: Fn() -> Fut,
     Fut: futures_core::Future<Output = bool>,
 {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     while tokio::time::Instant::now() < deadline {
         if probe().await {
             return;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
     panic!("timeout waiting for {what}");
+}
+
+/// 等下一条 `timeline.invalidated` 事件——既是事件契约验证，也是初始批次节流窗口
+/// （`DEFAULT_THROTTLE_WINDOW`）已完整 flush 的确定性信号，替代固定 `sleep(1600ms)`。
+async fn await_invalidated(
+    events: &mut tokio::sync::broadcast::Receiver<serde_json::Value>,
+    what: &str,
+) {
+    let got = tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            match events.recv().await {
+                Ok(v) if v.get("event").and_then(|e| e.as_str()) == Some(TIMELINE_INVALIDATED) => {
+                    break true;
+                }
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(got, "{what}: 60s 内未收到 timeline.invalidated");
 }
 
 async fn count_eq(f: &Fixture, n: i64) -> bool {
@@ -99,36 +121,18 @@ async fn new_media_file_is_ingested_within_seconds() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn delete_is_reconciled_and_invalidated_emitted() {
-    let f = setup(Duration::from_millis(100)).await;
+    let mut f = setup(Duration::from_millis(100)).await;
     let path = write_media(&f, "2026/08/IMG_0002.jpg", b"fake-jpeg-bytes-2").await;
     wait_until(|| count_eq(&f, 1), "initial ingest").await;
 
-    // 从 canonical 布局删除（外部删除语义：用户在 Finder 删）。
-    // FSEvents 会把同批次内 Create(X)+Remove(X) 合并成无事件——先等
-    // 创建批次 flush（真实场景里删除发生在浏览时间线时，远晚于 ingest，
-    // 批次早已 flush；自动化测试要显式等这个窗口）。
-    tokio::time::sleep(Duration::from_millis(1600)).await;
-    // broadcast 不保留历史——必须在删除前订阅，否则 reconcile 完成时
-    // 的 invalidated 会被错过。
-    let mut events = f.events.resubscribe();
+    // #1087：等初始入库批次的 `timeline.invalidated` 真正 flush 后再删除，
+    // 替代原先固定 `sleep(1600ms)`（既证明创建批次已过防抖与节流窗口，也保证删除能触发新事件）。
+    await_invalidated(&mut f.events, "initial ingest flush before delete").await;
     std::fs::remove_file(&path).unwrap();
 
-    // 索引收敛到 0 + 收到 invalidated 事件。
+    // 索引收敛到 0 + 收到删除对应的 invalidated 事件。
     wait_until(|| count_eq(&f, 0), "reconcile of delete").await;
-    let got_invalidated = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            match events.recv().await {
-                Ok(v) if v.get("event").and_then(|e| e.as_str()) == Some(TIMELINE_INVALIDATED) => {
-                    break true;
-                }
-                Ok(_) => continue,
-                Err(_) => break false,
-            }
-        }
-    })
-    .await
-    .unwrap_or(false);
-    assert!(got_invalidated, "删除后必须 emit timeline.invalidated");
+    await_invalidated(&mut f.events, "删除后必须 emit timeline.invalidated").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -177,9 +181,9 @@ async fn ingest_self_events_are_idempotent() {
 // WATCH-02 探针：三种删除形状 + Finder 内部移动。
 // ---------------------------------------------------------------------------
 
-/// 等 ingest 自产事件批次 flush（复用既有测试里的口径）。
-async fn settle() {
-    tokio::time::sleep(Duration::from_millis(1600)).await;
+/// #1087：等初始入库批次的 `timeline.invalidated` 节流事件真正 flush，替代固定 `sleep(1600ms)`。
+async fn settle(f: &mut Fixture) {
+    await_invalidated(&mut f.events, "settle initial ingest batch").await;
 }
 
 /// 用户自己建的日期目录——库内布局归用户，测试不该假设我们的 canonical 形状。
@@ -188,11 +192,11 @@ const USER_TREE: &str = "2026/08";
 #[tokio::test(flavor = "multi_thread")]
 async fn removing_a_whole_subtree_is_reconciled() {
     // 形状二：整棵子树被 remove_dir_all（rm -rf 语义）。
-    let f = setup(Duration::from_millis(100)).await;
+    let mut f = setup(Duration::from_millis(100)).await;
     write_media(&f, &format!("{USER_TREE}/IMG_A.jpg"), b"bytes-a").await;
     write_media(&f, &format!("{USER_TREE}/IMG_B.jpg"), b"bytes-b").await;
     wait_until(|| count_eq(&f, 2), "initial ingest").await;
-    settle().await;
+    settle(&mut f).await;
 
     std::fs::remove_dir_all(f.dir.path().join("originals/2026")).unwrap();
     wait_until(|| count_eq(&f, 0), "reconcile of whole-subtree removal").await;
@@ -201,11 +205,11 @@ async fn removing_a_whole_subtree_is_reconciled() {
 #[tokio::test(flavor = "multi_thread")]
 async fn trashing_a_subtree_is_reconciled() {
     // 形状三：Finder「删除」= 把目录 rename 进 ~/.Trash（同卷改名）。
-    let f = setup(Duration::from_millis(100)).await;
+    let mut f = setup(Duration::from_millis(100)).await;
     write_media(&f, &format!("{USER_TREE}/IMG_C.jpg"), b"bytes-c").await;
     write_media(&f, &format!("{USER_TREE}/IMG_D.jpg"), b"bytes-d").await;
     wait_until(|| count_eq(&f, 2), "initial ingest").await;
-    settle().await;
+    settle(&mut f).await;
 
     let trash = f.dir.path().join("trash-outside-originals");
     std::fs::rename(f.dir.path().join("originals/2026"), &trash).unwrap();
@@ -216,10 +220,10 @@ async fn trashing_a_subtree_is_reconciled() {
 async fn moving_a_file_inside_originals_keeps_it_indexed() {
     // 用户在 Finder 里把照片拖进自建目录（分类）——文件还在库里，
     // 索引必须重新指向新位置，绝不能把行删掉让照片凭空消失。
-    let f = setup(Duration::from_millis(100)).await;
+    let mut f = setup(Duration::from_millis(100)).await;
     let start = write_media(&f, &format!("{USER_TREE}/IMG_E.jpg"), b"bytes-e").await;
     wait_until(|| count_eq(&f, 1), "initial ingest").await;
-    settle().await;
+    settle(&mut f).await;
 
     let album = f.dir.path().join("originals").join("我的婚礼");
     std::fs::create_dir_all(&album).unwrap();
@@ -261,28 +265,16 @@ async fn moving_a_file_inside_originals_keeps_it_indexed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn whole_subtree_removal_emits_invalidated() {
     // 索引减到位之外，前端要收到 timeline.invalidated 才会重画照片墙。
-    let f = setup(Duration::from_millis(100)).await;
+    let mut f = setup(Duration::from_millis(100)).await;
     write_media(&f, &format!("{USER_TREE}/IMG_F.jpg"), b"bytes-f").await;
     wait_until(|| count_eq(&f, 1), "initial ingest").await;
-    settle().await;
+    settle(&mut f).await;
 
-    // broadcast 不留历史——删除前重新订阅。
-    let mut events = f.events.resubscribe();
     std::fs::remove_dir_all(f.dir.path().join("originals/2026")).unwrap();
     wait_until(|| count_eq(&f, 0), "reconcile of whole-subtree removal").await;
-
-    let got = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            match events.recv().await {
-                Ok(v) if v.get("event").and_then(|e| e.as_str()) == Some(TIMELINE_INVALIDATED) => {
-                    break true
-                }
-                Ok(_) => continue,
-                Err(_) => break false,
-            }
-        }
-    })
-    .await
-    .unwrap_or(false);
-    assert!(got, "整棵子树删除后必须 emit timeline.invalidated");
+    await_invalidated(
+        &mut f.events,
+        "整棵子树删除后必须 emit timeline.invalidated",
+    )
+    .await;
 }
