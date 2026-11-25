@@ -53,9 +53,20 @@ final class AppModel: ObservableObject {
     @Published private(set) var pickedBatch: PickedBatchSummary?
     @Published private(set) var autoRule = false
     @Published private(set) var ruleNote: String?
-    // 系统选图器下滑或取消关闭时不触发完成回调，需在 sheet 收起时解锁决定页按钮
+    private var pickerCallbackReceived = false
+    // 系统选图器下滑或取消关闭时不触发完成回调，需在 sheet 收起时解锁决定页按钮并记取消日志
     @Published var pickerRequested = false {
-        didSet { if oldValue, !pickerRequested, phase == .decision { decisionBusy = false } }
+        didSet {
+            if !oldValue, pickerRequested {
+                pickerCallbackReceived = false
+                AppLog.log(phase == .decision ? "onboarding: picker presented" : "settings: picker presented")
+            } else if oldValue, !pickerRequested {
+                if !pickerCallbackReceived {
+                    AppLog.log(phase == .decision ? "onboarding: pick cancelled, staying on decision" : "settings: picker cancelled")
+                }
+                if phase == .decision { decisionBusy = false }
+            }
+        }
     }
     @Published var filePickerRequested = false {
         didSet { if oldValue, !filePickerRequested, phase == .decision { decisionBusy = false } }
@@ -380,28 +391,40 @@ extension AppModel {
     var notifyToggleOn: Bool { NotifyToggle.displayValue(preference: notifyOnFailure, authorization: notificationAuthorization) }
 
     func setNotifyToggle(_ on: Bool) {
-        guard on else { writeNotifyOnFailure(false); return }
+        guard on else {
+            if writeNotifyOnFailure(false) {
+                AppLog.log("settings: notify toggle off result=disabled")
+            }
+            return
+        }
         Task {
             let auth = await backend.engine.notificationAuthorization()
             notificationAuthorization = auth
             switch NotifyToggle.turnOnAction(authorization: auth) {
             case .enable:
-                writeNotifyOnFailure(true)
+                if writeNotifyOnFailure(true) {
+                    AppLog.log("settings: notify toggle on result=enabled")
+                }
             case .requestAuthorization:
                 guard !notificationRequestInFlight else { return }
                 notificationRequestInFlight = true
                 let after = await backend.engine.requestNotificationAuthorization()
                 notificationRequestInFlight = false
                 notificationAuthorization = after
-                writeNotifyOnFailure(after == .authorized)
+                if writeNotifyOnFailure(after == .authorized) {
+                    AppLog.log("settings: notify toggle on result=requested→\(after == .authorized ? "authorized" : "denied")")
+                }
             case .openSystemSettings:
+                AppLog.log("settings: notify toggle on result=openSettings")
                 backend.engine.openNotificationSettings()
             }
         }
     }
 
-    private func writeNotifyOnFailure(_ on: Bool) {
-        do { try backend.engine.setNotifyOnFailure(on); notifyOnFailure = on } catch { settingWriteFailed("notify-on-failure", error) }
+    @discardableResult
+    private func writeNotifyOnFailure(_ on: Bool) -> Bool {
+        do { try backend.engine.setNotifyOnFailure(on); notifyOnFailure = on; return true }
+        catch { settingWriteFailed("notify-on-failure", error); return false }
     }
 
     @MainActor func openSettingsFromBlockedHero() {
@@ -417,7 +440,11 @@ extension AppModel {
     func setAutoRule(_ on: Bool) {
         ruleNote = nil
         guard on else {
-            do { try backend.engine.setAutoRule(false); autoRule = false } catch { settingWriteFailed("auto-rule", error) }
+            do {
+                try backend.engine.setAutoRule(false)
+                autoRule = false
+                AppLog.log("settings: auto-rule toggle off")
+            } catch { settingWriteFailed("auto-rule", error) }
             return
         }
         if backend.media.access() == .partial && !sourceAvailability.hasUsableFolder {
@@ -432,6 +459,7 @@ extension AppModel {
     private func enableAutoRuleWithoutPhotoGate() async {
         access = backend.media.access()
         do { try backend.engine.setAutoRule(true); autoRule = true } catch { settingWriteFailed("auto-rule", error); return }
+        AppLog.log("settings: auto-rule toggle on photo access=\(access)")
         refresh()
         if access == .full { refreshExistingAlbums() }
         if noAlbums { openScopeEditor() } else { await backend.engine.wake() }
@@ -439,6 +467,7 @@ extension AppModel {
 
     private func applyAutoRuleAccess(_ granted: MediaAccess) async {
         access = granted
+        AppLog.log("settings: auto-rule photo access after prompt=\(granted)")
         switch granted {
         case .full:
             do { try backend.engine.setAutoRule(true); autoRule = true } catch { settingWriteFailed("auto-rule", error); return }
@@ -465,8 +494,14 @@ extension AppModel {
     }
 
     func pickedChosen(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) {
+        pickerCallbackReceived = true
         guard !items.isEmpty else {
-            if phase == .decision { AppLog.log("onboarding: pick cancelled, staying on decision"); decisionBusy = false }
+            if phase == .decision {
+                AppLog.log("onboarding: pick cancelled, staying on decision")
+                decisionBusy = false
+            } else {
+                AppLog.log("settings: picker cancelled")
+            }
             return
         }
         AppLog.log("picked: \(items.count) chosen")

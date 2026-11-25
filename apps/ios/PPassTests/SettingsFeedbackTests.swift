@@ -1120,4 +1120,46 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertNil(snap)
         XCTAssertNotNil(app.notice)
     }
+
+    // MARK: #1453
+
+    /// #1453：设置页通知开关、挑几张传选择器、自动备份开关的成功路径必须写入本地 ppass.log，
+    /// 写盘失败时不误记成功行，且不包含任何配对串或文件名。
+    func test_success_path_logs_are_written_for_notify_picker_and_auto_rule() async throws {
+        let lib = try FileManager.default.url(for: .libraryDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        let logURL = lib.appendingPathComponent("Logs", isDirectory: true).appendingPathComponent(AppLog.fileName)
+        let beforeSize = (try? Data(contentsOf: logURL).count) ?? 0
+
+        let (app, _, _) = make()
+        app.phase = .main
+
+        // 1. 通知开关：关 -> 开（StubEngine 默认已授权）
+        app.setNotifyToggle(false)
+        app.setNotifyToggle(true)
+        await settle()
+
+        // 2. 挑几张传：打开 -> 取消（空结果）
+        app.pickerRequested = true
+        app.pickedChosen([])
+        app.pickerRequested = false
+
+        // 3. 自动备份开关：关 -> 开
+        app.setAutoRule(false)
+        app.setAutoRule(true)
+        await settle()
+
+        // 4. 扫码相机授权探针（模拟器无相机 -> unavailable）
+        _ = await ScanScreen.cameraAccess()
+
+        let afterData = try Data(contentsOf: logURL)
+        let slice = String(decoding: afterData.dropFirst(beforeSize), as: UTF8.self)
+        XCTAssertTrue(slice.contains("settings: notify toggle off result=disabled"), "缺通知关闭成功日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("settings: notify toggle on result=enabled"), "缺通知开启成功日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("settings: picker presented"), "缺设置页选择器打开日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("settings: picker cancelled"), "缺设置页选择器取消日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("settings: auto-rule toggle off"), "缺自动备份关闭日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("settings: auto-rule toggle on photo access="), "缺自动备份开启日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("scan: camera authorization="), "缺扫码相机权限日志：\n\(slice)")
+        XCTAssertFalse(slice.contains("ppf://pair"), "日志不得泄露配对串")
+    }
 }

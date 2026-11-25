@@ -27,7 +27,13 @@ struct ScanScreen: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(PPColor.paper.opacity(0.7), lineWidth: 2)
                 switch cameraState {
-                case .ready: QRScannerView { code in if let c = PairCode.normalized(code) { Haptics.success(); onCode(c) } }
+                case .ready: QRScannerView { code in
+                    if let c = PairCode.normalized(code) {
+                        AppLog.log("scan: code accepted")
+                        Haptics.success()
+                        onCode(c)
+                    }
+                }
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 case .checking: ProgressView().tint(PPColor.paperDim)
                 case .unavailable:
@@ -39,7 +45,10 @@ struct ScanScreen: View {
             // #1013：扫码成功后系统会弹「本地网络」权限框；先在这里说清用途，不另起弹窗。
             Text(L.s("scan_local_network_note")).font(PPFont.subheadline).multilineTextAlignment(.center).foregroundStyle(PPColor.paperDim)
             Spacer()
-            Button(L.s("scan_manual_link"), action: onManual)
+            Button(L.s("scan_manual_link")) {
+                AppLog.log("scan: manual entry opened")
+                onManual()
+            }
                 .font(PPFont.sans(14, .bold, relativeTo: .subheadline)).foregroundStyle(PPColor.paperDim).frame(minHeight: 48)
                 .accessibilityIdentifier("manualLink")
         }
@@ -50,12 +59,14 @@ struct ScanScreen: View {
         .tint(PPColor.paper)
         .background(PPColor.surfaceDark.ignoresSafeArea())
         .task {
+            AppLog.log("scan: shown")
             switch await Self.cameraAccess() {
             case .ready: cameraState = .ready
             case .unavailable: cameraState = .unavailable
             case .deniedOnFirstAsk:
                 cameraState = .unavailable
                 // #1964：首次系统弹框里点了拒绝 → 直接去手动输入页（对位 Android），不停在黑框扫码页等用户再点底部链接。
+                AppLog.log("scan: manual entry opened")
                 onManual()
             }
         }
@@ -65,11 +76,27 @@ struct ScanScreen: View {
     enum CameraAccess { case ready, unavailable, deniedOnFirstAsk }
 
     static func cameraAccess() async -> CameraAccess {
-        guard AVCaptureDevice.default(for: .video) != nil else { return .unavailable }
+        guard AVCaptureDevice.default(for: .video) != nil else {
+            AppLog.log("scan: camera authorization=unavailable")
+            return .unavailable
+        }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized: return .ready
-        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .video) ? .ready : .deniedOnFirstAsk
-        default: return .unavailable
+        case .authorized:
+            AppLog.log("scan: camera authorization=authorized")
+            return .ready
+        case .notDetermined:
+            let granted = await AVCaptureDevice.requestAccess(for: .video)
+            AppLog.log("scan: camera authorization=notDetermined after prompt=\(granted ? "authorized" : "denied")")
+            return granted ? .ready : .deniedOnFirstAsk
+        case .denied:
+            AppLog.log("scan: camera authorization=denied")
+            return .unavailable
+        case .restricted:
+            AppLog.log("scan: camera authorization=restricted")
+            return .unavailable
+        @unknown default:
+            AppLog.log("scan: camera authorization=unavailable")
+            return .unavailable
         }
     }
 }
@@ -91,7 +118,12 @@ struct QRScannerView: UIViewRepresentable {
                 session.addOutput(output)
                 output.setMetadataObjectsDelegate(context.coordinator, queue: .main)
                 output.metadataObjectTypes = [.qr]
+                AppLog.log("scan: preview session started")
+            } else {
+                AppLog.log("scan: preview session setup failed (metadata output)")
             }
+        } else {
+            AppLog.log("scan: preview session setup failed (video input)")
         }
         view.previewLayer.session = session
         view.previewLayer.videoGravity = .resizeAspectFill
