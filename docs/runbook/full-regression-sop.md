@@ -283,11 +283,11 @@ W3 和 W5 都会改动安装状态，放在 §4 全部跑完、§7 清理之前�
 
 ### 9.6 Modern Standby 下的保持唤醒：实测结论（#804）
 
-W4 的预期里那条「插着电时一直列出」，来自 #804 落地的 daemon 行为：**daemon 在跑且插着电时一直持有 `ES_SYSTEM_REQUIRED`，空闲睡眠不再把进程挂起**（屏幕照常熄灭、锁屏；用电池或电源未知时释放，按用户自己的设置睡）。下面是把这套行为在 Modern Standby 机器上实测到的结论，供排障与回归参照。
+W4 的预期里那条「插着电时一直列出」，来自 #804 落地的 daemon 行为：**daemon 在跑且插着电时一直持有长期电源租约（`ES_SYSTEM_REQUIRED`），空闲睡眠不再把进程挂起**（屏幕照常熄灭、锁屏；用电池或电源未知时释放长期电源租约，但进行中的传输仍共用同一份唤醒计数，需等传输租约释放后才按用户自己的设置睡）。下面是把这套行为在 Modern Standby 机器上实测到的结论，供排障与回归参照。
 
 **测试环境**（当次实测，不代表所有硬件）：Windows 11 26200；Intel Core Ultra 5 125U；`powercfg /a` 只有「S0 低电量待机 连接的网络」，没有 S3。设置：插电；屏幕 1 分钟关、睡眠 3 分钟（测完已恢复原值并回读确认）；Claude app 自己的保持唤醒临时关闭，避免干扰。两个进程每 5 秒写心跳：一个持有声明的测试进程 + 一个什么都不声明的旁观进程。
 
-**声明方式**：`SetThreadExecutionState(ES_SYSTEM_REQUIRED \| ES_CONTINUOUS)`（`crates/platform/src/windows.rs`）。**不需要管理员**，**不需要 `ES_DISPLAY_REQUIRED`**——屏幕可以照常熄灭，被保持的只是「不进挂起」。
+**声明方式**：`SetThreadExecutionState(ES_SYSTEM_REQUIRED | ES_CONTINUOUS)`（`crates/platform/src/windows.rs`）。**不需要管理员**，**不需要 `ES_DISPLAY_REQUIRED`**——屏幕可以照常熄灭，被保持的只是「不进挂起」。
 
 **对照结果**（2026-10-10 第一轮，同一台机器）：
 
