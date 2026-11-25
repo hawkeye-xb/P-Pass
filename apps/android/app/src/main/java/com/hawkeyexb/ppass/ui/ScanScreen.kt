@@ -53,7 +53,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.hawkeyexb.ppass.R
@@ -336,6 +338,7 @@ internal fun ManualPairScreen(
                 Text(
                     stringResource(R.string.scan_manual_invalid),
                     color = PPColor.Act, fontSize = 14.sp,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 )
             }
             Spacer(Modifier.height(14.dp))

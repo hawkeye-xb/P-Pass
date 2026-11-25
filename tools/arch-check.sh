@@ -753,7 +753,7 @@ apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/PhotosScreen.kt	14
 apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/ScanScreen.kt	11
 apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/TwoTabs.kt	1
 apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/UpdateDialog.kt	3
-apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/VideoScreen.kt	4
+apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/VideoScreen.kt	3
 STOCK
 )
 echo "==> M.4: mobile business views use typography tokens, not raw font sizes"

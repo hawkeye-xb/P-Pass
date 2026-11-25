@@ -46,6 +46,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -181,10 +184,7 @@ fun VideoScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 when (val s = state) {
-                    is VideoPhase.Fetching -> Text(
-                        stringResource(R.string.video_loading, s.percent),
-                        color = PPColor.PaperDim, fontSize = 16.sp,
-                    )
+                    is VideoPhase.Fetching -> VideoFetchingStatus(s.percent)
                     // MOB-47: 播放器层换 Media3 ExoPlayer/PlayerView——
                     // PlayerView 自带播放/暂停/进度条/seek/错误态，播放器在
                     // onDispose 里 release，退出查看器不泄漏（logcat 无
@@ -204,13 +204,7 @@ fun VideoScreen(
             }
             // RET-01: 视频 Ready 才显示动作（未取到前无原图可存/可开）。
             if (state is VideoPhase.Ready) {
-                notice?.let {
-                    Text(
-                        it, fontSize = 13.sp, color = PPColor.PaperDim,
-                        modifier = Modifier.padding(4.dp, 8.dp),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    )
-                }
+                notice?.let { ViewerNoticeText(it) }
                 Row(
                     Modifier.fillMaxWidth().padding(top = 10.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -233,9 +227,19 @@ fun VideoScreen(
     }
 }
 
+@Composable
+internal fun VideoFetchingStatus(percent: Int) {
+    Text(
+        stringResource(R.string.video_loading, percent),
+        color = PPColor.PaperDim,
+        fontSize = 16.sp,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+    )
+}
+
 /** 视频页的初始样子：封面 + 居中的播放按钮（按钮上是原片大小）。没下载前只有这些。 */
 @Composable
-private fun VideoCover(cover: Bitmap?, sizeLabel: String, notice: String?, onPlay: () -> Unit) {
+internal fun VideoCover(cover: Bitmap?, sizeLabel: String, notice: String?, onPlay: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         if (cover != null) {
             Image(
@@ -259,7 +263,8 @@ private fun VideoCover(cover: Bitmap?, sizeLabel: String, notice: String?, onPla
                         .padding(top = 12.dp, start = 24.dp, end = 24.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(PPColor.SurfaceDark.copy(alpha = 0.8f))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .semantics { liveRegion = LiveRegionMode.Polite },
                 )
             }
         }

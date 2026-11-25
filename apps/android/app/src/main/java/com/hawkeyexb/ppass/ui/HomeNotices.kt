@@ -16,6 +16,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
@@ -78,7 +81,7 @@ fun NoticeCard(notice: HomeNotice) {
             Text(
                 notice.body,
                 fontSize = 13.5.sp, lineHeight = 20.sp, color = bodyColor,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite },
             )
             if (notice.dismissLabel != null) {
                 TextButton(onClick = notice.onDismiss) {
@@ -120,7 +123,7 @@ fun ClosableNoticeCard(
             Text(
                 body,
                 fontSize = 13.5.sp, lineHeight = 20.sp, color = bodyColor,
-                modifier = Modifier.weight(1f).padding(vertical = 10.dp),
+                modifier = Modifier.weight(1f).padding(vertical = 10.dp).semantics { liveRegion = LiveRegionMode.Polite },
             )
             if (actionLabel != null) {
                 TextButton(onClick = onAction) {
