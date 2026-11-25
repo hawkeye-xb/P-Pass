@@ -3,25 +3,38 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WORKTREES=()
+WT_LIST_FILE="$(mktemp "${TMPDIR:-/tmp}/p-pass-bump-version-list.XXXXXX")"
+
+cleanup_worktrees() {
+  local worktree
+  if [ -n "${WT_LIST_FILE:-}" ] && [ -f "$WT_LIST_FILE" ]; then
+    while IFS= read -r worktree || [ -n "$worktree" ]; do
+      [ -n "$worktree" ] || continue
+      git -C "$ROOT" worktree remove --force "$worktree" >/dev/null 2>&1 || true
+      rm -rf "$worktree"
+    done <"$WT_LIST_FILE"
+  fi
+  git -C "$ROOT" worktree prune >/dev/null 2>&1 || true
+}
 
 cleanup() {
-  local worktree
-  # macOS bash 3.2 在 set -u 下对空数组做 ${a[@]} 会报错，用 +"展开" 兜住。
-  for worktree in ${WORKTREES[@]+"${WORKTREES[@]}"}; do
-    git -C "$ROOT" worktree remove --force "$worktree" >/dev/null 2>&1 || true
-    rm -rf "$worktree"
-  done
+  cleanup_worktrees
+  if [ -n "${WT_LIST_FILE:-}" ]; then
+    rm -f "$WT_LIST_FILE"
+  fi
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-# new_worktree <名字>：从 HEAD 建一个一次性 worktree，退出时统一清理。
+# Command substitution runs in a subshell, so persist paths in WT_LIST_FILE on disk.
 new_worktree() {
-  local dir
+  local dir phys_dir
   dir="$(mktemp -d "${TMPDIR:-/tmp}/p-pass-bump-version-${1}.XXXXXX")"
-  git -C "$ROOT" worktree add --detach "$dir" HEAD >/dev/null
-  WORKTREES+=("$dir")
-  printf '%s\n' "$dir"
+  phys_dir="$(cd "$dir" && pwd -P)"
+  printf '%s\n' "$phys_dir" >>"$WT_LIST_FILE"
+  git -C "$ROOT" worktree add --detach "$phys_dir" HEAD >/dev/null
+  printf '%s\n' "$phys_dir"
 }
 
 SANDBOX="$(new_worktree drift)"
@@ -198,3 +211,22 @@ vjson="$UNKNOWN_SANDBOX/release/versions.json"
 [ "$(jq -r .androidVersionCode "$vjson")" = "$(jq -r .androidVersionCode "$ROOT/release/versions.json")" ] \
   || { echo "FAIL: --platform ios 改了 androidVersionCode" >&2; exit 1; }
 printf '%s\n' "PASS: unknown versions.json keys survive a bump"
+
+registered_count="$(grep -c . "$WT_LIST_FILE" || true)"
+[ "$registered_count" -eq 4 ] \
+  || { echo "FAIL: expected 4 registered disposable worktrees, got ${registered_count}" >&2; exit 1; }
+cleanup_worktrees
+wt_porcelain="$(git -C "$ROOT" worktree list --porcelain)"
+while IFS= read -r worktree || [ -n "$worktree" ]; do
+  [ -n "$worktree" ] || continue
+  if [ -e "$worktree" ]; then
+    echo "FAIL: disposable worktree directory still exists after cleanup: ${worktree}" >&2
+    exit 1
+  fi
+  if printf '%s\n' "$wt_porcelain" | grep -qxF "worktree ${worktree}"; then
+    echo "FAIL: disposable worktree still registered in git worktree list: ${worktree}" >&2
+    exit 1
+  fi
+done <"$WT_LIST_FILE"
+rm -f "$WT_LIST_FILE"
+printf '%s\n' "PASS: all disposable bump-version worktrees cleaned up"
