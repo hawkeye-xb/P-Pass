@@ -1138,9 +1138,19 @@ final class SettingsFeedbackTests: XCTestCase {
         app.setNotifyToggle(true)
         await settle()
 
-        // 2. 挑几张传：打开 -> 取消（空结果）
+        // 2. 挑几张传：选中 1 张后关闭不得误记 cancelled；未选直接关闭才记 cancelled
+        let item: (fileName: String, mimeType: String, payload: PickedPayload) = ("secret-photo.jpg", "image/jpeg", StubPayload())
+        let beforePickOk = (try? Data(contentsOf: logURL).count) ?? 0
         app.pickerRequested = true
-        app.pickedChosen([])
+        app.pickedChosen([item])
+        app.pickerRequested = false
+        await settle()
+        let pickOkSlice = String(decoding: (try Data(contentsOf: logURL)).dropFirst(beforePickOk), as: UTF8.self)
+        XCTAssertTrue(pickOkSlice.contains("settings: picker presented"), "缺设置页选择器打开日志：\n\(pickOkSlice)")
+        XCTAssertFalse(pickOkSlice.contains("settings: picker cancelled"), "选中关闭时不得误记取消：\n\(pickOkSlice)")
+        XCTAssertFalse(pickOkSlice.contains("secret-photo.jpg"), "日志不得泄露文件名：\n\(pickOkSlice)")
+
+        app.pickerRequested = true
         app.pickerRequested = false
 
         // 3. 自动备份开关：关 -> 开

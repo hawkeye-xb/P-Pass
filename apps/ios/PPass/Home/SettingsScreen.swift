@@ -357,8 +357,9 @@ struct PhotoPickerSheet: UIViewControllerRepresentable {
         let parent: PhotoPickerSheet
         init(_ parent: PhotoPickerSheet) { self.parent = parent }
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-            parent.dismiss()
+            // 先把选中结果同步交回 AppModel 再 dismiss，避免 sheet 关闭触发 didSet 误记成 picker cancelled（#1453）
             if !results.isEmpty { parent.onPicked(results) }
+            parent.dismiss()
         }
     }
 }
