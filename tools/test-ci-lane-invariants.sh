@@ -23,7 +23,8 @@
 #      被调方（workflow 顶层与每个子 job）申请的权限等级不得超过 caller 授予的等级
 #      （none < read < write）。GitHub 在 run 启动前静态校验，越级时整次 run 直接
 #      startup_failure——0 个 job、没有任何日志。反证：给 ci-docs.yml 的 acceptance-gate
-#      加回 `issues: read`，必须判红。
+#      加回 `issues: read`，或把所有子 job 都显式写 `contents: read` 再在顶层加 `issues: read`，
+#      都必须判红（#2021）。
 # YAML 1.1 把键 `on` 读成布尔 True，取触发表按 d.get('on', d.get(True)) 两头都认。
 # 缺 PyYAML 一律判红（exit 1），不 SKIP。
 # 反证：在临时目录里复制 workflows 与 desktop-checks action 造变异（去掉 Windows job 的 pull_request 条件 / 某条 lane 的
@@ -266,6 +267,18 @@ if isinstance(release, dict):
             bad.append(f"release.yml: job「{caller_key}」调用的 {callee_name} 顶层不是映射")
             continue
         caller_perms = perms_of(caller_job.get("permissions", release.get("permissions")))
+        # #2021：若被调 workflow 顶层声明了 permissions，即使所有子 job 都显式覆盖了 permissions，
+        # 顶层声明仍受 caller 上限约束，单独比较一次防止漏判。
+        if "permissions" in callee:
+            top_perms = perms_of(callee.get("permissions"))
+            for scope in sorted(set(caller_perms or {}) | set(top_perms or {})):
+                granted, asked = level_of(caller_perms, scope), level_of(top_perms, scope)
+                if asked > granted:
+                    bad.append(
+                        f"release.yml: job「{caller_key}」调用 {callee_name} 的顶层 permissions "
+                        f"申请 {scope}: {LEVEL_NAME[asked]}，超过 caller 授予的 {LEVEL_NAME[granted]}"
+                        f"（GitHub 启动校验会判 startup_failure：删掉被调方的越级权限，不给 caller 扩权）"
+                    )
         for callee_key, callee_job in (callee.get("jobs") or {}).items():
             if not isinstance(callee_job, dict):
                 continue
@@ -365,6 +378,39 @@ mutant "release.yml 的 stable 也并进 test-channel 组" .github/workflows/rel
   "s/format\('release-stable-.*inputs\.tag\)/'test-channel'/"
 mutant "ci-docs 的 acceptance-gate 加回越级的 issues: read" .github/workflows/ci-docs.yml \
   "/^  acceptance-gate:\$/,/^    steps:\$/ s/^      contents: read\$/      contents: read\n      issues: read/"
+
+# #2021：构造「被调 workflow 顶层越级（加 issues: read）+ 所有子 job 均显式写 contents: read」，
+# 覆盖「没有任何子 job 继承顶层 permissions 时，顶层越级仍必须被抓到」。
+mutant_callee_top_perm() {
+  local desc="$1" dir
+  dir="$TMP/m$RANDOM$RANDOM"
+  mkdir -p "$dir/.github/workflows" "$dir/.github/actions/desktop-checks"
+  cp "$ROOT"/.github/workflows/*.yml "$dir/.github/workflows/"
+  cp "$ROOT/.github/actions/desktop-checks/action.yml" "$dir/.github/actions/desktop-checks/"
+  python3 - "$dir/.github/workflows/ci-docs.yml" <<'PY'
+import sys, yaml
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    d = yaml.safe_load(f)
+d["permissions"] = {"contents": "read", "issues": "read"}
+for job in (d.get("jobs") or {}).values():
+    if isinstance(job, dict):
+        job["permissions"] = {"contents": "read"}
+with open(path, "w", encoding="utf-8") as f:
+    yaml.safe_dump(d, f, allow_unicode=True, sort_keys=False)
+PY
+  if cmp -s "$dir/.github/workflows/ci-docs.yml" "$ROOT/.github/workflows/ci-docs.yml"; then
+    ko "变异没生效：${desc}"
+    return
+  fi
+  if out="$(check "$dir")"; then
+    ko "变异未判红：${desc}"
+  else
+    ok "变异判红：${desc} → $(printf '%s' "$out" | head -1)"
+  fi
+}
+mutant_callee_top_perm "ci-docs 所有子 job 显式 contents: read 且顶层加越级的 issues: read"
 
 if [ "$fail" -eq 0 ]; then
   echo "== ci-lane-invariants: green ✅ =="
