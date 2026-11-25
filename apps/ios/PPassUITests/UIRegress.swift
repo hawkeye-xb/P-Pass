@@ -431,14 +431,17 @@ class UIRegressCase: XCTestCase {
 
     /// #1941：受限相册选片页只挑静态图片格子，避开视频（label 以「视频, / Video, 」开头）与非照片占位项，
     /// 防止前排为 `.mov` 视频时 `allowedImages()` 计为 0 导致 `SettingsRuleLimited` 误红。
+    /// 保留 iOS 27 真机经验：候选多于 1 个时优先取索引 1（第 0 格在部分真机视图上可能是不可选头格）。
     func firstStaticPhotoPickerCell() -> XCUIElement? {
         let photoLabelPredicate = NSPredicate(
             format: "label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@",
             "照片, ", "Photo, ", "实况照片, ", "Live Photo, ", "截屏, ", "Screenshot, "
         )
         let gridPhotos = app.images.matching(identifier: "PXGGridLayout-Info").matching(photoLabelPredicate)
+        if gridPhotos.count > 1, gridPhotos.element(boundBy: 1).exists { return gridPhotos.element(boundBy: 1) }
         if gridPhotos.firstMatch.exists { return gridPhotos.firstMatch }
         let anyPhotos = app.images.matching(photoLabelPredicate)
+        if anyPhotos.count > 1, anyPhotos.element(boundBy: 1).exists { return anyPhotos.element(boundBy: 1) }
         if anyPhotos.firstMatch.exists { return anyPhotos.firstMatch }
         let nonVideoGrid = app.images.matching(identifier: "PXGGridLayout-Info").matching(
             NSPredicate(format: "NOT (label BEGINSWITH %@ OR label BEGINSWITH %@)", "视频, ", "Video, ")
@@ -450,15 +453,16 @@ class UIRegressCase: XCTestCase {
         return nil
     }
 
+    private static let pickerMediaPredicate = NSPredicate(
+        format: "label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@",
+        "照片, ", "Photo, ", "实况照片, ", "Live Photo, ", "截屏, ", "Screenshot, ", "视频, ", "Video, "
+    )
+
     /// 第 index 个可选格子（0 = 第一张）。限制访问那一页要选一张「还没被挑过」的，避免重复导入后 n=0。
     func pickerCell(at index: Int) -> XCUIElement? {
         let grid = app.images.matching(identifier: "PXGGridLayout-Info").element(boundBy: index)
         if grid.exists { return grid }
-        let mediaPredicate = NSPredicate(
-            format: "label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@",
-            "照片, ", "Photo, ", "视频, ", "Video, "
-        )
-        let cell = app.collectionViews.cells.matching(mediaPredicate).element(boundBy: index)
+        let cell = app.collectionViews.cells.matching(Self.pickerMediaPredicate).element(boundBy: index)
         if cell.exists { return cell }
         return nil
     }
@@ -467,15 +471,11 @@ class UIRegressCase: XCTestCase {
         // PHPicker 的照片格子：iOS 17–26 是 identifier 为 PXGGridLayout-Info 的 Image（带「照片, 日期」的 label）。
         // 不能按「scrollView 里的第一个 image」或无过滤 `app.collectionViews.cells` 找——
         // SwiftUI `List`（设置页）底层就是 UICollectionView，PHPicker 尚未挂载时会误点到设置页自己的行。
-        let mediaPredicate = NSPredicate(
-            format: "label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@",
-            "照片, ", "Photo, ", "视频, ", "Video, "
-        )
         let queries: [XCUIElementQuery] = [
             app.images.matching(identifier: "PXGGridLayout-Info"),
-            app.images.matching(mediaPredicate),
+            app.images.matching(Self.pickerMediaPredicate),
             // 兜底：更早的 iOS 上 PHPicker 是 collectionView 的 cell（必须带媒体 label，绝不误命中设置页 List 行）。
-            app.collectionViews.cells.matching(mediaPredicate),
+            app.collectionViews.cells.matching(Self.pickerMediaPredicate),
         ]
         for q in queries {
             let el = q.firstMatch
