@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / "tools" / "flow"))
 sys.path.insert(0, str(ROOT / "tools" / "tests"))
 import flow  # noqa: E402
 from test_bump_version_cleanup import BumpVersionWorktreeCleanupTests  # noqa: E402,F401
+from test_owner_release_test import OwnerReleaseTestWatchTests  # noqa: E402,F401
 
 
 class CleanFlowEngineTests(unittest.TestCase):
