@@ -97,6 +97,40 @@ out=$(
 expect_rc $? 2 "显式真机模式下多台真机不能装错目标"
 expect_contains "$out" '多台' "多台真机报错要求显式指定"
 
+# #2031：xcode-27 同时预装通用 iOS-27-2 与折叠机专属 iOS-27-2-iPhone19-4（仅支持 iPhone Duo）。
+# sim.sh 选择最新 runtime 时必须按 supportedDeviceTypes 过滤目标机型，避免挑到专属 runtime 报 403 Incompatible device。
+mkdir -p "$TMP/simbin"
+cat >"$TMP/simbin/xcrun" <<'SH'
+#!/usr/bin/env bash
+if [ "$1 $2 $3" = "simctl list runtimes" ]; then
+  cat <<'JSON'
+{"runtimes":[
+  {"platform":"iOS","isAvailable":true,"version":"27.2","identifier":"com.apple.CoreSimulator.SimRuntime.iOS-27-2","supportedDeviceTypes":[{"name":"iPhone 17","identifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]},
+  {"platform":"iOS","isAvailable":true,"version":"27.2","identifier":"com.apple.CoreSimulator.SimRuntime.iOS-27-2-iPhone19-4","supportedDeviceTypes":[{"name":"iPhone Duo","identifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-Duo"}]}
+]}
+JSON
+  exit 0
+fi
+if [ "$1 $2 $3" = "simctl list devices" ]; then
+  cat <<'JSON'
+{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-27-2":[{"name":"iPhone 17","udid":"SIM-27-2-GENERAL-UDID","state":"Shutdown"}],"com.apple.CoreSimulator.SimRuntime.iOS-27-2-iPhone19-4":[]}}
+JSON
+  exit 0
+fi
+if [ "$1 $2 $3" = "simctl list devicetypes" ]; then
+  cat <<'JSON'
+{"devicetypes":[{"name":"iPhone 17","identifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}
+JSON
+  exit 0
+fi
+echo "unexpected xcrun $*" >&2
+exit 1
+SH
+chmod +x "$TMP/simbin/xcrun"
+sim_out=$(unset -f xcrun; PATH="$TMP/simbin:$PATH" IOS_SIM_NAME="iPhone 17" bash "$ROOT/tools/ios/sim.sh" udid 2>&1)
+expect_rc $? 0 "sim.sh 跳过不支持目标机型的专属 runtime（xcode-27 iPhone19-4）"
+expect_contains "$sim_out" "SIM-27-2-GENERAL-UDID" "sim.sh 命中支持 iPhone 17 的通用 iOS-27-2 runtime"
+
 if [ "$FAILS" -ne 0 ]; then
   printf '%s 项失败\n' "$FAILS" >&2
   exit 1
