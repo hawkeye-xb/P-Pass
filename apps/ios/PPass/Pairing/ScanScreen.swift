@@ -28,11 +28,7 @@ struct ScanScreen: View {
                 RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(PPColor.paper.opacity(0.7), lineWidth: 2)
                 switch cameraState {
                 case .ready: QRScannerView { code in
-                    if let c = PairCode.normalized(code) {
-                        AppLog.log("scan: code accepted")
-                        Haptics.success()
-                        onCode(c)
-                    }
+                    Self.handleDetectedCode(code, onCode: onCode)
                 }
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 case .checking: ProgressView().tint(PPColor.paperDim)
@@ -46,8 +42,7 @@ struct ScanScreen: View {
             Text(L.s("scan_local_network_note")).font(PPFont.subheadline).multilineTextAlignment(.center).foregroundStyle(PPColor.paperDim)
             Spacer()
             Button(L.s("scan_manual_link")) {
-                AppLog.log("scan: manual entry opened")
-                onManual()
+                Self.openManualEntry(onManual)
             }
                 .font(PPFont.sans(14, .bold, relativeTo: .subheadline)).foregroundStyle(PPColor.paperDim).frame(minHeight: 48)
                 .accessibilityIdentifier("manualLink")
@@ -66,10 +61,22 @@ struct ScanScreen: View {
             case .deniedOnFirstAsk:
                 cameraState = .unavailable
                 // #1964：首次系统弹框里点了拒绝 → 直接去手动输入页（对位 Android），不停在黑框扫码页等用户再点底部链接。
-                AppLog.log("scan: manual entry opened")
-                onManual()
+                Self.openManualEntry(onManual)
             }
         }
+    }
+
+    static func handleDetectedCode(_ code: String, onCode: (String) -> Void) {
+        if let c = PairCode.normalized(code) {
+            AppLog.log("scan: code accepted")
+            Haptics.success()
+            onCode(c)
+        }
+    }
+
+    static func openManualEntry(_ onManual: () -> Void) {
+        AppLog.log("scan: manual entry opened")
+        onManual()
     }
 
     /// 进入扫码页时相机能不能用。首次申请被拒单独分出来：那一次直接跳手动输入；之前拒过则停在说明页（底部仍有「手动输入」）。
