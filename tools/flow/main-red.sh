@@ -56,12 +56,49 @@ case "$CONCLUSION" in
     ;;
 esac
 
-# ── 红：定区间 ───────────────────────────────────────────────────────
+# ── 红：先判是否为首次 runner 排队掉线（0 步未执行），再定区间 ─────────────
 run_json="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}")"
 head_sha="$(jq -r '.head_sha' <<<"$run_json")"
 run_url="$(jq -r '.html_url' <<<"$run_json")"
 created_at="$(jq -r '.created_at' <<<"$run_json")"
 workflow_id="$(jq -r '.workflow_id' <<<"$run_json")"
+run_attempt="$(jq -r '.run_attempt // 1' <<<"$run_json")"
+
+jobs_json="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/jobs?per_page=100")" || jobs_json=""
+
+# GitHub 托管 runner 排队掉线（abandoned）时，job 的 steps 为空或全部停留在 queued/skipped，
+# 下游 `CI * gate` 汇总 job 则只因 `汇总上游结论` 步判红。首次（run_attempt == 1）遇此类纯掉线时
+# 先自动重跑失败 job 一次，避免误拉 P0；第 2 次仍红、混有真实失败步骤、分页未拉全或重跑调用失败时照常开卡。
+is_runner_drop="false"
+if [ "$run_attempt" = "1" ] && [ -n "$jobs_json" ]; then
+  is_runner_drop="$(jq -r '
+    def is_gate: (.name // "") | test("^CI .+ gate$");
+    def no_step_ran:
+      has("steps") and (.steps | type == "array")
+      and all(.steps[]; (.status == "queued") or (.status == "skipped") or (.conclusion == "skipped"));
+    def gate_failed_from_upstream:
+      is_gate and has("steps") and (.steps | type == "array")
+      and ([.steps[] | select((.conclusion // "") != "success" and (.conclusion // "") != "skipped")]
+           | (length > 0) and all(.[]; .name == "汇总上游结论"));
+    (.jobs // []) as $all
+    | [ $all[] | select((.conclusion // "") != "success" and (.conclusion // "") != "skipped") ] as $bad
+    | if ((.total_count // ($all | length)) <= ($all | length))
+         and ($bad | length) > 0
+         and any($bad[]; no_step_ran)
+         and all($bad[]; no_step_ran or gate_failed_from_upstream)
+      then "true"
+      else "false"
+      end
+  ' <<<"$jobs_json" 2>/dev/null)" || is_runner_drop="false"
+fi
+
+if [ "$is_runner_drop" = "true" ]; then
+  if gh run rerun "$RUN_ID" --failed --repo "$REPO"; then
+    echo "main-red: ${WORKFLOW}（run ${RUN_ID}, attempt ${run_attempt}）判定为云端 runner 排队掉线（0 步未执行），已触发 gh run rerun --failed，暂不开 P0 卡"
+    exit 0
+  fi
+  echo "main-red: 触发 gh run rerun ${RUN_ID} --failed 失败，降级照常开/更新 [MAIN-RED] P0 卡" >&2
+fi
 
 # 该 workflow 在 main 上、早于本次 run 的最近一次 success 的提交
 # 查询失败按「读不到上次绿」处理（回退到最近提交），不能因此不开卡
@@ -94,8 +131,14 @@ while IFS= read -r line; do
 done <<<"$commit_lines"
 [ -n "$candidates" ] || candidates="- （区间内没有提交：可能是重跑或 force-push，请直接看 run 日志）"$'\n'
 
-failed_jobs="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/jobs" \
-  --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out") | "- [\(.name)](\(.html_url))"')" || failed_jobs=""
+failed_jobs=""
+if [ -n "$jobs_json" ]; then
+  failed_jobs="$(jq -r '
+    .jobs[]
+    | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled")
+    | "- [\(.name)](\(.html_url))"
+  ' <<<"$jobs_json" 2>/dev/null)" || failed_jobs=""
+fi
 [ -n "$failed_jobs" ] || failed_jobs="- （没读到失败 job，看 run 页面）"
 
 body="main 上 **${WORKFLOW}** 红了（${CONCLUSION}）：${run_url}
