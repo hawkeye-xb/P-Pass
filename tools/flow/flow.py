@@ -177,6 +177,12 @@ def pick_gates(files: list[str], repo_dir: str) -> list[str]:
             add("python3 -B -I tools/test-flow.py")
         elif f.startswith("tools/e3/"):
             add("bash tools/test-e3.sh")
+        elif f.startswith("tools/tests/") and f.endswith(".py"):
+            if os.path.isfile(os.path.join(repo_dir, f)):
+                add(f"python3 -B -I {f}")
+        elif f.startswith("tools/test-") and f.endswith(".sh"):
+            if os.path.isfile(os.path.join(repo_dir, f)):
+                add(f"bash {f}")
         elif f.startswith(".github/workflows/"):
             add("actionlint")
     if code_touched:

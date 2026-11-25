@@ -6,7 +6,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools" / "flow"))
+sys.path.insert(0, str(ROOT / "tools" / "tests"))
 import flow  # noqa: E402
+from test_bump_version_cleanup import BumpVersionWorktreeCleanupTests  # noqa: E402,F401
 
 
 class CleanFlowEngineTests(unittest.TestCase):
@@ -18,6 +20,10 @@ class CleanFlowEngineTests(unittest.TestCase):
         g_crate = flow.pick_gates(["crates/platform/src/lib.rs"], str(ROOT))
         self.assertNotIn("just ci", g_crate)
         self.assertIn("cargo nextest run -p platform", g_crate)
+        g_tool_sh = flow.pick_gates(["tools/test-bump-version.sh"], str(ROOT))
+        self.assertIn("bash tools/test-bump-version.sh", g_tool_sh)
+        g_tool_py = flow.pick_gates(["tools/tests/test_bump_version_cleanup.py"], str(ROOT))
+        self.assertIn("python3 -B -I tools/tests/test_bump_version_cleanup.py", g_tool_py)
         g_doc = flow.pick_gates(["docs/a.md"], str(ROOT))
         self.assertEqual(g_doc, ["just md-check"])
 
