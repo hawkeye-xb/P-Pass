@@ -63,8 +63,8 @@ final class AppModel: ObservableObject {
             } else if oldValue, !pickerRequested {
                 if !pickerCallbackReceived {
                     AppLog.log(phase == .decision ? "onboarding: pick cancelled, staying on decision" : "settings: picker cancelled")
+                    if phase == .decision { decisionBusy = false }
                 }
-                if phase == .decision { decisionBusy = false }
             }
         }
     }
