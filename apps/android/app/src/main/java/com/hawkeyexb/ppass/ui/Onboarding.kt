@@ -25,6 +25,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -75,6 +77,7 @@ fun WelcomeScreen(onScan: () -> Unit, onManual: () -> Unit) {
                         stringResource(R.string.welcome_headline),
                         fontSize = 36.sp, lineHeight = 44.sp,
                         fontFamily = PPFont.Serif, color = PPColor.Ink,
+                        modifier = Modifier.semantics { heading() },
                     )
                     Spacer(Modifier.height(12.dp))
                     Text(
@@ -147,6 +150,7 @@ fun PairStatusScreen(
                 Text(
                     title, fontSize = 30.sp, fontFamily = PPFont.Serif,
                     color = PPColor.Ink, textAlign = TextAlign.Center,
+                    modifier = Modifier.semantics { heading() },
                 )
                 if (!body.isNullOrEmpty()) {
                     Spacer(Modifier.height(14.dp))

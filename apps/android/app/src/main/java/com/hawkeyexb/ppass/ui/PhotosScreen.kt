@@ -63,6 +63,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -291,6 +295,10 @@ internal fun PhotosScreen(
                     Text(
                         stringResource(R.string.photos_lost_title),
                         fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
+                        modifier = Modifier.semantics {
+                            heading()
+                            liveRegion = LiveRegionMode.Polite
+                        },
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
@@ -692,7 +700,7 @@ private fun PhotoViewer(
         notice?.let {
             Text(
                 it, fontSize = 13.sp, color = PPColor.PaperDim,
-                modifier = Modifier.padding(4.dp, 8.dp),
+                modifier = Modifier.padding(4.dp, 8.dp).semantics { liveRegion = LiveRegionMode.Polite },
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
         }

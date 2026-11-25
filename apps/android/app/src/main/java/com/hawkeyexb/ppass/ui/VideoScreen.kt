@@ -46,6 +46,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -184,6 +187,7 @@ fun VideoScreen(
                     is VideoPhase.Fetching -> Text(
                         stringResource(R.string.video_loading, s.percent),
                         color = PPColor.PaperDim, fontSize = 16.sp,
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                     )
                     // MOB-47: 播放器层换 Media3 ExoPlayer/PlayerView——
                     // PlayerView 自带播放/暂停/进度条/seek/错误态，播放器在
@@ -207,7 +211,7 @@ fun VideoScreen(
                 notice?.let {
                     Text(
                         it, fontSize = 13.sp, color = PPColor.PaperDim,
-                        modifier = Modifier.padding(4.dp, 8.dp),
+                        modifier = Modifier.padding(4.dp, 8.dp).semantics { liveRegion = LiveRegionMode.Polite },
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     )
                 }
@@ -259,7 +263,8 @@ private fun VideoCover(cover: Bitmap?, sizeLabel: String, notice: String?, onPla
                         .padding(top = 12.dp, start = 24.dp, end = 24.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(PPColor.SurfaceDark.copy(alpha = 0.8f))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .semantics { liveRegion = LiveRegionMode.Polite },
                 )
             }
         }

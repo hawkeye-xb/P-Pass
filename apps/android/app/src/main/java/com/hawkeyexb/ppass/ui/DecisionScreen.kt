@@ -11,6 +11,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hawkeyexb.ppass.R
@@ -39,6 +41,7 @@ fun DecisionScreen(
                     stringResource(R.string.decision_title),
                     fontSize = 32.sp, lineHeight = 40.sp,
                     fontFamily = PPFont.Serif, color = PPColor.Ink,
+                    modifier = Modifier.semantics { heading() },
                 )
                 // 产品负责人 11-04：标题下一行说清选完之后会发生什么（照片传到哪台电脑）。
                 Text(

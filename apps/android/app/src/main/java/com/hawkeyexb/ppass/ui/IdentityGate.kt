@@ -22,6 +22,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -77,6 +79,7 @@ private fun IdentityUnavailableScreen(resetFailed: Boolean, onRetry: () -> Unit,
                 Text(
                     stringResource(R.string.identity_unavailable_title),
                     fontSize = 30.sp, lineHeight = 38.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
+                    modifier = Modifier.semantics { heading() },
                 )
                 Spacer(Modifier.height(14.dp))
                 Text(
