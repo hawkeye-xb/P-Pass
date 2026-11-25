@@ -381,6 +381,16 @@ pub(crate) mod tests {
         (wrapped, rx)
     }
 
+    pub(crate) async fn wait_event(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<ObservedThumbEvent>,
+        what: &str,
+    ) -> Result<ObservedThumbEvent, String> {
+        tokio::time::timeout(Duration::from_secs(60), rx.recv())
+            .await
+            .map_err(|_| format!("{what}: timed out waiting for thumb generation event"))?
+            .ok_or_else(|| format!("{what}: thumb generation channel closed"))
+    }
+
     pub(crate) async fn wait_generated(
         rx: &mut tokio::sync::mpsc::UnboundedReceiver<ObservedThumbEvent>,
         count: usize,
@@ -388,17 +398,7 @@ pub(crate) mod tests {
     ) -> Result<Vec<ObservedThumbEvent>, String> {
         let mut events = Vec::with_capacity(count);
         for i in 0..count {
-            let ev = tokio::time::timeout(Duration::from_secs(60), rx.recv())
-                .await
-                .map_err(|_| {
-                    format!(
-                        "{what}: timed out waiting for thumb generation event {}/{count}",
-                        i + 1
-                    )
-                })?
-                .ok_or_else(|| {
-                    format!("{what}: thumb generation channel closed after {i}/{count} events")
-                })?;
+            let ev = wait_event(rx, &format!("{what} ({}/{count})", i + 1)).await?;
             if !matches!(ev.outcome, media_codec::ThumbOutcome::Generated) {
                 return Err(format!(
                     "{what}: thumb generation failed immediately (hash={}, thread={}, outcome={:?})",
@@ -435,7 +435,13 @@ pub(crate) mod tests {
     /// both sizes with the real codec, on the low-priority pool's threads.
     #[tokio::test(flavor = "multi_thread")]
     async fn backfill_generates_every_state_0_row_on_pool_threads() {
-        let (generator, mut rx) = observed_thumb_gen(Arc::new(media_codec::make_thumbs));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = Arc::clone(&calls);
+        let counting_gen: ThumbGen = Arc::new(move |hash: &[u8; 32], src: &Path, root: &Path| {
+            c.fetch_add(1, Ordering::SeqCst);
+            media_codec::make_thumbs(hash, src, root)
+        });
+        let (generator, mut rx) = observed_thumb_gen(counting_gen);
         let rows: Vec<_> = (1..=3u8)
             .map(|i| (h(i), format!("originals/p{i}.jpg"), 0))
             .collect();
@@ -458,7 +464,16 @@ pub(crate) mod tests {
                 assert!(img.width().max(img.height()) <= edge);
             }
         }
-        assert_eq!(events.len(), 3, "one generation per row");
+        let mut seen: Vec<[u8; 32]> = events.iter().map(|e| e.hash).collect();
+        seen.sort();
+        let mut expected: Vec<[u8; 32]> = rows.iter().map(|(hash, _, _)| *hash).collect();
+        expected.sort();
+        assert_eq!(seen, expected, "every row must be generated once");
+        assert_eq!(calls.load(Ordering::SeqCst), 3, "one generation per row");
+        assert!(
+            rx.try_recv().is_err(),
+            "no duplicate generation after all rows finished"
+        );
         assert!(
             events.iter().all(|e| e.thread_name.starts_with("thumb-")),
             "pre-generation must run on the low-priority pool, ran on {:?}",
@@ -467,7 +482,7 @@ pub(crate) mod tests {
     }
 
     /// #1358 / #1506 反证：解码子进程缺失（`Unavailable`）时必须立刻带原因返回 Err，
-    /// 不再傻等 10 秒墙钟超时后报无头绪的 `thumb_state never reached 1`。
+    /// 不再走超时路径后报无头绪的 `thumb_state never reached 1`。
     #[tokio::test(flavor = "multi_thread")]
     async fn wait_generated_fails_fast_with_reason_on_unavailable() {
         let inner: ThumbGen =
@@ -488,7 +503,6 @@ pub(crate) mod tests {
         )
         .await;
         let pregen = f.engine.start_thumb_pregen(PREGEN_WORKERS);
-        let started = Instant::now();
         pregen.ingested("originals/missing-decoder.jpg");
 
         let err = wait_generated(&mut rx, 1, "unavailable-check")
@@ -496,9 +510,8 @@ pub(crate) mod tests {
             .err()
             .expect("Unavailable 必须立即判错");
         assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "不得傻等 10s 墙钟超时，耗时 {:?}",
-            started.elapsed()
+            !err.contains("timed out"),
+            "必须走事件快速失败分支而非超时: {err}"
         );
         assert!(err.contains("Unavailable"), "错误应暴露真实原因: {err}");
         assert!(
@@ -631,9 +644,10 @@ pub(crate) mod tests {
     /// by that one (`retry_failed = true`).
     #[tokio::test(flavor = "multi_thread")]
     async fn startup_backfill_retries_legacy_placeholder_rows() {
+        let (generator, mut rx) = observed_thumb_gen(Arc::new(media_codec::make_thumbs));
         let a = h(0x2a);
         let f = fixture(
-            None,
+            Some(generator),
             Duration::from_secs(600),
             &[(a, "originals/l.jpg".into(), 2)],
         )
@@ -652,8 +666,15 @@ pub(crate) mod tests {
         pregen.backfill(false);
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(state(&f, &a).await, 2, "retry_failed=false must not retry");
+        assert!(
+            rx.try_recv().is_err(),
+            "retry_failed=false must not invoke generator"
+        );
         // … the startup one retries them.
         pregen.backfill(true);
+        wait_generated(&mut rx, 1, "legacy retry")
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
         wait_state(&f, &a, 1, "legacy retry").await;
         let bytes = f.engine.thumb(&get(&a)).await.unwrap();
         assert_ne!(
@@ -668,9 +689,10 @@ pub(crate) mod tests {
     /// `thumb.get` retries instead of hitting disk forever.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_failed_legacy_retry_clears_the_stale_placeholder() {
+        let (generator, mut rx) = observed_thumb_gen(Arc::new(media_codec::make_thumbs));
         let a = h(0x2b);
         let f = fixture(
-            None,
+            Some(generator),
             Duration::from_secs(600),
             &[(a, "originals/bad.jpg".into(), 2)],
         )
@@ -685,6 +707,14 @@ pub(crate) mod tests {
 
         let pregen = f.engine.start_thumb_pregen(PREGEN_WORKERS);
         pregen.backfill(true);
+        let ev = wait_event(&mut rx, "failed legacy retry")
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            matches!(ev.outcome, media_codec::ThumbOutcome::Placeholder { .. }),
+            "corrupt JPEG retry must produce Placeholder (not Unavailable): {:?}",
+            ev.outcome
+        );
         let deadline = Instant::now() + Duration::from_secs(10);
         while paths.t256.exists() || paths.t1024.exists() {
             assert!(
