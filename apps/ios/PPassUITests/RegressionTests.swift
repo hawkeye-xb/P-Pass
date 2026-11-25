@@ -88,9 +88,8 @@ final class RegressionTests: UIRegressCase {
     private func pickOnePhotoInLimitedSheet() {
         let deadline = Date().addingTimeInterval(20)
         while Date() < deadline {
-            // 从第 1 个格子取起：真机（iOS 27 实测）第 0 个 PXGGridLayout 不是可选照片，点它选不上（n=0 必红）；
-            // 模拟器图库只有一张测试照片，第 1 个不存在，回退 0 或首个。
-            if let cell = pickerCell(at: 1) ?? pickerCell(at: 0) ?? firstPickerCell() {
+            // #1941：优先选静态图片格子（跳过视频与非可选占位项）；未命中前缀时再回退到既有索引策略。
+            if let cell = firstStaticPhotoPickerCell() ?? pickerCell(at: 1) ?? pickerCell(at: 0) ?? firstPickerCell() {
                 tapPickerCell(cell)
                 UIReg.say("LIMITED_SELECTED 1")
                 tapButton(SystemButton.limitedDone, what: "limited-done")

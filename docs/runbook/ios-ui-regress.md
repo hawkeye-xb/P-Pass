@@ -19,7 +19,8 @@ just ios-ui-regress device --invert SettingsRuleFull   # 反证
 | DecisionPick | 决定页「从相册选择」→ 系统选择器选 1 张 | `onboarding: decision shown` → `picked: 1 chosen` → `onboarding: marked onboarded via=pick` |
 | SettingsRuleFull | 决定页「开启自动备份」→ 范围页「允许访问照片」允许 →「开始备份」存一个范围（准备）→ 设置页「自动备份」关一次再开 | `onboarding: marked onboarded via=scope` → `auto-rule: saved enabled=false` → `auto-rule: saved enabled=true` |
 | SettingsRuleLimited | 决定页「开启自动备份」→ 范围页「允许访问照片」→ 权限「限制访问」选 1 张 →「开始备份」存范围（规则已开）→ 设置页「自动备份」关一次再开 → 随 App 去系统设置再回来（不改权限） | `scope: photo access after prompt=partial` → `auto-rule: partial photo access, opening system settings for full access` → `auto-rule: partial photo access, sent allowed photos n=[1-9], rule stays off` |
-| SettingsPick | 设置页「挑几张传」→ 系统选择器选 1 张 | `… via=pick` → `picked: 1 chosen` |
+| SettingsPick | 设置页「挑几张传」→ 系统选择器选 1 张 | `… via=pick` → `picked: 1 chosen` → `picked: 1 registered` |
+| SettingsPickVideo | 设置页「挑几张传」→ 系统选择器选 1 段视频 | `… via=pick` → `picked: 1 chosen` → `picked: 1 registered` |
 | NotifyAllow | 设置页「通知」→ 系统授权「允许」 | `… via=pick` → `notifications: system prompt result granted=true` |
 | NotifyDeny | 设置页「通知」→ 系统授权「不允许」 | `… via=pick` → `notifications: system prompt result granted=false` |
 
