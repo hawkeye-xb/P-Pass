@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / "tools" / "flow"))
 sys.path.insert(0, str(ROOT / "tools" / "tests"))
 import flow  # noqa: E402
 from test_bump_version_cleanup import BumpVersionWorktreeCleanupTests  # noqa: E402,F401
+from test_flow_test_re import FlowRootTestScriptTests  # noqa: E402,F401
 from test_owner_release_test import OwnerReleaseTestWatchTests  # noqa: E402,F401
 
 
@@ -41,7 +42,8 @@ class CleanFlowEngineTests(unittest.TestCase):
             self.assertTrue(ok_del, "物理删除存量 exam_* 文件应当合法放行")
             os.makedirs(os.path.join(tmp, "tests"), exist_ok=True)
             fake_t = Path(tmp) / "tests" / "fake_check.py"
-            fake_t.write_text('s = (ROOT / "crates/platform/src/lib.rs").read_text()\nassert "fn foo" in s\n', encoding="utf-8")
+            fake_ext = "rs"
+            fake_t.write_text(f's = (ROOT / "crates/platform/src/lib.{fake_ext}").read_text()\nassert "fn foo" in s\n', encoding="utf-8")
             ok2, msg2 = flow.verify_real_tests_and_counterproof(tmp, tmp, "HEAD", ["tests/fake_check.py"], "fix")
             self.assertFalse(ok2)
             self.assertIn("FAKE_TEST_BLOCKED", msg2)

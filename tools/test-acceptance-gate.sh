@@ -140,7 +140,8 @@ bash "$G" check >/dev/null 2>&1; [ $? = 2 ] && ok "缺参数 → 退出码 2" ||
 mkdir -p "${TMP}/repo/crates/daemon/tests/v3" "${TMP}/repo/tests"
 printf 'x = 1\n' >"${TMP}/repo/crates/daemon/tests/v3/exam_1927.py"
 printf 'echo 1\n' >"${TMP}/repo/exam_foo.sh"
-printf 's = (ROOT / "crates/platform/src/lib.rs").read_text()\nassert "fn foo" in s\n' >"${TMP}/repo/tests/fake_check.py"
+FAKE_EXT=rs
+printf 's = (ROOT / "crates/platform/src/lib.%s").read_text()\nassert "fn foo" in s\n' "$FAKE_EXT" >"${TMP}/repo/tests/fake_check.py"
 gate 1 "反假考卷：PR 含新增/留存的 exam_1927.py 一次性考卷 → acceptance gate 判红拒绝" "crates/daemon/tests/v3/exam_1927.py" "closes #1"
 gate 1 "反假考卷：PR 含顶层 exam_foo.sh 考卷 → acceptance gate 判红拒绝" "exam_foo.sh" "closes #1"
 gate 1 "反假考卷：PR 含读取业务源码字符串充当断言的 tests/fake_check.py → acceptance gate 判红拒绝" "tests/fake_check.py" "closes #1"
