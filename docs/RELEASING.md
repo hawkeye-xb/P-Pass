@@ -113,8 +113,21 @@
    > paths (see §3.6). If artifact-shaping build
    > scripts changed for a reused platform, `plan-builds` warns: the change ships
    > only with that platform's next version bump.
-5. **Human publish**: review the draft, then publish it from the
-   GitHub web UI (Releases → the draft → Publish release). Two checks:
+5. **Human publish**: review the existing draft created by the workflow, then
+   publish **that draft** from the GitHub web UI (Releases → the draft →
+   Publish release).
+   > **Immutable releases safeguard (`#1662`)**: this repository enables GitHub
+   > **immutable releases**. **Only publish the existing draft** — never click
+   > "Draft a new release" or open `/releases/edit/<tag>` to create a second
+   > release with the same tag. Publishing a newly created empty release
+   > permanently locks the tag name so assets can never be added and the tag
+   > must be abandoned (2026-11-11 incident: `v2026.11.2` was burned and
+   > re-released as `v2026.11.3`). Before publishing, verify with
+   > `gh release view <tag> --json assets,isDraft,author` that `isDraft` is
+   > `true`, `author` is `github-actions[bot]`, and all expected platform assets
+   > are attached; right after publishing, verify
+   > `releases/latest/download/manifest-*.json` does not return 404.
+   Two checks:
    - **the body must open with this version's user-visible changelog**;
      signing status / SHA-256 / asset list belong in later sections (§3.5).
      Since `#773` the workflow does this itself: on a formal tag the draft
@@ -455,8 +468,16 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
    > 补跑的就是 Latest 本身）一律构建；各端都复用且 iOS 不构建 ⇒ `plan-builds` 报错、不建草稿；
    > test tag 从不复用，按改动路径逐端判定是否构建（见 §3.6）。被复用的一端若改过会影响产物的构建脚本，`plan-builds` 告警：
    > 这些改动要等该端下次涨号才进安装包。
-5. **人工 publish**：核对 draft，然后在 GitHub 网页上发布（Releases → 该 draft →
-   Publish release）。两项核对：
+5. **人工 publish**：核对流水线生成的已有 draft，然后在 GitHub 网页上发布**那条草稿**
+   （Releases → 该 draft → Publish release）。
+   > **immutable releases 防呆（#1662）**：本仓库已启用 GitHub **immutable releases**。
+   > **只能发布已有的草稿**，绝不能点「Draft a new release」或用 `/releases/edit/<tag>`
+   > 新建同名 release——新建并发布后 tag 会被永久锁死、资产无法补传，该版本号只能作废
+   > （2026-11-11 事故：`v2026.11.2` 因此作废，改号 `v2026.11.3` 重发）。发布前先跑
+   > `gh release view <tag> --json assets,isDraft,author`，确认 `isDraft` 为 `true`、
+   > `author` 为 `github-actions[bot]` 且平台资产齐全；发布后立刻核对
+   > `releases/latest/download/manifest-*.json` 不返回 404。
+   两项核对：
    - **正文必须以本版本的用户可见 changelog 开头**；签名状态 / SHA-256 / 资产清单
      放后面的段落。#773 起由流水线自动完成：正式 tag 的草稿正文以
      `## 本版更新（<批次号>）` + CHANGELOG `[<批次号>]` 小节全文开头

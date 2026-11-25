@@ -21,13 +21,19 @@
 
 `AGENTS.md`「交付流程」要求开 PR 的会话把它推进到合入。在 Claude Desktop 里由 app 的 PR 监控唤醒会话：
 
-- `just done` 末尾单独一行打印 `gh pr create …`。用 Bash 工具**直接**运行这一整行（不包进脚本、
-  不放后台），app 才把这个 PR 记为本会话所开；`just done` 自己不开 PR。
+- **确保在卡 worktree 内单独开 PR**：若子会话经 `start_session(use_worktree: true)` 启动、已在专属 worktree 中，直接在当前目录切出卡分支即可；若从主仓跑 `just start <号>` 建了 `.worktrees/<号>-<slug>`，先用 `EnterWorktree(path=<卡目录>)` 把会话切进该 worktree。随后照 `just done` 末尾单独一行打印的 `gh pr create …` 用 Bash 工具**直接**单独运行（不包进脚本、不放后台、不拼 `cd <卡目录> && gh pr create`），app 才把这个 PR 记为本会话所开；`just done` 自己不开 PR。
 - 运行后立刻调 `set_monitor`，`auto_fix`、`address_comments`、`auto_archive_on_close` 三项全开（先 `get_status`，
   没报出这个 PR 就 `bind_pr`）。app 没有全局默认开关，每个 PR 都要开。
-- 只有本会话直接运行 `gh pr create` 开的 PR 能由会话打开 `auto_fix`；事后按分支绑上的开不了，
+- 只有本会话在对应 worktree 里直接运行 `gh pr create` 开的 PR 能由会话打开 `auto_fix`；事后按分支绑上的开不了，
   把报错原文报给 owner，不换花样重试。
 - 打开后不轮询 CI（不用 `/loop`、定时任务或反复 `gh pr checks`），等 CI 红、新评审意见、冲突把会话唤醒再处理。
+
+## 权限申请由 owner 汇总（产品负责人 2026-11-16 定）
+
+- 子会话、sub-agent、A2A 不得各自直接向产品负责人发起权限申请或连续弹窗。
+- 确需新权限时，先向 owner 主会话报告所需命令/权限、原因以及不给时的替代方案，由 owner 合并后统一询问产品负责人；
+  得到同意后再由对应执行者发起。
+- 被用户或外壳拒绝的权限，不得由 owner 或其他会话绕过代执行。
 
 ## 已放行命令的写法（Claude Desktop，产品负责人 2026-11-05 定）
 
