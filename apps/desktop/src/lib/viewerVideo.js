@@ -87,3 +87,30 @@ export async function handleVideoError({ token, isActive, loadThumb }) {
   if (!isActive()) return "ignored";
   return { kind: "applied", result: r };
 }
+
+/**
+ * `<video>` onloadedmetadata 的无画面检测（#2047）：当系统 WebView 只认出
+ * `.mov` / `.mp4` 容器或音轨、却没有对应视频解码器（如裸机无系统 HEVC 扩展）时，
+ * `<video>` 不触发 `onerror`，而是进入 `videoWidth === 0 || videoHeight === 0`
+ * 的纯黑框状态。此时立即复用同一套代际守卫回退展示 1024px 高清缩略图。
+ *
+ * @param {{
+ *   token: {gen: number, hash: string},
+ *   videoWidth: number,
+ *   videoHeight: number,
+ *   isActive: () => boolean,
+ *   loadThumb: (hash: string) => Promise<
+ *     {kind: "thumb", src: string} | {kind: "failed"} | {kind: "cancelled"}
+ *   >,
+ * }} deps
+ */
+export async function handleVideoLoadedMetadata({
+  token,
+  videoWidth,
+  videoHeight,
+  isActive,
+  loadThumb,
+}) {
+  if (videoWidth > 0 && videoHeight > 0) return "ignored";
+  return handleVideoError({ token, isActive, loadThumb });
+}

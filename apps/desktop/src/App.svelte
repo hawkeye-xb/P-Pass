@@ -86,7 +86,12 @@
   import { auditText, auditWho } from "./auditProjection.js";
   // MOB-47: 视频查看器加载编排（asset 协议 hash 授权 + thumb.get 兜底 +
   // isCancelled 竞态闸）——纯函数可单测，App.svelte 只做接线的薄壳。
-  import { loadVideoViewer, loadVideoThumbnail, handleVideoError } from "./lib/viewerVideo.js";
+  import {
+    loadVideoViewer,
+    loadVideoThumbnail,
+    handleVideoError,
+    handleVideoLoadedMetadata,
+  } from "./lib/viewerVideo.js";
   import { loadImageViewer, handleImageError } from "./lib/viewerImage.js";
   // T-072: 状态/错误文案的唯一来源是 diag 字典（crates/diag 注册表 +
   // assets/i18n/*.json，Rust 测试保证双语文案齐全）。
@@ -1559,19 +1564,7 @@
     }
   }
 
-  async function onVideoError(event) {
-    const el = event?.currentTarget;
-    const rawGen = el?.dataset?.videoGen;
-    const gen = rawGen != null ? Number(rawGen) : NaN;
-    const hash = el?.dataset?.videoHash;
-    if (!Number.isInteger(gen) || !hash) return;
-    const token = { gen, hash };
-    const isActive = () => viewerVideoToken?.gen === gen && viewerVideoToken?.hash === hash;
-    const out = await handleVideoError({
-      token,
-      isActive,
-      loadThumb: (h) => loadVideoThumbnail({ call, isCancelled: () => false }, { hash: h }),
-    });
+  function applyVideoFallbackOutcome(out) {
     if (out === "ignored" || out.kind !== "applied") return;
     const r = out.result;
     if (r.kind === "thumb") {
@@ -1581,6 +1574,43 @@
     } else {
       viewerFailed = true;
     }
+  }
+
+  function readVideoToken(el) {
+    const rawGen = el?.dataset?.videoGen;
+    const gen = rawGen != null ? Number(rawGen) : NaN;
+    const hash = el?.dataset?.videoHash;
+    if (!Number.isInteger(gen) || !hash) return null;
+    return { gen, hash };
+  }
+
+  async function onVideoError(event) {
+    const token = readVideoToken(event?.currentTarget);
+    if (!token) return;
+    const isActive = () =>
+      viewerVideoToken?.gen === token.gen && viewerVideoToken?.hash === token.hash;
+    const out = await handleVideoError({
+      token,
+      isActive,
+      loadThumb: (h) => loadVideoThumbnail({ call, isCancelled: () => false }, { hash: h }),
+    });
+    applyVideoFallbackOutcome(out);
+  }
+
+  async function onVideoLoadedMetadata(event) {
+    const el = event?.currentTarget;
+    const token = readVideoToken(el);
+    if (!token) return;
+    const isActive = () =>
+      viewerVideoToken?.gen === token.gen && viewerVideoToken?.hash === token.hash;
+    const out = await handleVideoLoadedMetadata({
+      token,
+      videoWidth: Number(el?.videoWidth) || 0,
+      videoHeight: Number(el?.videoHeight) || 0,
+      isActive,
+      loadThumb: (h) => loadVideoThumbnail({ call, isCancelled: () => false }, { hash: h }),
+    });
+    applyVideoFallbackOutcome(out);
   }
 </script>
 
@@ -2525,6 +2555,7 @@
                   muted
                   data-video-gen={viewerVideoToken.gen}
                   data-video-hash={viewerVideoToken.hash}
+                  onloadedmetadata={onVideoLoadedMetadata}
                   onerror={onVideoError}></video>
               {/key}
             {:else if viewerSrc}

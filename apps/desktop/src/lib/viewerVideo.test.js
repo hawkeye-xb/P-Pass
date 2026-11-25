@@ -1,6 +1,7 @@
 // MOB-47 视频查看器加载编排的回归锁（L2 审查三契约）。
 import { describe, expect, it } from "vitest";
-import { loadVideoViewer, loadVideoThumbnail, handleVideoError } from "./viewerVideo.js";
+import * as viewerVideo from "./viewerVideo.js";
+const { loadVideoViewer, loadVideoThumbnail, handleVideoError } = viewerVideo;
 
 /** 立即成功/失败的假 invoke/convertFileSrc/call。 */
 const okInvoke = async () => "/canon/clip.mp4";
@@ -186,6 +187,77 @@ describe("onerror 代际守卫（handleVideoError）", () => {
   });
 });
 
+describe("onloadedmetadata 无视频轨黑框降级（#2047 handleVideoLoadedMetadata）", () => {
+  it("videoWidth === 0（仅识别容器/音频，解不出视频画面）→ 走代际守卫回退加载 1024px 缩略图", async () => {
+    expect(typeof viewerVideo.handleVideoLoadedMetadata).toBe("function");
+    const active = { gen: 1, hash: "hevcMov" };
+    const requested = [];
+    const out = await viewerVideo.handleVideoLoadedMetadata({
+      token: { gen: 1, hash: "hevcMov" },
+      videoWidth: 0,
+      videoHeight: 0,
+      isActive: () => active.gen === 1 && active.hash === "hevcMov",
+      loadThumb: async (hash) => {
+        requested.push(hash);
+        return { kind: "thumb", src: `thumb-1024-${hash}` };
+      },
+    });
+    expect(requested).toEqual(["hevcMov"]);
+    expect(out).toEqual({
+      kind: "applied",
+      result: { kind: "thumb", src: "thumb-1024-hevcMov" },
+    });
+  });
+
+  it("videoHeight === 0 或非正数尺寸 → 同样回退加载缩略图", async () => {
+    expect(typeof viewerVideo.handleVideoLoadedMetadata).toBe("function");
+    const active = { gen: 3, hash: "clip0" };
+    const out = await viewerVideo.handleVideoLoadedMetadata({
+      token: { gen: 3, hash: "clip0" },
+      videoWidth: 1920,
+      videoHeight: 0,
+      isActive: () => active.gen === 3 && active.hash === "clip0",
+      loadThumb: async (hash) => ({ kind: "thumb", src: `thumb-${hash}` }),
+    });
+    expect(out).toEqual({ kind: "applied", result: { kind: "thumb", src: "thumb-clip0" } });
+  });
+
+  it("videoWidth > 0 && videoHeight > 0（正常可解码视频画面）→ ignored，不请求缩略图", async () => {
+    expect(typeof viewerVideo.handleVideoLoadedMetadata).toBe("function");
+    const requested = [];
+    const out = await viewerVideo.handleVideoLoadedMetadata({
+      token: { gen: 1, hash: "h264Mp4" },
+      videoWidth: 1920,
+      videoHeight: 1080,
+      isActive: () => true,
+      loadThumb: async (hash) => {
+        requested.push(hash);
+        return { kind: "thumb", src: "unexpected" };
+      },
+    });
+    expect(out).toBe("ignored");
+    expect(requested).toEqual([]);
+  });
+
+  it("旧代元素的 loadedmetadata（videoWidth === 0）迟到到达 → ignored，绝不污染当前活跃代", async () => {
+    expect(typeof viewerVideo.handleVideoLoadedMetadata).toBe("function");
+    const active = { gen: 2, hash: "newClip" };
+    const requested = [];
+    const out = await viewerVideo.handleVideoLoadedMetadata({
+      token: { gen: 1, hash: "oldMov" },
+      videoWidth: 0,
+      videoHeight: 0,
+      isActive: () => active.gen === 1 && active.hash === "oldMov",
+      loadThumb: async (hash) => {
+        requested.push(hash);
+        return { kind: "thumb", src: `thumb-${hash}` };
+      },
+    });
+    expect(out).toBe("ignored");
+    expect(requested).toEqual([]);
+  });
+});
+
 // ── 接线（源码级，App.svelte）──
 import { readFileSync } from "node:fs";
 
@@ -245,5 +317,10 @@ describe("App.svelte 视频分支的接线", () => {
     expect(src).toContain("data-video-gen={viewerVideoToken.gen}");
     expect(src).toContain("data-video-hash={viewerVideoToken.hash}");
     expect(src).toContain("{#key viewerVideoToken.gen}");
+  });
+
+  it("<video> 挂载 onloadedmetadata 检测无视频轨黑框并走 handleVideoLoadedMetadata 降级", () => {
+    expect(src).toContain("handleVideoLoadedMetadata(");
+    expect(src).toContain("onloadedmetadata={onVideoLoadedMetadata}");
   });
 });
