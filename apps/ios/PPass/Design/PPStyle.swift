@@ -61,9 +61,17 @@ enum PPFont {
     static var statusLine: Font { sans(PPUI.TextSize.statusLine, relativeTo: .footnote) }
     static func brand(_ size: CGFloat, relativeTo style: Font.TextStyle = .largeTitle) -> Font { serif(size, relativeTo: style) }
 
-    /// 纯图标字号：SF Symbols 只取字体的点值与粗细，不取品牌字形。用于封面占位、勾选角标、
-    /// 播放标记这类固定容器里的装饰图标，按容器固定、不随 Dynamic Type 放大。
-    static func icon(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+    /// 纯图标字号 token：SF Symbols 只取字体的点值与粗细，不取品牌字形。用于封面占位、勾选角标、
+    /// 播放标记这类固定容器里的装饰图标，按容器固定、不随 Dynamic Type 放大；业务视图只许引用具名 token，
+    /// 禁止传裸点值（由 M.4 门禁拦截）。
+    static let iconPlay: Font = icon(10, .bold)
+    static let iconCheckSmall: Font = icon(11, .bold)
+    static let iconBadge: Font = icon(13, .semibold)
+    static let iconAction: Font = icon(15, .semibold)
+    static let iconPlaceholderPlus: Font = icon(36, .medium)
+    static let iconPlaceholderFolder: Font = icon(40)
+
+    private static func icon(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
         .system(size: size, weight: weight)
     }
 }

@@ -623,9 +623,12 @@ expect_red "M.4 iOS 跨行 .system(size:)" "$(sample "$M4_IOS_FILE" '.font(.syst
     size: 40,
     weight: .regular,
 ))')" "M.4 VIOLATION"
+expect_red "M.4 iOS PPFont.icon 裸点值绕过（#2018）" "$(sample "$M4_IOS_FILE" '.font(PPFont.icon(14, .bold))')" "M.4 VIOLATION"
+expect_red "M.4 Android MainActivity 裸字号（#2018）" "$(sample apps/android/app/src/main/java/com/example/MainActivity.kt 'Text("x", fontSize = 14.sp)')" "M.4 VIOLATION"
 
 echo "== M.4 反样例（token 用法与 token 定义处必须不报）"
 expect_green "M.4 Android 走 MaterialTheme.typography" "$(sample "$M4_ANDROID_FILE" 'Text("x", style = MaterialTheme.typography.bodyMedium)')"
+expect_green "M.4 iOS 走 PPFont 具名图标 token（#2018）" "$(sample "$M4_IOS_FILE" '.font(PPFont.iconBadge)')"
 expect_green "M.4 Android ui/theme 定义 token" "$(sample apps/android/app/src/main/java/com/example/ui/theme/PPTypography.kt 'val body = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp)')"
 expect_green "M.4 Android Theme.kt 豁免" "$(sample apps/android/app/src/main/java/com/example/ui/Theme.kt 'val x = fontSize = 14.sp')"
 expect_green "M.4 Android Tokens.kt 豁免" "$(sample apps/android/app/src/main/java/com/example/ui/Tokens.kt 'val x = fontSize = 14.sp')"
@@ -676,6 +679,11 @@ expect_red "M.5 Android Icons.Filled.ChevronLeft 无 TopAppBar" \
   "$(sample "$M4_ANDROID_FILE" '@Composable fun Header(){ Row { Icon(Icons.Filled.ChevronLeft, null) } }')" "M.5 VIOLATION"
 expect_red "M.5 Android Icons.Filled.KeyboardArrowLeft 无 TopAppBar" \
   "$(sample "$M4_ANDROID_FILE" '@Composable fun Header(){ Row { Icon(Icons.Filled.KeyboardArrowLeft, null) } }')" "M.5 VIOLATION"
+expect_red "M.5 Android 多页文件：A 页有 TopAppBar 但 B 页手搓 ArrowBack 仍须报红（#2018）" \
+  "$(sample "$M4_ANDROID_FILE" '@Composable fun PageA() { TopAppBar(title = {}, navigationIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) }) }
+@Composable fun PageB() { Row { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } }')" "M.5 VIOLATION"
+expect_red "M.5 Android MainActivity 手搓 ArrowBack（#2018）" \
+  "$(sample apps/android/app/src/main/java/com/example/MainActivity.kt '@Composable fun Header(){ Row { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } }')" "M.5 VIOLATION"
 M5_IOS_HAND='import SwiftUI
 struct Detail: View {
     var body: some View {
@@ -704,6 +712,9 @@ M5_ANDROID_NATIVE='import androidx.compose.material3.TopAppBar
 expect_green "M.5 Android TopAppBar + ArrowBack" "$(sample "$M4_ANDROID_FILE" "$M5_ANDROID_NATIVE")"
 expect_green "M.5 Android CenterAlignedTopAppBar + ArrowBack" \
   "$(sample "$M4_ANDROID_FILE" '@Composable fun Header(){ CenterAlignedTopAppBar(title = {}, navigationIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) }) }')"
+expect_green "M.5 Android 多页文件两页均用 TopAppBar 通过（#2018）" \
+  "$(sample "$M4_ANDROID_FILE" '@Composable fun PageA(){ TopAppBar(title = {}, navigationIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) }) }
+@Composable fun PageB(){ CenterAlignedTopAppBar(title = {}, navigationIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) }) }')"
 expect_green "M.5 Android 没有返回图标" "$(sample "$M4_ANDROID_FILE" '@Composable fun Header() { Text("hi") }')"
 expect_green "M.5 Android 全屏预览 PhotosScreen.kt 豁免" "$(sample apps/android/app/src/main/java/com/example/ui/PhotosScreen.kt "$M5_ANDROID_HAND")"
 expect_green "M.5 Android 全屏预览 VideoScreen.kt 豁免" "$(sample apps/android/app/src/main/java/com/example/ui/VideoScreen.kt "$M5_ANDROID_HAND")"

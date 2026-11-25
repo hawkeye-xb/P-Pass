@@ -188,7 +188,7 @@ struct BucketScreen: View {
     /// 封面左下角的来源类型角标（相册 / 文件夹），读屏读出类型词（对齐 Android SourceCard 的 kind 图标）。
     private func kindBadge(symbol: String, label: String) -> some View {
         Image(systemName: symbol)
-            .font(PPFont.icon(13, .semibold))
+            .font(PPFont.iconBadge)
             .foregroundStyle(PPColor.ink)
             .padding(6)
             .background(PPColor.paper.opacity(0.92), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -240,7 +240,7 @@ struct BucketScreen: View {
             } label: {
                 VStack(alignment: .leading, spacing: 0) {
                     PPColor.linen.aspectRatio(1.6, contentMode: .fit)
-                        .overlay { Image(systemName: "folder.fill").font(PPFont.icon(40)).foregroundStyle(PPColor.ink40) }
+                        .overlay { Image(systemName: "folder.fill").font(PPFont.iconPlaceholderFolder).foregroundStyle(PPColor.ink40) }
                         .overlay(alignment: .topTrailing) { SelectBadge(selected: on).padding(8) }
                         .overlay(alignment: .bottomLeading) { kindBadge(symbol: "folder", label: L.s("source_kind_folder")) }
                     HStack(spacing: 6) {
@@ -272,7 +272,7 @@ struct BucketScreen: View {
                     .accessibilityIdentifier("folderSourceRemove")
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(PPFont.icon(15, .semibold))
+                    .font(PPFont.iconAction)
                     .foregroundStyle(PPColor.ink60)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
@@ -291,7 +291,7 @@ struct BucketScreen: View {
         Button { showingAddPicker = true } label: {
             VStack(alignment: .leading, spacing: 0) {
                 PPColor.linen.aspectRatio(1.6, contentMode: .fit)
-                    .overlay { Image(systemName: "plus").font(PPFont.icon(36, .medium)).foregroundStyle(PPColor.ink40) }
+                    .overlay { Image(systemName: "plus").font(PPFont.iconPlaceholderPlus).foregroundStyle(PPColor.ink40) }
                 Text(L.s("folder_sources_add")).font(PPFont.sans(14.5, .semibold, relativeTo: .subheadline))
                     .foregroundStyle(PPColor.ink).lineLimit(1)
                     .padding(.init(top: 9, leading: 12, bottom: 11, trailing: 12))
@@ -463,7 +463,7 @@ struct SelectBadge: View {
         ZStack {
             Circle().fill(fillColor)
             if selected {
-                Image(systemName: "checkmark").font(PPFont.icon(11, .bold)).foregroundStyle(PPColor.paper)
+                Image(systemName: "checkmark").font(PPFont.iconCheckSmall).foregroundStyle(PPColor.paper)
             } else {
                 Circle().strokeBorder(unselectedBorderColor, lineWidth: unselectedBorderWidth)
             }
