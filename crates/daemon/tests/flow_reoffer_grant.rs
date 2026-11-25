@@ -261,21 +261,31 @@ impl Desk {
             .collect()
     }
 
-    /// 等旧任务的结局（delivered 或 failed 推送），期间不轮询 status，
+    /// 等终态推送（delivered 或 failed）累计达到 `expected` 条，期间不轮询 status，
     /// 免得轮询本身改变任务注册表。
-    async fn await_first_terminal_push(&self) {
+    async fn await_terminal_pushes(&self, expected: usize) {
         tokio::time::timeout(Duration::from_secs(60), async {
             loop {
-                if !self.pushes(events::FLOW_FAILED).is_empty()
-                    || !self.pushes(events::FLOW_DELIVERED).is_empty()
-                {
+                let total = self.pushes(events::FLOW_FAILED).len()
+                    + self.pushes(events::FLOW_DELIVERED).len();
+                if total >= expected {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await
-        .expect("旧任务必须以 flow.delivered 或 flow.failed 结束");
+        .unwrap_or_else(|_| {
+            panic!(
+                "终态推送未在 60s 内达到 {expected} 条（delivered={:?}, failed={:?}）",
+                self.delivered_receipts(),
+                self.failed_reasons()
+            )
+        });
+    }
+
+    async fn await_first_terminal_push(&self) {
+        self.await_terminal_pushes(1).await;
     }
 
     async fn receipt_now(&self) -> Option<String> {
@@ -289,13 +299,32 @@ impl Desk {
     /// 像手机一样轮询 flow.status 直到终态（NET-15：轮询会重起丢失的任务，
     /// 读的是库里最新的 provider）。
     async fn poll_to_terminal(&self, provider: &GatedProvider) -> Result<String, String> {
+        let failed_before = self.failed_reasons().len();
         let request = offer_request(self.hash, provider.ticket.clone());
         let result = match common::await_receipt(&self.delivery, self.phone, &request).await {
             Ok(receipt) => Ok(receipt.receipt_id),
             Err(e) => Err(e.wire_code().to_string()),
         };
-        // 让轮询引发的推送也落进收集器。
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        // #1087：不再固定 sleep(200ms) 赌收集器已收到推送，而是显式等待本次请求对应的终态推送落进收集器
+        // （60s 仅作防挂死上限，不把短超时当判据）。
+        tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let seen = match &result {
+                    Ok(rid) => self.delivered_receipts().iter().any(|r| r == rid),
+                    Err(code) => {
+                        let reasons = self.failed_reasons();
+                        reasons.len() > failed_before
+                            && reasons[failed_before..].iter().any(|r| r == code)
+                    }
+                };
+                if seen {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("终态推送未在 60s 内落进收集器: {result:?}"));
         result
     }
 
@@ -551,9 +580,26 @@ async fn reoffer_inside_the_receipt_window(stop_at: FetchStage) {
     let assets_in_window = desk.asset_count().await;
     let reoffer = desk.offer(&p2).await;
     gate.open();
-    desk.await_first_terminal_push().await;
-    // (b) 的重发自己先推一条 delivered；等旧任务也走完再看。
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // #1087：
+    // - Verified 分支：重发复用旧任务，仅旧任务推 1 条终态（delivered）；
+    // - Ingested 分支：重发通过 complete_without_fetch 先推 1 条 delivered，
+    //   旧任务放行后抢输回执，必须走完并推第 2 条终态（delivered，若回归推 failed 也会被计入并由下方断言拦住）。
+    // 等齐对应条数的终态推送 + staging 清空，确保旧任务确实跑完，不再固定 sleep(500ms)。
+    let expected_pushes = match stop_at {
+        FetchStage::Verified => 1,
+        FetchStage::Ingested => 2,
+    };
+    desk.await_terminal_pushes(expected_pushes).await;
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            if desk.receipt_now().await.is_some() && desk.staging_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("旧任务结束后必须落库回执并清空 staging");
     let receipt_before_poll = desk.receipt_now().await;
     let final_status = desk.poll_to_terminal(&p2).await;
     desk.dump(&format!("{stop_at:?}"));
