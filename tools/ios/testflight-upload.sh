@@ -92,9 +92,7 @@ if [ "$ARCHIVE_ONLY" = 0 ]; then
 fi
 
 # ── 2. 工程 ──────────────────────────────────────────────────────────
-if [ ! -d "$IOS/TransportFFITests/Generated/TransportFFI.xcframework" ] || [ ! -f "$IOS/TransportFFITests/Generated/swift/transport.swift" ]; then
-  "$ROOT/tools/build-ios-transport-xcframework.sh" "$IOS/TransportFFITests/Generated"
-fi
+"$ROOT/tools/build-ios-transport-xcframework.sh" "$IOS/TransportFFITests/Generated"
 (cd "$IOS" && xcodegen generate --quiet)
 
 # ── 2.5 幂等：该构建号已在 App Store Connect ⇒ 不重复归档上传（补跑 / 重跑安全）──────────

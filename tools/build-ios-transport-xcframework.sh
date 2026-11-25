@@ -23,14 +23,81 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-OUT="${1:-$ROOT/apps/ios/build/transport}"
-mkdir -p "$OUT"
-OUT="$(cd "$OUT" && pwd)"
-
 DEPLOYMENT_TARGET="${IOS_DEPLOYMENT_TARGET:-16.0}"
 export IPHONEOS_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET"
 DEVICE=aarch64-apple-ios
 SIM=aarch64-apple-ios-sim
+
+compute_fingerprint() {
+  python3 -B -I - "$ROOT" "$DEPLOYMENT_TARGET" <<'PY'
+import hashlib, os, sys
+
+root = sys.argv[1]
+deployment_target = sys.argv[2]
+inputs = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "tools/build-ios-transport-xcframework.sh",
+    "crates/transport",
+    "crates/proto",
+    "crates/pair-pake",
+]
+
+h = hashlib.sha256()
+h.update(f"IPHONEOS_DEPLOYMENT_TARGET={deployment_target}\0".encode("utf-8"))
+
+files = []
+for rel in inputs:
+    full = os.path.join(root, rel)
+    if os.path.isfile(full):
+        files.append((rel, full))
+    elif os.path.isdir(full):
+        for dirpath, dirnames, filenames in os.walk(full):
+            dirnames[:] = sorted(d for d in dirnames if d not in ("target", "__pycache__", ".git"))
+            for name in sorted(filenames):
+                if name == ".DS_Store" or name.endswith(".pyc"):
+                    continue
+                p = os.path.join(dirpath, name)
+                if os.path.isfile(p):
+                    files.append((os.path.relpath(p, root).replace(os.sep, "/"), p))
+
+for rel, full in sorted(files):
+    h.update(rel.encode("utf-8"))
+    h.update(b"\0")
+    with open(full, "rb") as f:
+        while True:
+            chunk = f.read(65536)
+            if not chunk:
+                break
+            h.update(chunk)
+    h.update(b"\0")
+
+print(h.hexdigest())
+PY
+}
+
+if [ "${1:-}" = "--print-fingerprint" ]; then
+  compute_fingerprint
+  exit 0
+fi
+
+OUT="${1:-$ROOT/apps/ios/build/transport}"
+mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"
+
+STAMP="$OUT/.transport-ffi.sha256"
+FINGERPRINT="$(compute_fingerprint)"
+if [ "${PPASS_FORCE_REBUILD_FFI:-0}" != "1" ] \
+  && [ -d "$OUT/TransportFFI.xcframework" ] \
+  && [ -f "$OUT/swift/transport.swift" ] \
+  && [ -f "$STAMP" ] \
+  && [ "$(cat "$STAMP" 2>/dev/null || true)" = "$FINGERPRINT" ]; then
+  echo "==> TransportFFI 已是最新（摘要 ${FINGERPRINT:0:12}），跳过重编：$OUT/TransportFFI.xcframework"
+  exit 0
+fi
+
+rm -f "$STAMP"
 
 command -v xcodebuild >/dev/null || { echo "error: 缺 xcodebuild（装 Xcode）" >&2; exit 1; }
 for t in "$DEVICE" "$SIM"; do
@@ -75,4 +142,6 @@ for lib in "$OUT"/TransportFFI.xcframework/*/libtransport.a; do
   printf '%s: ' "${lib#"$OUT"/}"
   lipo -info "$lib"
 done
+printf '%s\n' "$FINGERPRINT" >"$STAMP.tmp"
+mv -f "$STAMP.tmp" "$STAMP"
 echo "OK: $OUT/TransportFFI.xcframework"

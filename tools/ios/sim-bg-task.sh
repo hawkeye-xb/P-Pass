@@ -122,9 +122,7 @@ echo "==> 场景 ${MODE}（run=${RUN}，设备 ${DEV}，照片 ${N} 张 ${SIZE} 
 # ---- 构建、安装 ----
 if [ "${PPASS_SKIP_BUILD:-}" != 1 ]; then
   echo "==> 构建 Debug 包并安装"
-  if [ ! -d "$IOS/TransportFFITests/Generated/TransportFFI.xcframework" ]; then
-    "$ROOT/tools/build-ios-transport-xcframework.sh" "$IOS/TransportFFITests/Generated"
-  fi
+  "$ROOT/tools/build-ios-transport-xcframework.sh" "$IOS/TransportFFITests/Generated"
   (cd "$IOS" && xcodegen generate --quiet)
   xcodebuild build -project "$IOS/PPass.xcodeproj" -scheme PPass -configuration Debug -destination "generic/platform=iOS" \
     -allowProvisioningUpdates -derivedDataPath "$IOS/build/derived-device" >"$OUT/xcodebuild.log" 2>&1 \

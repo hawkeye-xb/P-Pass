@@ -202,9 +202,7 @@ echo "commit ${HEAD_SHA}${DIRTY:+ dirty} target=$TARGET${INVERT:+ invert=$INVERT
 if [ "$SKIP_BUILD" != 1 ]; then
   echo "==> 构建配对桩（daemon）与 App + UI 测试（build-for-testing）"
   cargo build -q -p daemon --release
-  if [ ! -d "$IOS/TransportFFITests/Generated/TransportFFI.xcframework" ] || [ ! -f "$IOS/TransportFFITests/Generated/swift/transport.swift" ]; then
-    "$ROOT/tools/build-ios-transport-xcframework.sh" "$IOS/TransportFFITests/Generated"
-  fi
+  "$ROOT/tools/build-ios-transport-xcframework.sh" "$IOS/TransportFFITests/Generated"
   (cd "$IOS" && xcodegen generate --quiet)
   xcodebuild build-for-testing -project "$IOS/PPass.xcodeproj" -scheme PPassUI -configuration Debug \
     -destination "$BUILD_DEST" -derivedDataPath "$DERIVED" ${SIGN[@]+"${SIGN[@]}"} >"$OUT/build.log" 2>&1 \
