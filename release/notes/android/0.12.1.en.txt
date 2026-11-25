@@ -1,0 +1,3 @@
+Enable auto backup and pick its range after pairing; photo access is asked as needed.
+Time filters and range summaries fit and tap better with large text.
+Fixed a security issue; please update soon.
