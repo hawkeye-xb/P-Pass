@@ -358,7 +358,8 @@ internal fun PhotosScreen(
             Text(
                 stringResource(R.string.photos_live_reconnecting),
                 fontSize = 13.sp, color = PPColor.Ink40,
-                modifier = Modifier.fillMaxWidth().padding(PPSize.PageGutter, 0.dp, PPSize.PageGutter, 12.dp),
+                modifier = Modifier.fillMaxWidth().padding(PPSize.PageGutter, 0.dp, PPSize.PageGutter, 12.dp)
+                    .semantics { liveRegion = LiveRegionMode.Polite },
             )
         }
 
@@ -371,6 +372,7 @@ internal fun PhotosScreen(
                 Text(
                     stringResource(R.string.photos_live_disconnected),
                     fontSize = 13.sp, color = PPColor.Ink40,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 )
                 Text(
                     stringResource(R.string.photos_live_retry),
@@ -392,7 +394,7 @@ internal fun PhotosScreen(
         when {
             loader == null -> Center(stringResource(R.string.photos_loading))
             loading -> Center(stringResource(R.string.photos_loading))
-            error != null && chrome.showTimelineError -> Center(stringResource(R.string.photos_unreachable))
+            error != null && chrome.showTimelineError -> Center(stringResource(R.string.photos_unreachable), live = true)
             error != null && items.isEmpty() -> Unit
             items.isEmpty() -> Center(stringResource(R.string.home_empty_albums))
             shown.isEmpty() -> Center(stringResource(R.string.photos_filter_empty))
@@ -697,13 +699,7 @@ private fun PhotoViewer(
                 )
             }
         }
-        notice?.let {
-            Text(
-                it, fontSize = 13.sp, color = PPColor.PaperDim,
-                modifier = Modifier.padding(4.dp, 8.dp).semantics { liveRegion = LiveRegionMode.Polite },
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            )
-        }
+        notice?.let { ViewerNoticeText(it) }
         Row(
             Modifier.fillMaxWidth().padding(top = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -833,12 +829,24 @@ private fun PhotosGuideCard(
 }
 
 @Composable
-private fun Center(text: String) {
+internal fun ViewerNoticeText(text: String) {
+    Text(
+        text,
+        fontSize = 13.sp,
+        color = PPColor.PaperDim,
+        modifier = Modifier.padding(4.dp, 8.dp).semantics { liveRegion = LiveRegionMode.Polite },
+        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+    )
+}
+
+@Composable
+private fun Center(text: String, live: Boolean = false) {
     Box(Modifier.fillMaxSize().padding(34.dp), contentAlignment = Alignment.Center) {
         Text(
             text, fontSize = PPSize.BodyMin, lineHeight = 26.sp,
             color = PPColor.Ink40,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = if (live) Modifier.semantics { liveRegion = LiveRegionMode.Polite } else Modifier,
         )
     }
 }

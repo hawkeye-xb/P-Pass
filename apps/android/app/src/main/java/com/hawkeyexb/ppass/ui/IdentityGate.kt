@@ -67,7 +67,7 @@ fun IdentityGate(identity: IdentityStore, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun IdentityUnavailableScreen(resetFailed: Boolean, onRetry: () -> Unit, onReset: () -> Unit) {
+internal fun IdentityUnavailableScreen(resetFailed: Boolean, onRetry: () -> Unit, onReset: () -> Unit) {
     PPScreen {
         androidx.compose.material3.ProvideTextStyle(
             androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
