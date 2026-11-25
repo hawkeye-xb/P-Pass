@@ -28,6 +28,9 @@ enum AppLog {
         sink?.write(line)
     }
 
+    /// 等队列里已入的行都落盘（测试用；产品路径不需要）。
+    static func flush() { sink?.flush() }
+
     /// 进程启动记录。App 初始化时场景与后台任务都还没分发，`applicationState` 多半是 inactive，所以这里只把原始值当证据记下，
     /// 不据此下结论；真正的来源由 `LaunchOriginRecorder` 在第一个真实入口（场景 active / 后台任务回调）到达时记一行。
     @MainActor static func logLaunch() {

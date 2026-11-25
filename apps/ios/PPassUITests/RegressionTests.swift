@@ -36,8 +36,18 @@ final class RegressionTests: UIRegressCase {
         limitedRuleCase()
     }
 
-    // 「设置页拒绝」一例等 #1453 的日志行（settings: auto-rule photo access after prompt=none）合入后再加：
-    // 现在 App 不打那一行，加了必红，会让整个回归永久退出 1。
+    /// #1453：单次挑图进主界面（照片权限未申请）→ 设置页开「自动备份」→ 进范围页申请照片权限点「不允许」。
+    /// 反证：答「允许完全访问」→ 日志为 full 而非 none ⇒ 判定 FAIL。
+    func testSettingsRuleDenied() {
+        let answer = inverted ? SystemButton.photosFull : SystemButton.dontAllow
+        launchFreshAndPair(resetPhotos: true, photoAnswer: answer)
+        reachSettingsViaPick()
+        let rule = toggle(id: "autoBackupRuleToggle")
+        flip(rule)
+        tapApp("bucketRequestAccess", app.buttons["bucketRequestAccess"])
+        answerSystemAlert(answer, what: "photos")
+        settle(5)
+    }
 
     private func ruleCase() {
         prepareScopeAndOpenSettings()

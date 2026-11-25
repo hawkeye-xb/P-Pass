@@ -19,20 +19,17 @@ just ios-ui-regress device --invert SettingsRuleFull   # 反证
 | DecisionPick | 决定页「从相册选择」→ 系统选择器选 1 张 | `onboarding: decision shown` → `picked: 1 chosen` → `onboarding: marked onboarded via=pick` |
 | SettingsRuleFull | 决定页「开启自动备份」→ 范围页「允许访问照片」允许 →「开始备份」存一个范围（准备）→ 设置页「自动备份」关一次再开 | `onboarding: marked onboarded via=scope` → `auto-rule: saved enabled=false` → `auto-rule: saved enabled=true` |
 | SettingsRuleLimited | 决定页「开启自动备份」→ 范围页「允许访问照片」→ 权限「限制访问」选 1 张 →「开始备份」存范围（规则已开）→ 设置页「自动备份」关一次再开 → 随 App 去系统设置再回来（不改权限） | `scope: photo access after prompt=partial` → `auto-rule: partial photo access, opening system settings for full access` → `auto-rule: partial photo access, sent allowed photos n=[1-9], rule stays off` |
+| SettingsRuleDenied | 决定页「从相册选择」进主界面 → 设置页开「自动备份」→ 范围页「允许访问照片」点「不允许」 | `onboarding: marked onboarded via=pick` → `settings: auto-rule toggle on photo access=none` → `scope: photo access after prompt=none` |
 | SettingsPick | 设置页「挑几张传」→ 系统选择器选 1 张 | `… via=pick` → `picked: 1 chosen` → `picked: 1 registered` |
 | SettingsPickVideo | 设置页「挑几张传」→ 系统选择器选 1 段视频 | `… via=pick` → `picked: 1 chosen` → `picked: 1 registered` |
 | NotifyAllow | 设置页「通知」→ 系统授权「允许」 | `… via=pick` → `notifications: system prompt result granted=true` |
 | NotifyDeny | 设置页「通知」→ 系统授权「不允许」 | `… via=pick` → `notifications: system prompt result granted=false` |
 
 判定表是 `tools/ios/ui-regress-rules.tsv`，日志行改了只改这一处；**用例清单也由它生成**（一行一例），
-脚本里不再抄一份。设置页的用例按各自的实际操作分两种准备：「挑几张传」「通知」先走决定页「从相册选择」进主界面
+脚本里不再抄一份。设置页的用例按各自的实际操作分两种准备：「挑几张传」「通知」「自动备份（拒绝）」先走决定页「从相册选择」进主界面
 （规则关着、照片权限未定），第一个通过行是 `marked onboarded via=pick`；「自动备份」Full 先存一个范围再操作开关
 （保存范围本身会打一条 `saved enabled=true`，判定只认它之后实际操作阶段的 `false→true`，操作失效必红）；
 Limited 从范围页给有限授权，存范围时规则已经开，先关一次再开，随 App 去系统设置再回前台（不改权限），不弹照片权限框、开关保持关。
-
-暂未纳入：「设置页拒绝」（设置页「自动备份」→「不允许」）要的通过行
-`settings: auto-rule photo access after prompt=none` App 现在不打（#1453），加了必红、会让整个回归永久退出 1。
-#1453 合入后在 TSV 里把那行注释去掉、补回 `testSettingsRuleDenied` 即可（TSV 末尾有注释掉的原文）。
 
 不覆盖：相机扫码（配对走手动配对串），桌面收到照片的哈希核对（见 `tools/ios/e2e-device.sh`）。
 

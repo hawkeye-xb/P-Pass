@@ -118,6 +118,21 @@ $(iso "$NOW") process start: pid=200 version=0.11.0(1) appState=active
 EOF
 expect FAIL DecisionScopeFull "$T/nobase.log" "$NOW" "快照拉不回来时上一例的通过行不算本例的" "$T/no-such-baseline.log"
 
+# #1453：SettingsRuleDenied 必须依次命中 marked onboarded via=pick → settings: auto-rule toggle on photo access=none → scope: photo access after prompt=none。
+cat >"$T/denied.log" <<EOF
+$(iso "$NOW") process start: pid=400 version=0.12.1(1) appState=active
+$(iso "$NOW") onboarding: marked onboarded via=pick
+$(iso "$NOW") scope: photo access after prompt=none
+EOF
+expect FAIL SettingsRuleDenied "$T/denied.log" "$NOW" "SettingsRuleDenied 缺设置页开启日志不算过"
+cat >"$T/denied-ok.log" <<EOF
+$(iso "$NOW") process start: pid=401 version=0.12.1(1) appState=active
+$(iso "$NOW") onboarding: marked onboarded via=pick
+$(iso "$NOW") settings: auto-rule toggle on photo access=none
+$(iso "$NOW") scope: photo access after prompt=none
+EOF
+expect PASS SettingsRuleDenied "$T/denied-ok.log" "$NOW" "SettingsRuleDenied 命中完整日志链"
+
 # 未知用例、日志拉不回 ⇒ FAIL。
 expect FAIL NoSuchCase "$T/ok.log" "$NOW" "判定表里没有的用例"
 expect FAIL DecisionScopeFull "$T/missing.log" "$NOW" "日志拉不回"

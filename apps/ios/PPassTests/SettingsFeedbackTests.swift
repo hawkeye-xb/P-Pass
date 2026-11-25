@@ -41,8 +41,10 @@ final class SettingsFeedbackTests: XCTestCase {
         func acknowledgeMissingSource() {}
         func notifyOnFailure() -> Bool { disk.notify }
         func setNotifyOnFailure(_ on: Bool) throws { calls.append("notify=\(on)"); if failWrites { throw Boom() }; disk.notify = on }
-        func notificationAuthorization() async -> NotificationAuthorization { .authorized }
-        func requestNotificationAuthorization() async -> NotificationAuthorization { .authorized }
+        var stubNotificationAuth: NotificationAuthorization = .authorized
+        var stubRequestNotificationAuth: NotificationAuthorization = .authorized
+        func notificationAuthorization() async -> NotificationAuthorization { stubNotificationAuth }
+        func requestNotificationAuthorization() async -> NotificationAuthorization { stubRequestNotificationAuth }
         @MainActor func openNotificationSettings() {}
         var failOnboarded = false
         func finishOnboarding() throws { calls.append("onboarded"); if failOnboarded { throw Boom() }; onboarded = true }
@@ -1119,5 +1121,112 @@ final class SettingsFeedbackTests: XCTestCase {
         let snap = await app.remainingSnapshot()
         XCTAssertNil(snap)
         XCTAssertNotNil(app.notice)
+    }
+
+    // MARK: #1453
+
+    /// #1453：设置页通知开关、挑几张传选择器、自动备份开关的成功路径必须写入本地 ppass.log，
+    /// 写盘失败时不误记成功行，且不包含任何配对串或文件名。
+    func test_success_path_logs_are_written_for_notify_picker_and_auto_rule() async throws {
+        let lib = try FileManager.default.url(for: .libraryDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        let logURL = lib.appendingPathComponent("Logs", isDirectory: true).appendingPathComponent(AppLog.fileName)
+        AppLog.flush()
+        let beforeSize = (try? Data(contentsOf: logURL).count) ?? 0
+
+        let (app, engine, media) = make()
+        app.phase = .main
+
+        // 1. 通知开关：关 -> 开（已授权 / 首次授权通过 / 首次授权拒绝 / 已拒去系统设置）+ 写盘失败不误记
+        app.setNotifyToggle(false)
+        app.setNotifyToggle(true)
+        await settle()
+
+        engine.stubNotificationAuth = .notDetermined
+        engine.stubRequestNotificationAuth = .authorized
+        app.setNotifyToggle(true)
+        await settle()
+
+        engine.stubNotificationAuth = .notDetermined
+        engine.stubRequestNotificationAuth = .denied
+        app.setNotifyToggle(true)
+        await settle()
+
+        engine.stubNotificationAuth = .denied
+        app.setNotifyToggle(true)
+        await settle()
+
+        AppLog.flush()
+        let beforeFailWrite = (try? Data(contentsOf: logURL).count) ?? 0
+        engine.failWrites = true
+        app.setNotifyToggle(false)
+        engine.failWrites = false
+        AppLog.flush()
+        let failWriteSlice = String(decoding: (try Data(contentsOf: logURL)).dropFirst(beforeFailWrite), as: UTF8.self)
+        XCTAssertFalse(failWriteSlice.contains("settings: notify toggle off result=disabled"), "写盘失败不得误记成功：\n\(failWriteSlice)")
+
+        // 2. 挑几张传：选中 1 张后关闭不得误记 cancelled；未选直接关闭才记 cancelled
+        let item: (fileName: String, mimeType: String, payload: PickedPayload) = ("secret-photo.jpg", "image/jpeg", StubPayload())
+        AppLog.flush()
+        let beforePickOk = (try? Data(contentsOf: logURL).count) ?? 0
+        app.pickerRequested = true
+        app.pickedChosen([item])
+        app.pickerRequested = false
+        await settle()
+        AppLog.flush()
+        let pickOkSlice = String(decoding: (try Data(contentsOf: logURL)).dropFirst(beforePickOk), as: UTF8.self)
+        XCTAssertTrue(pickOkSlice.contains("settings: picker presented"), "缺设置页选择器打开日志：\n\(pickOkSlice)")
+        XCTAssertFalse(pickOkSlice.contains("settings: picker cancelled"), "选中关闭时不得误记取消：\n\(pickOkSlice)")
+        XCTAssertFalse(pickOkSlice.contains("secret-photo.jpg"), "日志不得泄露文件名：\n\(pickOkSlice)")
+
+        app.pickerRequested = true
+        app.pickerRequested = false
+
+        // 2b. 决定页选图先交回结果再 dismiss 时，登记未完成前 decisionBusy 必须保持锁定
+        let (decisionApp, _, _) = make()
+        decisionApp.paired(firstTime: true, settingSaveFailed: false)
+        decisionApp.decisionPickPhotos()
+        decisionApp.pickedChosen([item])
+        decisionApp.pickerRequested = false
+        XCTAssertTrue(decisionApp.decisionBusy, "选中关闭后在 addPicked 完成前应保持 decisionBusy 锁定")
+        await settle()
+
+        // 3. 自动备份开关：关 -> 开 -> 从系统设置回来（after prompt）
+        app.setAutoRule(false)
+        app.setAutoRule(true)
+        await settle()
+
+        engine.pendingAccess = true
+        media.granted = .none
+        app.resumeAutoRuleAfterSettings()
+        await settle()
+
+        // 4. 扫码页：相机授权探针 + 扫码命中（不泄露配对串）+ 手动输入入口
+        _ = await ScanScreen.cameraAccess()
+        var accepted: String?
+        ScanScreen.handleDetectedCode("ppf://pair?v=1&node=SECRETNODE1234567890&token=TOPSECRET", onCode: { accepted = $0 })
+        XCTAssertNotNil(accepted)
+        var manualOpened = false
+        ScanScreen.openManualEntry { manualOpened = true }
+        XCTAssertTrue(manualOpened)
+
+        AppLog.flush()
+        let afterData = try Data(contentsOf: logURL)
+        let slice = String(decoding: afterData.dropFirst(beforeSize), as: UTF8.self)
+        XCTAssertTrue(slice.contains("settings: notify toggle off result=disabled"), "缺通知关闭成功日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("settings: notify toggle on result=enabled"), "缺通知开启成功日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("settings: notify toggle on result=requested→authorized"), "缺通知首次授权通过日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("settings: notify toggle on result=requested→denied"), "缺通知首次授权拒绝日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("settings: notify toggle on result=openSettings"), "缺通知跳转系统设置日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("settings: picker presented"), "缺设置页选择器打开日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("settings: picker cancelled"), "缺设置页选择器取消日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("settings: auto-rule toggle off"), "缺自动备份关闭日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("settings: auto-rule toggle on photo access="), "缺自动备份开启日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("settings: auto-rule photo access after prompt=none"), "缺系统设置回来后照片权限日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("scan: camera authorization="), "缺扫码相机权限日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("scan: code accepted"), "缺扫码命中日志：\n\(slice)")
+        XCTAssertTrue(slice.contains("scan: manual entry opened"), "缺手动输入入口日志：\n\(slice)")
+        XCTAssertFalse(slice.contains("ppf://pair"), "日志不得泄露配对串")
+        XCTAssertFalse(slice.contains("TOPSECRET"), "日志不得泄露配对 token")
+        XCTAssertFalse(slice.contains("SECRETNODE1234567890"), "日志不得泄露节点标识")
     }
 }
