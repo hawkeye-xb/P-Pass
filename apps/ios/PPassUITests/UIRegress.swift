@@ -65,10 +65,20 @@ enum UIReg {
                     let b = buttons.element(boundBy: j)
                     if b.exists { info.append((b.label, b.identifier, b)) }
                 }
-                // 照片权限框按 identifier 认（staged alert 是 `kTCCServicePhotos-staged-alert`，按钮是 `kTCCServicePhotos-*-button`），
-                // 不按标题文字——标题随语言、随系统版本变。
+                // 照片权限框：真机 staged alert 的 alert/button identifier 含 kTCCServicePhotos；
+                // 模拟器非 staged 照片框的 alert/button identifier 为空串，仅子 Image identifier 含
+                // kTCCServicePhotos 或带照片专属按钮（photosFull / photosLimited），绝不靠语言敏感的标题文字猜。
+                let hasPhotoChildImage = alert.images.matching(
+                    NSPredicate(format: "identifier CONTAINS[c] %@", "tccservicephotos")
+                ).count > 0
+                let hasPhotosSpecificButton = info.contains {
+                    SystemButton.matches($0.label, SystemButton.photosFull)
+                        || SystemButton.matches($0.label, SystemButton.photosLimited)
+                }
                 let isPhotos = alertIdentifier.lowercased().contains("tccservicephotos")
                     || info.contains { $0.identifier.lowercased().contains("tccservicephotos") }
+                    || hasPhotoChildImage
+                    || hasPhotosSpecificButton
                 let pool = isPhotos ? choices + photoChoices : choices
                 let matched = (photosOnly && !isPhotos) ? [] : info.filter { SystemButton.matches($0.label, pool) }
                 if !matched.isEmpty {
@@ -352,45 +362,120 @@ class UIRegressCase: XCTestCase {
             return
         }
         tapPickerCell(cell)
+        // PHPicker sheet 刚滑入时首拍可能落在动画中途导致未选中（「完成/Add」仍 Disabled）；若 2 秒内确认按钮仍未启用再补点一次。
+        if !hasEnabledButton(SystemButton.pickerAdd, timeout: 2) {
+            tapPickerCell(cell)
+        }
         UIReg.say("PICKER_SELECTED 1")
         tapButton(SystemButton.pickerAdd, what: "picker-add")
     }
 
+    private func hasEnabledButton(_ labels: [String], timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            for label in labels {
+                let b = app.buttons[label].firstMatch
+                if b.exists && b.isEnabled { return true }
+            }
+            usleep(200_000)
+        }
+        return false
+    }
+
     /// #1840：选第一段视频并确认。选择器里连视频格子都看不到就是失败——这是「视频可选」的真机判据。
     /// PHPicker 的视频格子 label 以「视频, 」开头（英文「Video, 」）。
+    /// #1941：图库照片多于一屏时（如模拟器或真机存量图库），首屏可能全是静态照片，
+    /// 网格加载后先在可见区域找，找不到则逐屏向下滚网格（最多 8 屏）继续找。
     func pickOneVideo() {
+        let videoPredicate = NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@", "视频, ", "Video, ")
         let pickerReady = Date().addingTimeInterval(30)
         var cell: XCUIElement?
+        var swipes = 0
         while Date() < pickerReady, cell == nil {
-            let found = app.images.matching(
-                NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@", "视频, ", "Video, ")
-            ).firstMatch
-            if found.exists { cell = found } else { usleep(500_000) }
+            let matches = app.images.matching(videoPredicate)
+            let count = matches.count
+            for idx in 0..<count {
+                let candidate = matches.element(boundBy: idx)
+                guard candidate.exists else { continue }
+                let f = candidate.frame
+                if f.height > 10 && f.midY >= 200 && f.midY <= 720 {
+                    cell = candidate
+                    break
+                }
+            }
+            if cell != nil { break }
+            if swipes < 8, firstPickerCell() != nil {
+                let grid = app.scrollViews["photosView_content_scroll_view"].firstMatch
+                if grid.exists {
+                    grid.swipeUp()
+                } else {
+                    app.swipeUp()
+                }
+                swipes += 1
+                // 等滚动惯性完全停稳再查坐标并点击，避免点击只停住惯性而不选中格子。
+                usleep(1_200_000)
+            } else {
+                usleep(500_000)
+            }
         }
         guard let cell else { dump("picker"); XCTFail("30 秒内没在选择器里看到视频"); return }
         UIReg.say("PICKER_SHOWN")
         tapPickerCell(cell)
+        // PHPicker sheet 刚滑入时首拍可能落在动画中途导致未选中（「完成/Add」仍 Disabled）；若 2 秒内确认按钮仍未启用再补点一次。
+        if !hasEnabledButton(SystemButton.pickerAdd, timeout: 2) {
+            tapPickerCell(cell)
+        }
         UIReg.say("PICKER_SELECTED 1")
         tapButton(SystemButton.pickerAdd, what: "picker-add")
     }
+
+    /// #1941：受限相册选片页只挑静态图片格子，避开视频（label 以「视频, / Video, 」开头）与非照片占位项，
+    /// 防止前排为 `.mov` 视频时 `allowedImages()` 计为 0 导致 `SettingsRuleLimited` 误红。
+    /// 保留 iOS 27 真机经验：候选多于 1 个时优先取索引 1（第 0 格在部分真机视图上可能是不可选头格）。
+    func firstStaticPhotoPickerCell() -> XCUIElement? {
+        let photoLabelPredicate = NSPredicate(
+            format: "label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@",
+            "照片, ", "Photo, ", "实况照片, ", "Live Photo, ", "截屏, ", "Screenshot, "
+        )
+        let gridPhotos = app.images.matching(identifier: "PXGGridLayout-Info").matching(photoLabelPredicate)
+        if gridPhotos.count > 1, gridPhotos.element(boundBy: 1).exists { return gridPhotos.element(boundBy: 1) }
+        if gridPhotos.firstMatch.exists { return gridPhotos.firstMatch }
+        let anyPhotos = app.images.matching(photoLabelPredicate)
+        if anyPhotos.count > 1, anyPhotos.element(boundBy: 1).exists { return anyPhotos.element(boundBy: 1) }
+        if anyPhotos.firstMatch.exists { return anyPhotos.firstMatch }
+        let nonVideoGrid = app.images.matching(identifier: "PXGGridLayout-Info").matching(
+            NSPredicate(format: "NOT (label BEGINSWITH %@ OR label BEGINSWITH %@)", "视频, ", "Video, ")
+        )
+        if nonVideoGrid.count > 1, nonVideoGrid.element(boundBy: 1).exists {
+            return nonVideoGrid.element(boundBy: 1)
+        }
+        if nonVideoGrid.firstMatch.exists { return nonVideoGrid.firstMatch }
+        return nil
+    }
+
+    private static let pickerMediaPredicate = NSPredicate(
+        format: "label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@ OR label BEGINSWITH %@",
+        "照片, ", "Photo, ", "实况照片, ", "Live Photo, ", "截屏, ", "Screenshot, ", "视频, ", "Video, "
+    )
 
     /// 第 index 个可选格子（0 = 第一张）。限制访问那一页要选一张「还没被挑过」的，避免重复导入后 n=0。
     func pickerCell(at index: Int) -> XCUIElement? {
         let grid = app.images.matching(identifier: "PXGGridLayout-Info").element(boundBy: index)
         if grid.exists { return grid }
-        let cell = app.collectionViews.cells.element(boundBy: index)
+        let cell = app.collectionViews.cells.matching(Self.pickerMediaPredicate).element(boundBy: index)
         if cell.exists { return cell }
         return nil
     }
 
     func firstPickerCell() -> XCUIElement? {
         // PHPicker 的照片格子：iOS 17–26 是 identifier 为 PXGGridLayout-Info 的 Image（带「照片, 日期」的 label）。
-        // 不能按「scrollView 里的第一个 image」找——选择器顶部还有一张 38×38 的说明图，会先命中它（点它不选中）。
+        // 不能按「scrollView 里的第一个 image」或无过滤 `app.collectionViews.cells` 找——
+        // SwiftUI `List`（设置页）底层就是 UICollectionView，PHPicker 尚未挂载时会误点到设置页自己的行。
         let queries: [XCUIElementQuery] = [
             app.images.matching(identifier: "PXGGridLayout-Info"),
-            app.images.matching(NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@", "照片, ", "Photo, ")),
-            // 兜底：更早的 iOS 上 PHPicker 是 collectionView 的 cell。
-            app.collectionViews.cells,
+            app.images.matching(Self.pickerMediaPredicate),
+            // 兜底：更早的 iOS 上 PHPicker 是 collectionView 的 cell（必须带媒体 label，绝不误命中设置页 List 行）。
+            app.collectionViews.cells.matching(Self.pickerMediaPredicate),
         ]
         for q in queries {
             let el = q.firstMatch
