@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 FLOW_DIR = Path(__file__).resolve().parent
-TEST_RE = re.compile(r"(\.(test|spec)\.[^/]*$)|((^|/)(PPassTests|Tests|tests|test|__tests__|androidTest|sharedTest)/)")
+TEST_RE = re.compile(r"(\.(test|spec)\.[^/]*$)|((^|/)(PPassTests|Tests|tests|test|__tests__|androidTest|sharedTest)/)|((^|/)test-[^/]*\.(sh|py)$)")
 FAKE_SRC_READ_RE = re.compile(r"""(\.(?:rs|kt|swift|svelte)\b[^\n]{0,120}read_text|open\([^)\n]*\.(?:rs|kt|swift|svelte)["'])""")
 NONE_VAL_RE = re.compile(r"^(无|没有|不涉及|none|无。)$", re.I)
 _GIT_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_PREFIX")
@@ -178,6 +178,9 @@ def pick_gates(files: list[str], repo_dir: str) -> list[str]:
         elif f.startswith("tools/e3/"):
             add("bash tools/test-e3.sh")
         elif f.startswith("tools/tests/") and f.endswith(".py"):
+            if os.path.isfile(os.path.join(repo_dir, f)):
+                add(f"python3 -B -I {f}")
+        elif f.startswith("tools/test-") and f.endswith(".py"):
             if os.path.isfile(os.path.join(repo_dir, f)):
                 add(f"python3 -B -I {f}")
         elif f.startswith("tools/test-") and f.endswith(".sh"):
