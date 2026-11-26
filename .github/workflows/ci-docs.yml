@@ -104,6 +104,7 @@ jobs:
             tools/release-notes.test.mjs
             release/**
             tools/release/**
+            CHANGELOG.md
             # #1062：release-plan 钉住真实依赖图（各端入口包传递依赖哪些 crate）——Cargo 清单变了也要跑。
             Cargo.toml
             crates/*/Cargo.toml
@@ -175,6 +176,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - name: md-check（docs/ 的 Markdown 表格不许被空行截断）
         run: python3 tools/check-markdown-tables.py
       - name: Install just for document command validation
@@ -191,6 +194,13 @@ jobs:
         run: |
           python3 tools/check-shell-vars.py --self-test
           python3 tools/check-shell-vars.py
+      - name: changelog-drafts-check（#1636：草稿 Release 在 CHANGELOG.md 中必须去向明确）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          bash tools/test-changelog-section.sh
+          bash tools/release/changelog-section.sh --check
 
   dogfood-assets:
     name: dogfood-assets（REL-08：资产里的 .sh 在干净目录自足）

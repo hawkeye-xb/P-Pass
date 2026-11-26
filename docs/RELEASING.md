@@ -62,6 +62,14 @@
    `桌面端：`) on entries that concern one platform — they are the input for
    step 2b. **CHANGELOG no longer feeds the in-app update dialog** (`#741`;
    the old per-platform filtering `#737` / `#743` was removed).
+   **Baseline = actually published formal Releases (`#1636`)**: if an
+   intermediate formal tag has a Draft Release that was never published, its
+   `CHANGELOG.md` entries must have an explicit disposition before the next
+   release — either merge them into the next formal section and remove the
+   draft header, or keep the header with only an explicit note (such as
+   `本版本未发布，内容已并入 [x.y.z]。`) and no remaining change subsections
+   or list items (`tools/release/changelog-section.sh --check` enforces this
+   in `ci-docs` and `release.yml`).
 2b. **User update notes (`#741`)**: for every platform whose version went up,
    write `release/notes/<platform>/<version>.zh.txt` + `.en.txt` (plain text,
    one item per line, ≤ 3 items / ≤ 200 chars each language). The release
@@ -85,6 +93,9 @@
    > `[验收] <formal tag>` (e.g. `[验收] v2026.11.2`). `just release-scope --ledger <n> --pkg <test tag>`
    > only reads and writes an existing issue; it does not create one. Create that issue by hand with
    > the exact title, then run the command with its number (the first test build fills the ledger).
+   > Its baseline (`last_formal`) counts only **actually published formal Releases** (excluding Drafts
+   > and Prereleases, `#1636`); if an existing ledger's `since=` differs from the latest published
+   > formal Release, `release-scope` warns on stderr without overwriting `since=`.
    > `plan-builds` finds it by title and runs `tools/flow/release-acceptance.sh <n> <commit>`; missing
    > ledger, duplicate ledgers, or any item not yet accepted ⇒ red before anything is built. To clear
    > an item, check it off first; an exemption also needs `结论：免验，理由…` at the end of the line.
@@ -432,6 +443,11 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
    只涉及一端的条目继续以「Android 端：」「macOS 端：」「Windows 端：」「桌面端：」
    开头——它们是 2b 起草说明的输入。**CHANGELOG 不再进入应用内更新弹窗**（#741；
    原 #737 / #743 的按端过滤推导已删除）。
+   **以真正 Publish 过的正式版为基准（#1636）**：中间产生的草稿 Release 若最终未发布，
+   它在 `CHANGELOG.md` 里的条目必须去向明确——并入下一个正式版本段并删去草稿标题，
+   或保留标题但只写「本版本未发布，内容已并入 [x.y.z]。 / 本版本未发布」等明确说明、
+   不得滞留 `### Added/Changed/Fixed` 或条目列表（由 `tools/release/changelog-section.sh --check`
+   在 `ci-docs` 与 `release.yml` 预检把关）。
 2b. **用户更新说明**（#741）：本次版本号涨了的每一端，写
    `release/notes/<platform>/<version>.zh.txt` 与 `.en.txt`（纯文本、每行一条、
    每种语言 ≤ 3 条 / ≤ 200 字）。发版流水线把它们原样放进该端清单（`notes` = 中文，
@@ -451,7 +467,8 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
    不改变本次构建的字节；要包含更新的代码，重新触发一次即可。
    > **发版闸（#1486）**：正式版发版前必须已有标题恰为「[验收] <正式 tag>」的台账 issue（如「[验收] v2026.11.2」）。
    > `just release-scope --ledger <号> --pkg <test 包 tag>` 只读写已有 issue，不会新建：先手动建一张标题恰好是
-   > 「[验收] <正式 tag>」的 issue，再用它的号跑这条命令（出第一个 test 包时写入清单）。`plan-builds` 按标题找到它，
+   > 「[验收] <正式 tag>」的 issue，再用它的号跑这条命令（出第一个 test 包时写入清单；起点按**已 Publish 的正式 Release**
+   > 算，跳过 Draft 与 Prerelease；若已有台账的 `since=` 与最新已发布正式版不一致只告警不自动改写，#1636）。`plan-builds` 按标题找到它，
    > 调 `tools/flow/release-acceptance.sh <台账号> <本次构建提交>`：没有台账、同名多张、有一项没清零，都在构建之前红，
    > 不上传 TestFlight、不建 tag 与草稿。修好必须先把该项勾上，免验再在行尾写「结论：免验，理由…」；
    > 只写理由不勾，门禁照样红。勾上后用同一个 tag 号重跑。

@@ -4,6 +4,7 @@
 # gh 是 PATH 注入的桩，读写 $FAKE 目录：
 #   $FAKE/pr/<N>.body        PR 正文；$FAKE/pr/<N>.fail 存在 → gh pr view 失败
 #   $FAKE/issue/<M>.body     卡 / 台账正文（gh issue edit --body-file 写回这里）；$FAKE/issue/<M>.fail → 读失败
+#   $FAKE/releases.json      GitHub Releases 列表（供 gh release list）；$FAKE/releases.fail → 查询失败
 # 级别判定用真实的 acceptance-gate.sh classify（拷进临时仓库）。
 # 用法: tools/test-release-scope.sh    退出码: 0 全过 / 1 有失败
 set -uo pipefail
@@ -27,23 +28,44 @@ printf '+ core/**\n' >"${R}/.github/core-paths.txt"
 cat >"${TMP}/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 set -u
-kind="$1"; sub="$2"; num="$3"
+kind="$1"; sub="$2"
 case "${kind} ${sub}" in
   "pr view")
+    num="$3"
     [ -e "${FAKE}/pr/${num}.fail" ] && { echo "HTTP 502: stub failure" >&2; exit 1; }
     [ -f "${FAKE}/pr/${num}.body" ] || { echo "no pull request #${num}" >&2; exit 1; }
     cat "${FAKE}/pr/${num}.body"
     ;;
   "issue view")
+    num="$3"
     [ -e "${FAKE}/issue/${num}.fail" ] && { echo "HTTP 502: stub failure" >&2; exit 1; }
     [ -f "${FAKE}/issue/${num}.body" ] || { echo "no issue #${num}" >&2; exit 1; }
     cat "${FAKE}/issue/${num}.body"
     ;;
   "issue edit")
+    num="$3"
     shift 3
     while [ "$#" -gt 0 ]; do
       case "$1" in --body-file) cp "$2" "${FAKE}/issue/${num}.body"; shift 2 ;; *) shift ;; esac
     done
+    ;;
+  "release list")
+    [ -e "${FAKE}/releases.fail" ] && { echo "HTTP 502: stub release list failure" >&2; exit 1; }
+    python3 - "${FAKE}/releases.json" "$@" <<'PY'
+import json, sys
+path, argv = sys.argv[1], sys.argv[2:]
+rows = json.load(open(path, encoding="utf-8"))
+excl_draft = "--exclude-drafts" in argv
+excl_pre = "--exclude-pre-releases" in argv
+out = []
+for r in rows:
+    if excl_draft and r.get("isDraft"):
+        continue
+    if excl_pre and r.get("isPrerelease"):
+        continue
+    out.append(r)
+print(json.dumps(out))
+PY
     ;;
   *) echo "stub gh: unsupported $*" >&2; exit 2 ;;
 esac
@@ -93,7 +115,14 @@ chmod +x "${TMP}/bin/gh"
 ) || { echo "造临时仓库失败"; exit 1; }
 
 reset_fake() {
-  rm -f "${FAKE}"/pr/* "${FAKE}"/issue/*
+  rm -f "${FAKE}"/pr/* "${FAKE}"/issue/* "${FAKE}/releases.fail"
+  cat >"${FAKE}/releases.json" <<'JSON'
+[
+  {"tagName": "v1.0.0", "isDraft": false, "isPrerelease": false, "publishedAt": "2026-10-01T00:00:00Z"},
+  {"tagName": "v1.1.0-test.1", "isDraft": true, "isPrerelease": false, "publishedAt": ""},
+  {"tagName": "v1.1.0-test.2", "isDraft": true, "isPrerelease": false, "publishedAt": ""}
+]
+JSON
   for n in 21 22 23 24 26 27 28 29; do printf 'closes #%s\n' "$((n + 100))" >"${FAKE}/pr/${n}.body"; done
   printf '改了设置页，没关联卡\n' >"${FAKE}/pr/25.body"
   for n in 121 122 123 124 126 127 128 129; do printf '卡 %s\n\n**范围**：\n```\nx\n```\n\n**验收场景**：\nE3 场景%s 第一行\n第二行 a|b\n\n**是否核心**：否\n' "$n" "$n" >"${FAKE}/issue/${n}.body"; done
@@ -231,6 +260,83 @@ echo "── 用法"
 (cd "$R" && bash tools/flow/release-acceptance.sh v1.0.0) >/dev/null 2>&1; [ $? = 2 ] && ok "  给的是 tag 不是台账号（旧用法）→ 退出 2" || bad "旧用法退出码不对"
 run 2 "--ledger 不给 --pkg → 退出 2" --ledger 500
 run 2 "--pkg 的 tag 不存在 → 退出 2" --ledger 500 --pkg v9.9.9-test.1
+
+echo "── #1636 只认已 Publish 的正式 Release（跳过草稿 / Prerelease，起止不一致告警，gh 失败 fail-closed）"
+# 造一个隔离仓库：v1.0.0（已 Publish）→ #201 → v1.0.5（Prerelease 无后缀）→ #202 → v1.1.0（git tag 存在但 Release 是 Draft）→ #203 → v1.1.1-rc.1（Prerelease 有后缀）→ #204 → v1.2.0-test.1（-test.）
+R2="${TMP}/repo2"
+mkdir -p "${R2}/tools/flow" "${R2}/.github"
+for f in release-scope.sh release-acceptance.sh acceptance-gate.sh repo-lib.sh decision-lib.sh; do
+  cp "${SRC}/tools/flow/${f}" "${R2}/tools/flow/"
+done
+cp "${SRC}/tools/ci-paths.sh" "${R2}/tools/"
+printf '+ core/**\n' >"${R2}/.github/core-paths.txt"
+(
+  cd "$R2" || exit 1
+  export GIT_TEMPLATE_DIR="${TMP}/tpl"
+  git init --template= -q -b main
+  git config user.email t@t
+  git config user.name t
+  mkdir -p apps/desktop/src
+  c() { git add -A && git -c core.hooksPath=/dev/null commit -q --no-verify -m "$1"; }
+  echo 0 >apps/desktop/src/A.svelte && c "init" && git tag v1.0.0
+  echo 1 >apps/desktop/src/B.svelte && c "feat: B (#201)" && git tag v1.0.5
+  echo 1 >apps/desktop/src/C.svelte && c "feat: C (#202)" && git tag v1.1.0
+  echo 1 >apps/desktop/src/D.svelte && c "feat: D (#203)" && git tag v1.1.1-rc.1
+  echo 1 >apps/desktop/src/E.svelte && c "feat: E (#204)" && git tag v1.2.0-test.1
+  git update-ref refs/remotes/origin/main HEAD
+) || { echo "造 R2 失败"; exit 1; }
+reset_fake
+for n in 201 202 203 204; do printf 'closes #%s\n' "$((n + 100))" >"${FAKE}/pr/${n}.body"; done
+for n in 301 302 303 304; do printf '**验收场景**：\n场景%s\n' "$n" >"${FAKE}/issue/${n}.body"; done
+cat >"${FAKE}/releases.json" <<'JSON'
+[
+  {"tagName": "v1.2.0-test.1", "isDraft": true, "isPrerelease": false, "publishedAt": ""},
+  {"tagName": "v1.1.1-rc.1", "isDraft": false, "isPrerelease": true, "publishedAt": "2026-11-08T00:00:00Z"},
+  {"tagName": "v1.1.0", "isDraft": true, "isPrerelease": false, "publishedAt": ""},
+  {"tagName": "v1.0.5", "isDraft": false, "isPrerelease": true, "publishedAt": "2026-11-01T00:00:00Z"},
+  {"tagName": "v1.0.0", "isDraft": false, "isPrerelease": false, "publishedAt": "2026-10-28T00:00:00Z"}
+]
+JSON
+run_r2() {
+  local want="$1" desc="$2" script="${3}" rc
+  shift 3
+  (cd "$R2" && PATH="${TMP}/bin:${PATH}" FAKE="$FAKE" PPASS_HOOK_REPO=o/r \
+    bash "$script" "$@") >"${TMP}/out" 2>&1
+  rc=$?
+  if [ "$rc" = "$want" ]; then ok "$desc"; else bad "${desc}（期望 ${want}，实际 ${rc}：$(tr '\n' ' ' <"${TMP}/out")）"; fi
+}
+run_r2 0 "跳过草稿 v1.1.0 与 Prerelease（v1.0.5 / v1.1.1-rc.1），取已 Publish 的 v1.0.0 为起点" "tools/flow/release-scope.sh" --to v1.2.0-test.1
+has "验收范围 v1.0.0..v1.2.0-test.1" && ok "  起点是 v1.0.0" || bad "  起点不对：$(cat "${TMP}/out")"
+has "- #201 ui" && has "- #202 ui" && has "- #203 ui" && has "- #204 ui" && ok "  #201..#204 全部进范围（未因草稿 v1.1.0 截断）" || bad "  范围漏项：$(cat "${TMP}/out")"
+
+# 反证：退回旧逻辑（只按 git describe 取 tag，不过滤草稿）→ 误取 v1.1.0，漏掉 #201/#202
+cp "${R2}/tools/flow/release-scope.sh" "${R2}/tools/flow/release-scope-old.sh"
+python3 - "${R2}/tools/flow/release-scope-old.sh" <<'PY'
+import re, sys
+p = sys.argv[1]
+txt = open(p, encoding="utf-8").read()
+old = re.sub(
+    r"last_formal\(\) \{.*?\n\}",
+    "last_formal() { git describe --tags --abbrev=0 --match 'v*' --exclude '*-*' \"$1\" 2>/dev/null; }",
+    txt, count=1, flags=re.S,
+)
+assert old != txt
+open(p, "w", encoding="utf-8").write(old)
+PY
+run_r2 0 "反证：旧逻辑只按 git tag 取到草稿 v1.1.0" "tools/flow/release-scope-old.sh" --to v1.2.0-test.1
+has "验收范围 v1.1.0..v1.2.0-test.1" && ! has "#201" && ok "  旧逻辑确实误取 v1.1.0 并漏掉 #201（证明新逻辑有效）" || bad "  反证没复现：$(cat "${TMP}/out")"
+
+# 已有台账 since= 与最新已 Publish 版不一致：保留原 since= 不自动改写，并输出警告
+printf '[验收] v1.2.0\n\n<!-- release-ledger:begin since=v1.1.0 -->\n<!-- release-ledger:end -->\n' >"${FAKE}/issue/600.body"
+run_r2 0 "已有台账 since=v1.1.0 与最新已 Publish 版 v1.0.0 不一致 → 仍退出 0 更新" "tools/flow/release-scope.sh" --ledger 600 --pkg v1.2.0-test.1
+has "与当前最新已发布的正式版（v1.0.0）不一致" && ok "  输出起点不一致警告" || bad "  缺少不一致警告：$(cat "${TMP}/out")"
+grep -qF "<!-- release-ledger:begin since=v1.1.0 -->" "${FAKE}/issue/600.body" && ok "  保留原 since=v1.1.0 不自动改写" || bad "  since= 被篡改：$(cat "${FAKE}/issue/600.body")"
+
+# gh 查询失败 → fail-closed 退出 1，不回退到 git describe
+touch "${FAKE}/releases.fail"
+run_r2 1 "gh release list 失败 → fail-closed 退出 1" "tools/flow/release-scope.sh" --to v1.2.0-test.1
+has "fail-closed" && ! has "v1.1.0.." && ok "  失败时明确报错且不回退 git describe" || bad "  输出不对：$(cat "${TMP}/out")"
+rm -f "${FAKE}/releases.fail"
 
 echo
 echo "通过 ${PASS}，失败 ${FAIL}"

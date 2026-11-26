@@ -847,6 +847,28 @@ def verify_gate(ck: Check, base: Path, key: dict, rel: dict):
         ck(sc.tag_commit(FORMAL_TAG) == "", f"#1349：{failing} 红 ⇒ 也没有建出 tag {FORMAL_TAG}（验证先于 tag）")
 
 
+def draft_changelog_gate(ck: Check, base: Path, key: dict, rel: dict):
+    """#1636：上一版仍为 Draft 且 CHANGELOG.md 滞留该段正式条目时，plan-builds 必须失败、不建草稿。"""
+    print(f"\n== #1636 草稿版本 CHANGELOG 小节滞留挡发布（正式 tag {FORMAL_TAG}）")
+    bad_changelog = (
+        "# Changelog\n\n"
+        f"## [{FORMAL_TAG[1:]}] - 2099-01-02\n\n{FORMAL_SECTION}\n\n"
+        f"## [{PREV_TAG[1:]}] - 2099-01-01\n\n### Added\n- 滞留草稿条目。\n"
+    )
+    av, dv = CUR_VERSIONS["android"], CUR_VERSIONS["desktop"]
+    origin, sha = make_origin(base, "draft-cl", [(PREV_VERSIONS, {}, [PREV_TAG]), (CUR_VERSIONS, good_notes(), [FORMAL_TAG])],
+                              changelog=bad_changelog)
+    sc = Scenario(base, "draft-cl", origin, sha, key, av, dv, rel)
+    sh([str(sc.bin / "gh"), "release", "create", PREV_TAG, "--draft", "--notes", "draft"], stdout=subprocess.DEVNULL)
+    jobs = sc.release(rel, FORMAL_TAG, jobs=["plan-builds", "create-draft"])
+    job_ok(ck, jobs, "plan-builds", "failure")
+    s = step_is(ck, jobs, "plan-builds", "CHANGELOG 草稿小节去向检查（#1636）", "failure")
+    if s:
+        log = jobs["plan-builds"].step("CHANGELOG 草稿小节去向检查（#1636）").log
+        ck(f"[{PREV_TAG[1:]}]" in log, "#1636：失败日志点名滞留草稿段", log)
+    job_ok(ck, jobs, "create-draft", "skipped")
+
+
 def bad_notes(ck: Check, base: Path, key: str, pub: Path, rel: dict):
     av = BAD_VERSIONS["android"]
     print(f"\n== 正式 tag {BAD_TAG}：说明文件不合规（含网址）⇒ 组装清单必须失败，不带病发布")
@@ -1124,6 +1146,7 @@ def main() -> int:
         test_tag(ck, base, key, test_pub, rel, mirror)
         bad_notes(ck, base, key, pub, rel)
         verify_gate(ck, base, key, rel)
+        draft_changelog_gate(ck, base, key, rel)
         test_per_end(ck, base, key, test_pub, rel)
         # #838：只涨 android ⇒ 桌面两端（macOS / Windows，#788）复用；只涨桌面 ⇒ android 复用；都不涨 ⇒ 红。
         reuse(ck, base, key, pub, rel, "android-only",

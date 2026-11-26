@@ -2,7 +2,7 @@
 # 按版本验收（#1471）：验收单位是「候选版相对上一个正式版、用户看得见的改动」，范围从 git 算。
 #
 #   release-scope.sh [--since <tag>] [--to <ref>]
-#       列出验收范围：<since>..<to>（默认：<to> 往前最近的正式 tag .. origin/main）里 squash 或普通合并的 PR，
+#       列出验收范围：<since>..<to>（默认：<to> 往前最近已 Publish 的正式 Release tag .. origin/main）里 squash 或普通合并的 PR，
 #       逐个用 acceptance-gate.sh classify（带该提交的 diff）判级，ui / core / notes 进范围，每项带关联卡的「验收场景」。
 #       没有 PR 号、却改了用户看得见文件的提交进不了台账，直接红；起点不是 <to> 的祖先也红。
 #       --since 可给任何 tag（例如上一个 test 包，数「自上个 test 包以来用户可见 PR 数」）。
@@ -73,8 +73,66 @@ LEDGER_END='<!-- release-ledger:end -->'
 
 commit_of() { git rev-parse -q --verify "${1}^{commit}" 2>/dev/null; }
 need_ref() { commit_of "$1" >/dev/null || { printf '✗ %s 不存在（先 git fetch --tags）\n' "$1" >&2; exit 2; }; }
-# <ref> 往前最近的正式 tag（正式版 tag 不带「-」，test 包是 v<版本>-test.<N>）。
-last_formal() { git describe --tags --abbrev=0 --match 'v*' --exclude '*-*' "$1" 2>/dev/null; }
+# <ref> 往前最近一个真正 Publish 过的正式 Release tag（排除 Draft、Prerelease 与含 `-` 的预发布后缀）。
+# gh 查询失败时 fail-closed 返回非 0，绝不回退到未过滤的 git describe。
+last_formal() {
+  local ref="$1" raw
+  if ! raw="$(gh release list -R "$REPO" --exclude-drafts --exclude-pre-releases --limit 1000 \
+    --json tagName,isDraft,isPrerelease,publishedAt 2>"${TMP}/err")"; then
+    printf '✗ 查询 GitHub Releases 失败（fail-closed）：%s\n' "$(head -3 "${TMP}/err" | tr '\n' ' ')" >&2
+    return 1
+  fi
+  python3 - "$ref" "$raw" <<'PY'
+import json, re, subprocess, sys
+
+ref, raw = sys.argv[1], sys.argv[2]
+try:
+    rows = json.loads(raw)
+except Exception as exc:
+    sys.stderr.write(f"✗ 解析 GitHub Releases JSON 失败（fail-closed）：{exc}\n")
+    sys.exit(1)
+if not isinstance(rows, list):
+    sys.stderr.write("✗ GitHub Releases 返回格式不是列表（fail-closed）\n")
+    sys.exit(1)
+
+best = None  # (dist, neg_pub, tag)
+for row in rows:
+    if not isinstance(row, dict):
+        continue
+    if row.get("isDraft") is not False or row.get("isPrerelease") is not False:
+        continue
+    tag = str(row.get("tagName") or "")
+    if not re.fullmatch(r"v[^-]+", tag):
+        continue
+    sha_p = subprocess.run(
+        ["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}^{{commit}}"],
+        capture_output=True, text=True,
+    )
+    if sha_p.returncode != 0:
+        continue
+    tag_sha = sha_p.stdout.strip()
+    anc_p = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", tag_sha, ref],
+        capture_output=True, text=True,
+    )
+    if anc_p.returncode != 0:
+        continue
+    cnt_p = subprocess.run(
+        ["git", "rev-list", "--count", f"{tag_sha}..{ref}"],
+        capture_output=True, text=True,
+    )
+    if cnt_p.returncode != 0:
+        continue
+    dist = int(cnt_p.stdout.strip())
+    pub = str(row.get("publishedAt") or "")
+    cand = (-dist, pub, tag)
+    if best is None or cand > best:
+        best = cand
+
+if best is not None:
+    print(best[2])
+PY
+}
 
 # 读 issue / PR 正文（gh 失败返回非 0）。
 read_issue() { gh issue view "$1" -R "$REPO" --json body --jq '.body' 2>"${TMP}/err" | tr -d '\r'; }
@@ -286,9 +344,16 @@ if [ -n "$LEDGER" ]; then
       exit 2
     fi
     SINCE="$LEDGER_SINCE"
+    LATEST_FORMAL="$(last_formal "$PKG")" || exit 1
+    if [ "$LATEST_FORMAL" != "$LEDGER_SINCE" ]; then
+      printf '⚠️ 警告：台账 #%s 记的起点是 %s，与当前最新已发布的正式版（%s）不一致；保留原起点不自动改写（如需重算请另建台账或核对）\n' \
+        "$LEDGER" "$LEDGER_SINCE" "${LATEST_FORMAL:-无}" >&2
+    fi
   fi
-  [ -n "$SINCE" ] || SINCE="$(last_formal "$PKG")"
-  [ -n "$SINCE" ] || { printf '✗ %s 往前找不到正式 tag，用 --since 指定\n' "$PKG" >&2; exit 2; }
+  if [ -z "$SINCE" ]; then
+    SINCE="$(last_formal "$PKG")" || exit 1
+  fi
+  [ -n "$SINCE" ] || { printf '✗ %s 往前找不到已 Publish 的正式 Release tag，用 --since 指定\n' "$PKG" >&2; exit 2; }
   need_ref "$SINCE"
   compute_scope "$SINCE" "$PKG"
   : >"${TMP}/new-items"
@@ -364,8 +429,10 @@ fi
 # ── 只列范围 ─────────────────────────────────────────────────────────────
 [ -n "$TO" ] || TO="origin/main"
 need_ref "$TO"
-[ -n "$SINCE" ] || SINCE="$(last_formal "$TO")"
-[ -n "$SINCE" ] || { printf '✗ %s 往前找不到正式 tag，用 --since 指定\n' "$TO" >&2; exit 2; }
+if [ -z "$SINCE" ]; then
+  SINCE="$(last_formal "$TO")" || exit 1
+fi
+[ -n "$SINCE" ] || { printf '✗ %s 往前找不到已 Publish 的正式 Release tag，用 --since 指定\n' "$TO" >&2; exit 2; }
 need_ref "$SINCE"
 compute_scope "$SINCE" "$TO"
 printf '验收范围 %s..%s：%s 个 PR 里 %s 个用户看得见\n' "$SINCE" "$TO" "$(grep -c . "${TMP}/allprs")" "$(grep -c . "${TMP}/scope")"
