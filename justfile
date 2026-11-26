@@ -313,9 +313,9 @@ mobile-static-check:
 # 断言：两端都从 PPF_BUILD_STAMP 取值；stamp 为空时版本行只显示版本号+构建号、非空时追加；
 # 设备测试 recipe 带 leaveApksInstalledAfterRun=true；本地 `just dev` 用 date '+%m-%d %H:%M' 生成时间戳。
 # recipe 级断言只看对应配方/构建脚本的正文（不看整份文件，避免匹配到注释或断言自身的字符串），
-# 六条 Android/Swift 字面量断言只看非注释行（含跨行 /* ... */ 块注释），配方级断言忽略缩进注释，并带反证：
+# Android/Swift 字面量断言只看非注释行（含跨行 /* ... */ 块注释），配方级断言忽略缩进注释，并带反证：
 # 删掉或缩进注释掉时间戳注入与 connected 命令、删掉/注释掉 iOS 的 Add 行、删掉或注释掉 trim 任一段、
-# 注释掉（// 或 /* */ 包起来）Android 的 System.getenv 并改回返回空串时必须判红。
+# 注释掉（// 或 /* */ 包起来）Android 的 System.getenv 并改回返回空串、删掉或注释掉 HomeScreen appVersionLine() 调用或分支时必须判红。
 build-stamp-check:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -410,6 +410,12 @@ build-stamp-check:
     remove_seg() { # <file> <literal>：删掉第一处字面量（反证用）
       awk -v seg="$2" '{ i = index($0, seg); if (i > 0) $0 = substr($0, 1, i-1) substr($0, i+length(seg)); print }' "$1"
     }
+    comment_kt_line() { # <file> <literal>：将命中字面量的整行用 // 注释掉（反证用）
+      awk -v seg="$2" 'index($0, seg) > 0 { print "// " $0; next } { print }' "$1"
+    }
+    refute_literal() { # <file> <literal> <说明>：反证副本里找不到字面量才判绿
+      if has_literal "$1" "$2"; then ko "反证：${3}后检查仍通过"; else ok "反证：${3} → 判红"; fi
+    }
     tmp="$(mktemp -d "${TMPDIR:-/tmp}/ppass-stamp.XXXXXX")" || { ko "建临时目录失败，反证跑不了"; exit 1; }
     trap 'rm -rf "$tmp"' EXIT
 
@@ -421,13 +427,18 @@ build-stamp-check:
       *) ko "date 产出不是 MM-DD HH:MM（${stamp}）" ;;
     esac
 
-    # 2) Android：构建期读 PPF_BUILD_STAMP 写进 BuildConfig；版本行空/非空两条分支都在。
+    # 2) Android：构建期读 PPF_BUILD_STAMP 写进 BuildConfig；appVersionLine() 空/非空两条分支及调用都在。
+    home_kt="apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt"
     need apps/android/app/build.gradle.kts 'System.getenv("PPF_BUILD_STAMP")' "Android 构建读 PPF_BUILD_STAMP"
     need apps/android/app/build.gradle.kts 'buildConfigField("String", "BUILD_STAMP"' "Android 写 BuildConfig.BUILD_STAMP"
-    need apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt 'BuildConfig.BUILD_STAMP' "版本行读 BUILD_STAMP"
-    need apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt 'if (buildStamp.isBlank())' "stamp 为空时走不追加时间的分支"
-    need apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt '${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})' "空 stamp 分支只显示版本号+构建号"
-    need apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt '$buildStamp' "非空 stamp 追加到版本行"
+    need "$home_kt" 'BuildConfig.VERSION_NAME' "版本行读 VERSION_NAME"
+    need "$home_kt" 'BuildConfig.VERSION_CODE' "版本行读 VERSION_CODE"
+    need "$home_kt" 'BuildConfig.BUILD_STAMP' "版本行读 BUILD_STAMP"
+    need "$home_kt" 'value = appVersionLine()' "版本行调用 appVersionLine()"
+    need "$home_kt" 'if (buildStamp.isBlank())' "stamp 为空时走不追加时间的分支"
+    need "$home_kt" '"$versionName ($versionCode)"' "空 stamp 分支只显示版本号+构建号"
+    need "$home_kt" '"$versionName ($versionCode) $buildStamp"' "非空 stamp 追加到版本行"
+    need "$home_kt" '$buildStamp' "非空 stamp 分支引用 buildStamp"
 
     # 3) iOS：只看「Stamp build time」脚本正文；注释、Delete 行都不算。
     ios_body="$(ios_stamp_script apps/ios/project.yml)"
@@ -551,6 +562,32 @@ build-stamp-check:
     else
       ok "反证：注释掉真正带 trim 的行 → 判红"
     fi
+    # 删掉或注释掉 HomeScreen.kt 的 appVersionLine() 调用与空/非空分支后必须判红。
+    remove_seg "$home_kt" 'value = appVersionLine()' >"$tmp/home-no-call.kt"
+    refute_literal "$tmp/home-no-call.kt" 'value = appVersionLine()' "删掉 appVersionLine() 调用"
+    comment_kt_line "$home_kt" 'value = appVersionLine()' >"$tmp/home-commented-call.kt"
+    refute_literal "$tmp/home-commented-call.kt" 'value = appVersionLine()' "注释掉 appVersionLine() 调用"
+    if has_literal "$tmp/home-commented-call.kt" 'BuildConfig.BUILD_STAMP'; then
+      ok "对照：注释调用副本仍保留 appVersionLine 定义，红的只是调用断言"
+    else
+      ko "反证副本意外丢了 BuildConfig.BUILD_STAMP，红的不是调用断言"
+    fi
+    remove_seg "$home_kt" 'if (buildStamp.isBlank())' >"$tmp/home-no-blank.kt"
+    refute_literal "$tmp/home-no-blank.kt" 'if (buildStamp.isBlank())' "删掉 buildStamp.isBlank() 分支判断"
+    comment_kt_line "$home_kt" 'if (buildStamp.isBlank())' >"$tmp/home-commented-blank.kt"
+    refute_literal "$tmp/home-commented-blank.kt" 'if (buildStamp.isBlank())' "注释掉 buildStamp.isBlank() 分支判断"
+    remove_seg "$home_kt" '"$versionName ($versionCode)"' >"$tmp/home-no-empty-fmt.kt"
+    refute_literal "$tmp/home-no-empty-fmt.kt" '"$versionName ($versionCode)"' "删掉空 stamp 分支版本串"
+    if has_literal "$tmp/home-no-empty-fmt.kt" '"$versionName ($versionCode) $buildStamp"'; then
+      ok "对照：删掉空 stamp 版本串仍保留非空分支，两者未互相掩盖"
+    else
+      ko "反证副本意外丢了非空 stamp 分支"
+    fi
+    comment_kt_line "$home_kt" '"$versionName ($versionCode)"' >"$tmp/home-commented-empty-fmt.kt"
+    refute_literal "$tmp/home-commented-empty-fmt.kt" '"$versionName ($versionCode)"' "注释掉空 stamp 分支版本串"
+    remove_seg "$home_kt" '"$versionName ($versionCode) $buildStamp"' >"$tmp/home-no-stamped-fmt.kt"
+    refute_literal "$tmp/home-no-stamped-fmt.kt" '"$versionName ($versionCode) $buildStamp"' "删掉非空 stamp 分支版本串"
+    refute_literal "$tmp/home-no-stamped-fmt.kt" '$buildStamp' '删掉非空 stamp 分支后的 $buildStamp'
 
     # 6) #1890 回归：has_literal 走的是「读完整输入」的路径，大文件里真实存在的字面量必须判绿。
     #    旧写法（管道喂 grep -q + pipefail）在 38KB 以上必假红——下面两对就是那个假红的判据。
@@ -561,7 +598,7 @@ build-stamp-check:
       if has_literal "$1" 'zzz-1890-这个字面量不存在'; then ko "反证：$1 里不存在的字面量被判成有"; else ok "反证：$1 里不存在的字面量 → 判红"; fi
     }
     check_large AGENTS.md 'just doctor'
-    check_large apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt 'BuildConfig.BUILD_STAMP'
+    check_large "$home_kt" 'BuildConfig.BUILD_STAMP'
 
     exit "$fail"
 
