@@ -111,14 +111,17 @@ object FolderAccess {
             false
         }
         if (!sameDirectory) return false
+        val newTreeUri = newUri.toString()
+        // 禁止两个来源共用同一树 URI，防止后续移除任一方时释放对方仍在用的持久授权。
+        if (registry.allRecords().any { it.id != sourceId && it.treeUri == newTreeUri }) return false
         if (!takePersistable(app, newUri)) return false
-        if (!registry.reauthorize(sourceId, newUri.toString())) {
+        if (!registry.reauthorize(sourceId, newTreeUri)) {
             // 失败回滚；同 URI 的重授权（newUri == 旧记录的 treeUri）不许释放——那正是旧授权本身。
-            if (newUri.toString() != old.treeUri) releasePersistable(app, newUri)
+            if (newTreeUri != old.treeUri) releasePersistable(app, newUri)
             return false
         }
         // 用户重选同一目录时新 URI 就是旧 URI：release 会把刚 take 的授权放掉，重授权反而失访。
-        if (newUri.toString() != old.treeUri) releasePersistable(app, oldUri)
+        if (newTreeUri != old.treeUri) releasePersistable(app, oldUri)
         return true
     }
 

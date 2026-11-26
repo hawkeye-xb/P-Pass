@@ -178,4 +178,39 @@ class FolderAccessTest {
         every { resolver.query(badChildren, any(), any(), any(), any()) } returns okCursor2
         assertTrue("全部目录恢复可读时 areAllReadable 必须返回 true", FolderAccess.areAllReadable(context))
     }
+
+    @Test
+    fun `reauthorize rejects uri already registered by another source without touching persistable permissions`() {
+        val rawA = "content://com.android.externalstorage.documents/tree/primary%3ADCIM%2FCamera"
+        val rawB = "content://com.android.externalstorage.documents/tree/1234-5678%3ADCIM%2FCamera"
+        val rawNew = "content://com.android.externalstorage.documents/tree/9999-8888%3ADCIM%2FCamera"
+        val uriA = mockTreeUri(rawA, "primary:DCIM/Camera")
+        val uriB = mockTreeUri(rawB, "1234-5678:DCIM/Camera")
+        val uriNew = mockTreeUri(rawNew, "9999-8888:DCIM/Camera")
+
+        val registry = FolderAccess.registry(context)
+        val sourceA = registry.addFolder(rawA, "Camera A")
+        val sourceB = registry.addFolder(rawB, "Camera B")
+
+        assertFalse(
+            "目标 URI 已被另一来源占用时必须直接拒绝，防止后续移除误释放对方授权",
+            FolderAccess.reauthorize(context, sourceA, uriB),
+        )
+        assertEquals(rawA, registry.record(sourceA)?.treeUri)
+        assertEquals(rawB, registry.record(sourceB)?.treeUri)
+        verify(exactly = 0) { resolver.takePersistableUriPermission(uriB, any()) }
+        verify(exactly = 0) { resolver.releasePersistableUriPermission(uriB, any()) }
+        verify(exactly = 0) { resolver.releasePersistableUriPermission(uriA, any()) }
+
+        assertTrue(
+            "同一 sourceId 使用原 URI 重授仍应放行",
+            FolderAccess.reauthorize(context, sourceA, uriA),
+        )
+        assertTrue(
+            "同一 sourceId 使用未登记的新卷 URI 重授仍应放行",
+            FolderAccess.reauthorize(context, sourceA, uriNew),
+        )
+        assertEquals(rawNew, registry.record(sourceA)?.treeUri)
+        assertEquals(rawB, registry.record(sourceB)?.treeUri)
+    }
 }
