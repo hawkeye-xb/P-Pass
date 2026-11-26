@@ -199,7 +199,7 @@ jobs:
           if ! [[ "$TAG" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
             echo "test 包（${TAG}）不查 CHANGELOG 草稿小节"; exit 0
           fi
-          tools/release/changelog-section.sh --check
+          tools/release/changelog-section.sh --check --current "$TAG"
 
       - name: Plan builds (#838)
         id: plan
@@ -1282,16 +1282,19 @@ jobs:
 
       # UPD-13（#660）漏判门禁：改了某端的构建输入却没涨该端的版本号 → 直接红。
       # 只在正式 tag 上判定（test tag 的版本号就是 tag 名，不适用两条线模型）。
+      # #1636：改按「上一个已 Publish 正式 Release」为基线，跳过未发布草稿 tag。
       - name: Version bump gate (UPD-13)
         if: ${{ !contains(steps.tag.outputs.tag, '-test.') }}
         env:
           TAG: ${{ steps.tag.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           git fetch --tags --force --quiet
-          PREV=$(git tag -l 'v*' --sort=-v:refname | grep -vx "$TAG" | head -1 || true)
+          PREV="$(tools/release/prev-published-tag.sh --exclude "$TAG" HEAD)"
           if [ -z "$PREV" ]; then
-            echo "::notice::没有上一个 v* tag，跳出版本门禁"
+            echo "::notice::没有上一个已 Publish 正式 Release，跳出版本门禁"
             exit 0
           fi
           # #1349：发版时 tag 还不存在（下一步才建），第二个参数用已检出的提交，补跑时它就是 tag 的提交。
@@ -1299,7 +1302,7 @@ jobs:
 
       # #741：正式 tag 某端版本号涨了、却没有该版本的手写更新说明 ⇒ 告警，**不阻断**
       # （允许「无用户可见变更」——弹窗显示默认文案）。比较口径与上面的版本门禁相同
-      # （上一个 v* tag 的 release/versions.json）。脚本本身恒退出 0，
+      # （上一个已 Publish 正式 Release 的 release/versions.json，#1636）。脚本本身恒退出 0，
       # continue-on-error 再兜一层：这一步无论如何不许拦发布。
       # REL-12（#711）：逻辑在 tools/release/notes-presence.sh，`just release-dry-run` 跑同一份。
       - name: Release notes presence (#741, warn only)
@@ -1307,6 +1310,8 @@ jobs:
         continue-on-error: true
         env:
           TAG: ${{ steps.tag.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: tools/release/notes-presence.sh
 
       - name: Compose skeleton notes

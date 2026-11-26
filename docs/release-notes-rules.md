@@ -96,8 +96,9 @@
 
 ### 正式 tag 的缺失告警
 
-`release.yml` 的 `create-draft` 在版本门禁之后比较上一个 `v*` tag 与本次的
-`release/versions.json`：某端版本号涨了却没有该版本的说明文件 ⇒ `::warning::`，**不阻断**
+`release.yml` 的 `create-draft` 在版本门禁之后比较**上一个已 Publish 正式 Release** tag 与本次的
+`release/versions.json`（由 `tools/release/prev-published-tag.sh` 与 `tools/release/notes-presence.sh` 执行，
+同时 `Version bump gate (UPD-13)` 也采用同一基线，#1636）：某端版本号涨了却没有该版本的说明文件 ⇒ `::warning::`，**不阻断**
 （允许「无用户可见变更」，弹窗显示默认文案）。`desktop` 号只对应 `macos`——正式 tag 发版
 不发布 Windows，所以不对 Windows 告警。
 

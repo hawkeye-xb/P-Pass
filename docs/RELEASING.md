@@ -105,7 +105,8 @@
    > **UPD-13 门禁**：`create-draft` 第一步跑 `tools/check-version-bump.sh` ——
    > 改了 `crates/**` / `apps/desktop/**` / `assets/**` / `Cargo.*` 却没涨
    > `desktop` 号，或改了 `apps/android/**` 却没涨 `android` 号，**直接红**
-   > （漏判门禁，只对正式 tag 生效；test tag 的版本号就是 tag 名）。
+   > （漏判门禁，只对正式 tag 生效；test tag 的版本号就是 tag 名；基线取上一个已 Publish 正式 Release，
+   > 由 `tools/release/prev-published-tag.sh` 判定，#1636）。
    > **Build once, promote (`#838`)**: on a formal tag, `plan-builds`
    > (`tools/release/plan-builds.sh`) compares each platform's version in
    > `release/versions.json` with that platform's manifest in the Latest formal
