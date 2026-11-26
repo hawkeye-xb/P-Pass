@@ -38,7 +38,7 @@ final class SingleTransferStatusTests: XCTestCase {
         XCTAssertNil(SettingsLayout.Condition.wifi.route)
         XCTAssertNil(SettingsLayout.Condition.notifications.route)
         XCTAssertEqual(Set(SettingsScreen.Route.allCases),
-                       Set([SettingsScreen.Route.bucket, .storage, .diagnostics, .more]))
+                       Set([SettingsScreen.Route.bucket, .storage, .diagnostics, .more, .about]))
     }
 
     /// 决定页主按钮进范围页，范围页返回回到决定页；两个单次入口各自只打开对应的选择器。

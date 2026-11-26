@@ -40,11 +40,14 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: vi.fn(async () => null) }));
 vi.mock("@tauri-apps/plugin-opener", () => ({
   revealItemInDir: vi.fn(),
-  openUrl: vi.fn(),
+  openUrl: vi.fn(async () => {}),
 }));
 
+import { fireEvent } from "@testing-library/svelte";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import App from "./App.svelte";
-import { t } from "./lib/i18n.js";
+import { t, setLocale } from "./lib/i18n.js";
+import { aboutLinks } from "./lib/aboutLinks.js";
 import { daemonMethodOf } from "./lib/daemonApi.js";
 
 /** 常驻服务正常的桌面；`relation` 是 daemon 下发的 status.shell_relation。 */
@@ -142,5 +145,70 @@ describe("#1044 设置页「关于」", () => {
     expect(screen.getByTestId("about-shell-version").textContent).toContain("v0.9.5");
     expect(screen.getByTestId("about-service-version").textContent).toContain("v0.9.4");
     expect(screen.getByTestId("about-versions-differ").textContent).toBe(t("ui.about_versions_differ"));
+  });
+});
+
+describe("#2065 设置页「关于」外链入口", () => {
+  beforeEach(() => {
+    openUrl.mockClear();
+    setLocale("zh-CN");
+  });
+
+  it("中文界面渲染全部外链并标注 AGPL-3.0，点击调用 openUrl 打开中文地址与邮件/仓库", async () => {
+    desktop();
+    render(App);
+    await settle();
+    await goto("settings");
+
+    const expected = [
+      ["website", "https://p-pass.hawkeye-xb.com/zh/"],
+      ["faq", "https://p-pass.hawkeye-xb.com/zh/faq/"],
+      ["feedback-email", "mailto:ppass@hawkeye-xb.com"],
+      ["feedback-discussions", "https://github.com/hawkeye-xb/P-Pass/discussions"],
+      ["source", "https://github.com/hawkeye-xb/P-Pass"],
+      ["privacy", "https://p-pass.hawkeye-xb.com/zh/privacy/"],
+    ];
+
+    expect(screen.getByTestId("about-link-source").textContent).toContain("AGPL-3.0");
+    expect(screen.getByTestId("about-link-feedback-email").textContent).toContain("ppass@hawkeye-xb.com");
+
+    for (const [id, url] of expected) {
+      const btn = screen.getByTestId(`about-link-${id}`);
+      expect(btn.tagName).toBe("BUTTON");
+      expect(btn.getAttribute("type")).toBe("button");
+      await fireEvent.click(btn);
+      await settle();
+      expect(openUrl).toHaveBeenLastCalledWith(url);
+    }
+    expect(openUrl).toHaveBeenCalledTimes(expected.length);
+  });
+
+  it("英文界面外链指向英文页并保留全套入口", async () => {
+    setLocale("en-US");
+    expect(aboutLinks("en-US").map((l) => l.url)).toEqual([
+      "https://p-pass.hawkeye-xb.com/",
+      "https://p-pass.hawkeye-xb.com/faq/",
+      "mailto:ppass@hawkeye-xb.com",
+      "https://github.com/hawkeye-xb/P-Pass/discussions",
+      "https://github.com/hawkeye-xb/P-Pass",
+      "https://p-pass.hawkeye-xb.com/privacy/",
+    ]);
+
+    desktop();
+    render(App);
+    await settle();
+    await goto("settings");
+
+    await fireEvent.click(screen.getByTestId("about-link-website"));
+    await settle();
+    expect(openUrl).toHaveBeenLastCalledWith("https://p-pass.hawkeye-xb.com/");
+
+    await fireEvent.click(screen.getByTestId("about-link-faq"));
+    await settle();
+    expect(openUrl).toHaveBeenLastCalledWith("https://p-pass.hawkeye-xb.com/faq/");
+
+    await fireEvent.click(screen.getByTestId("about-link-privacy"));
+    await settle();
+    expect(openUrl).toHaveBeenLastCalledWith("https://p-pass.hawkeye-xb.com/privacy/");
   });
 });

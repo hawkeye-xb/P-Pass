@@ -13,8 +13,8 @@ site|apps/android/app/src/main/AndroidManifest.xml|Android INTERNET 权限：P2P
 #
 # ── host：产品源码 / 配置里的外部主机 ──
 host|p-pass-dl.hawkeye-xb.com|官方下载站：更新清单与安装包（桌面 + Android）
-host|p-pass.hawkeye-xb.com|官方主页与桌面端下载页：欢迎页系统分享面板分享链接（不发网络请求）
-host|github.com|更新清单的 GitHub Releases 备用源，以及「发行页」链接
+host|p-pass.hawkeye-xb.com|官方主页与桌面端下载页：欢迎页系统分享面板分享链接及关于页外链（官网/FAQ/隐私政策，不发网络请求）
+host|github.com|更新清单的 GitHub Releases 备用源，以及「发行页」、开源仓库与 Discussions 链接
 #
 # ── dep：网络类依赖 ──
 dep|tauri-plugin-updater|桌面更新（Rust 侧）

@@ -6,10 +6,14 @@
 
 package com.hawkeyexb.ppass.ui.accessibility
 
+import android.graphics.Rect
 import android.os.Build
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.backup.MediaAccess
@@ -20,6 +24,8 @@ import com.hawkeyexb.ppass.ui.FolderScreen
 import com.hawkeyexb.ppass.ui.FolderUi
 import com.hawkeyexb.ppass.ui.HomeScreen
 import com.hawkeyexb.ppass.ui.ManualPairScreen
+import com.hawkeyexb.ppass.ui.TwoTabs
+import com.hawkeyexb.ppass.ui.appVersionLine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -179,9 +185,82 @@ class NativeControlsScreensTest {
             // 按现有的返回层级分两步断言，不为测试改业务。
             clickByText(label(R.string.back))
             awaitHeading(label(R.string.more_label))
+            clickByText(label(R.string.about_label))
+            awaitHeading(label(R.string.about_label))
+            nodeByText(label(R.string.about_tagline))
+            nodeByText(label(R.string.about_website))
+            nodeByText(label(R.string.about_faq))
+            nodeByText(label(R.string.about_feedback_email))
+            nodeByText(label(R.string.about_feedback_discussions))
+            nodeByText(label(R.string.about_source_code))
+            nodeByText(label(R.string.about_privacy))
+            clickByText(label(R.string.back))
+            awaitHeading(label(R.string.more_label))
             clickByText(label(R.string.back))
             nodeByText(label(R.string.auto_backup_rule_label))
             saveTree("native-home-secondary.txt", a11yRoot())
+        }
+    }
+
+    @Test
+    fun about_page_hides_bottom_tabs_displays_all_entries_at_1_5x_and_opens_links() {
+        val openedUrls = mutableListOf<String>()
+        val secondaryOpen = mutableStateOf(false)
+        hostCompose({
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 1.5f)) {
+                TwoTabs(
+                    tab = 1,
+                    onTab = {},
+                    showTabBar = !secondaryOpen.value,
+                    photos = {},
+                    backup = {
+                        HomeScreen(
+                            storageName = "storage-pc",
+                            state = BackupUiState.Idle,
+                            onBackupNow = {},
+                            onStorageDetailOpenChange = { secondaryOpen.value = it },
+                            onOpenExternalUrl = { openedUrls += it },
+                        )
+                    },
+                )
+            }
+        }) {
+            nodeByText(label(R.string.tab_photos))
+            nodeByText(label(R.string.tab_settings))
+            clickByText(label(R.string.more_label))
+            awaitHeading(label(R.string.more_label))
+            assertFalse(
+                "进入二级页后底部导航栏必须收起",
+                a11yRoot()?.let { root ->
+                    com.hawkeyexb.ppass.ui.accessibility.walk(root)
+                        .any { it.text?.toString() == label(R.string.tab_photos) }
+                } ?: false,
+            )
+
+            clickByText(label(R.string.about_label))
+            awaitHeading(label(R.string.about_label))
+            for (expectedText in listOf(
+                "P-Pass",
+                appVersionLine(),
+                label(R.string.about_tagline),
+                label(R.string.about_website),
+                label(R.string.about_faq),
+                label(R.string.about_feedback_email),
+                "ppass@hawkeye-xb.com",
+                label(R.string.about_feedback_discussions),
+                label(R.string.about_source_code),
+                label(R.string.about_source_license),
+                label(R.string.about_privacy),
+            )) {
+                val node = nodeByText(expectedText)
+                val rect = Rect()
+                node.getBoundsInScreen(rect)
+                assertTrue("1.5x 字号下「$expectedText」必须有非空可见边界: $rect", rect.width() > 0 && rect.height() > 0)
+            }
+            clickByText(label(R.string.about_feedback_email))
+            assertEquals(listOf("mailto:ppass@hawkeye-xb.com"), openedUrls)
+            saveTree("native-about-1_5x.txt", a11yRoot())
         }
     }
 

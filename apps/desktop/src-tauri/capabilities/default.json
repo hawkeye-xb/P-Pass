@@ -17,6 +17,18 @@
       "allow": [
         {
           "url": "https://github.com/hawkeye-xb/P-Pass/releases/*"
+        },
+        {
+          "url": "https://p-pass.hawkeye-xb.com/*"
+        },
+        {
+          "url": "https://github.com/hawkeye-xb/P-Pass"
+        },
+        {
+          "url": "https://github.com/hawkeye-xb/P-Pass/discussions"
+        },
+        {
+          "url": "mailto:ppass@hawkeye-xb.com"
         }
       ]
     },

@@ -10,7 +10,7 @@ struct SettingsScreen: View {
     @State private var asking = false
     @State private var showFilePicker = false
 
-    enum Route: CaseIterable, Hashable { case bucket, storage, diagnostics, more }
+    enum Route: CaseIterable, Hashable { case bucket, storage, diagnostics, more, about }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -88,6 +88,7 @@ struct SettingsScreen: View {
             case .bucket: path = [.bucket]
             case .storage: path = [.storage]
             case .diagnostics: path = [.diagnostics]
+            case .about: path = [.about]
             default: break
             }
         }
@@ -104,6 +105,7 @@ struct SettingsScreen: View {
         case .storage: StorageDetailScreen()
         case .diagnostics: DiagnosticsScreen()
         case .more: moreScreen
+        case .about: AboutScreen()
         }
     }
 
@@ -202,6 +204,7 @@ struct SettingsScreen: View {
             Section {
                 row(L.s("storage_computer"), value: "", route: .storage)
                 row(L.s("setting_version"), value: AppVersion.current.displayLine, route: .diagnostics)
+                row(L.s("about_label"), value: "", route: .about)
             }
             .ppTinted(PPUI.Surface.settingsCard)
         }

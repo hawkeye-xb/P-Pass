@@ -59,6 +59,8 @@
   import ClockIcon from "@lucide/svelte/icons/clock";
   import SettingsIcon from "@lucide/svelte/icons/settings";
   import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
+  import ExternalLinkIcon from "@lucide/svelte/icons/external-link";
+  import { aboutLinks } from "./lib/aboutLinks.js";
   import { humanTime } from "./lib/humanTime.js";
   import { byActivity, deviceRow, overviewRows } from "./lib/deviceOverview.js";
   import { disconnectedClause, noDevicesText } from "./lib/deviceCounts.js";
@@ -1165,6 +1167,15 @@
       await openUrl(RELEASES_URL);
     } catch (e) {
       console.warn("[updater] open releases page failed:", e);
+    }
+  }
+
+  async function openAboutLink(url) {
+    try {
+      await openUrl(url);
+    } catch (e) {
+      console.warn("[about] open external link failed:", url, e);
+      flashMessage(t("ui.about_open_failed"), "warning");
     }
   }
 
@@ -2382,6 +2393,22 @@
                     {serviceVersion ? `v${serviceVersion}` : "—"}
                   </span>
                 </div>
+                {#each aboutLinks(getLocale()) as link (link.id)}
+                  <button
+                    type="button"
+                    class="flex w-full cursor-pointer items-center justify-between gap-[12px] border-t border-divider bg-transparent px-[22px] py-[13px] text-left font-sans text-[15px] font-medium text-ink transition-colors outline-none hover:bg-linen focus-visible:ring-3 focus-visible:ring-ring"
+                    data-testid={`about-link-${link.id}`}
+                    onclick={() => openAboutLink(link.url)}
+                  >
+                    <span>{t(link.labelKey)}</span>
+                    <span class="flex items-center gap-[6px] text-[13.5px] font-normal text-ink-40">
+                      {#if link.valueKey || link.value}
+                        <span>{link.valueKey ? t(link.valueKey) : link.value}</span>
+                      {/if}
+                      <ExternalLinkIcon class="size-[15px] shrink-0" aria-hidden="true" />
+                    </span>
+                  </button>
+                {/each}
               </Card>
               {#if canStopService(serviceState)}
                 <Card variant="danger" class="text-[16px]">

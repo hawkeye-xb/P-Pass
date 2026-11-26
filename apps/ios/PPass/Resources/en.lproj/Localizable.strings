@@ -193,6 +193,15 @@
 "auto_backup_rule_none_hint" = "No access to photos.";
 "auto_backup_from_today_empty" = "Photos you take today will be sent to your computer automatically. Go take one.";
 "more_label" = "More";
+"about_label" = "About";
+"about_tagline" = "A cross-platform family photo hub, without the server setup.";
+"about_website" = "Website";
+"about_faq" = "FAQ";
+"about_feedback_email" = "Feedback (Email)";
+"about_feedback_discussions" = "Feedback (Discussions)";
+"about_source_code" = "Source code";
+"about_source_license" = "AGPL-3.0";
+"about_privacy" = "Privacy policy";
 "source_kind_album" = "Album";
 "source_kind_folder" = "Folder";
 "source_selected" = "Selected";
