@@ -30,6 +30,21 @@ fun mimeExtension(mime: String): String =
 suspend fun saveToGallery(context: Context, file: File, asset: AssetMeta): SaveResult =
     com.hawkeyexb.ppass.backup.saveToGallery(context, file, asset)
 
+const val DESKTOP_DOWNLOAD_URL = "https://p-pass.hawkeye-xb.com"
+
+fun shareTextIntent(
+    text: String,
+    chooserTitle: String?,
+    makeIntent: (String) -> Intent = { Intent(it) },
+    makeChooser: (Intent, CharSequence?) -> Intent = { target, title -> Intent.createChooser(target, title) },
+): Intent {
+    val send = makeIntent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    return makeChooser(send, chooserTitle)
+}
+
 fun shareIntent(context: Context, file: File, asset: AssetMeta, chooserTitle: String?): Intent {
     val isVideo = asset.mediaType.startsWith("video")
     val mime = sniffMimeFromHeader(file, isVideo)

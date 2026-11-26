@@ -5,6 +5,7 @@
 "welcome_step1" = "1 · Install and open P-Pass on the computer";
 "welcome_step2" = "2 · Scan the QR code or enter the pairing code to connect to the computer";
 "welcome_step3" = "3 · Choose the albums and folders to back up";
+"welcome_desktop_link" = "No desktop app yet? Get the link";
 "scan_header_title" = "Scan to connect";
 "scan_hint" = "Point at the pairing QR code\non your computer's screen";
 "scan_manual_link" = "Can't scan? Pair manually";

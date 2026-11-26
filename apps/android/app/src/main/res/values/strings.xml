@@ -9,6 +9,7 @@
     <string name="welcome_step1">1 · Install and open P-Pass on the computer</string>
     <string name="welcome_step2">2 · Scan the QR code or enter the pairing code to connect to the computer</string>
     <string name="welcome_step3">3 · Choose the albums and folders to back up</string>
+    <string name="welcome_desktop_link">No desktop app yet? Get the link</string>
 
     <!-- Scan (M2/M3, full-page-states doc) -->
     <string name="scan_header_title">Scan to connect</string>

@@ -94,6 +94,7 @@ import com.hawkeyexb.ppass.transport.pairWithQr
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import com.hawkeyexb.ppass.transport.sendUnpairNoticeOnce
 import com.hawkeyexb.ppass.ui.BucketScreen
+import com.hawkeyexb.ppass.ui.DESKTOP_DOWNLOAD_URL
 import com.hawkeyexb.ppass.ui.DecisionScreen
 import com.hawkeyexb.ppass.ui.FolderUi
 import com.hawkeyexb.ppass.ui.GuideFacts
@@ -123,6 +124,7 @@ import com.hawkeyexb.ppass.ui.pairRefusalTitleRes
 import com.hawkeyexb.ppass.ui.photosGuideOf
 import com.hawkeyexb.ppass.ui.scopeEmptyHintShown
 import com.hawkeyexb.ppass.ui.selectedExistingCount
+import com.hawkeyexb.ppass.ui.shareTextIntent
 import com.hawkeyexb.ppass.ui.twoTabsBackground
 import com.hawkeyexb.ppass.update.UpdateUiController
 import kotlinx.coroutines.Dispatchers
@@ -584,6 +586,18 @@ fun PPassApp() {
                 }
             },
             onManual = { screen = Screen.ManualPair },
+            onShareDesktopLink = {
+                PLog.i("PPassFlow", "welcome: share desktop download link")
+                val intent = shareTextIntent(
+                    DESKTOP_DOWNLOAD_URL,
+                    context.getString(R.string.share_to),
+                )
+                try {
+                    context.startActivity(intent)
+                } catch (_: android.content.ActivityNotFoundException) {
+                    PLog.w("PPassFlow", "welcome: no activity for share desktop download link")
+                }
+            },
         )
 
         is Screen.Scan -> ScanScreen(

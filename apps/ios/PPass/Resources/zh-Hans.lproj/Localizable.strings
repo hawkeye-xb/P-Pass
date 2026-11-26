@@ -5,6 +5,7 @@
 "welcome_step1" = "1 · 在电脑上安装并打开 P-Pass";
 "welcome_step2" = "2 · 扫码或输入配对码，连接电脑";
 "welcome_step3" = "3 · 选择要备份的相册和文件夹";
+"welcome_desktop_link" = "还没装电脑端？获取下载链接";
 "scan_header_title" = "扫码连接";
 "scan_hint" = "对准电脑屏幕上的\n配对二维码";
 "scan_manual_link" = "无法扫码？手动配对";
