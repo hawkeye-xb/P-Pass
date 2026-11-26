@@ -594,7 +594,10 @@ doc-anchors-test:
 changelog-section-test:
   @bash tools/test-changelog-section.sh
 
-flow-tests: doc-anchors-test changelog-section-test hooks-test flow-engine-test flow-ci-review-test flow-gate-status-test macos-runner-test main-red-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test dead-i18n-test desktop-dead-components-test
+pr-watch-test:
+  @bash tools/test-pr-watch.sh
+
+flow-tests: doc-anchors-test changelog-section-test hooks-test flow-engine-test flow-ci-review-test flow-gate-status-test macos-runner-test main-red-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test dead-i18n-test desktop-dead-components-test pr-watch-test
   @echo "==> flow-tests: green ✅"
 
 flow-engine-test:
@@ -925,6 +928,11 @@ flow-ci-review-test:
 # PR 卡点：列出未过的检查、未解决的评审线程、冲突、是否开了自动合入。
 pr-status pr:
     bash tools/flow/pr-status.sh {{pr}}
+
+# 仓库级多 PR 边沿触发监视器（0 空转 token，状态跃迁才退出）。
+[positional-arguments]
+pr-watch *args:
+    bash tools/flow/pr-watch.sh "$@"
 
 # 回复一条评审线程并标为已解决（线程 ID 用 just pr-status 查）；只关闭用 tools/flow/pr-thread.sh --resolve-only <ID>。
 [positional-arguments]
