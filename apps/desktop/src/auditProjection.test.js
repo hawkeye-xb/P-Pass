@@ -69,4 +69,9 @@ describe("活动记录的用户投影", () => {
       ),
     ).toBe("妈妈的手机 · #01234567");
   });
+
+  it("#2079：device.disconnected 与 device.revoked 各有独立活动文案", () => {
+    expect(auditText({ kind: "device.disconnected" })).toBe("已断开设备");
+    expect(auditText({ kind: "device.revoked" })).toBe("已移除设备");
+  });
 });

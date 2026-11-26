@@ -60,6 +60,8 @@ export function auditText(event) {
       return payload.oldName && payload.newName
         ? t("ui.audit_renamed_from_to", { old: payload.oldName, new: payload.newName })
         : t("ui.audit_renamed");
+    case "device.disconnected":
+      return t("ui.audit_disconnected");
     case "device.revoked":
       return t("ui.audit_revoked");
     case "device.unpaired":

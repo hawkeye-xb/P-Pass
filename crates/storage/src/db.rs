@@ -17,7 +17,7 @@ pub(crate) type PairingIndex = Arc<RwLock<HashMap<Vec<u8>, Pairing>>>;
 
 /// Embedded migrations — the schema ships inside the binary, so a daemon
 /// upgrade migrates the index on first open.
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+pub(crate) static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 /// Handle to the index database. Cheap to clone (wraps a pool).
 #[derive(Clone)]
@@ -92,7 +92,7 @@ impl Db {
 
     /// 迁移，然后从库加载配对记录的内存副本（库就是正本）。
     async fn ready(pool: SqlitePool) -> Result<Db> {
-        MIGRATOR.run(&pool).await?;
+        run_migrations(&pool).await?;
         let db = Db {
             pool,
             pairings: Arc::default(),
@@ -108,7 +108,7 @@ impl Db {
         pool: SqlitePool,
         vault: Arc<dyn PairingVault>,
     ) -> Result<(Db, VaultAlignment)> {
-        MIGRATOR.run(&pool).await?;
+        run_migrations(&pool).await?;
         let db = Db {
             pool,
             pairings: Arc::default(),
@@ -165,6 +165,23 @@ impl Db {
     pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
     }
+}
+
+/// 在事务外临时关闭外键约束后执行嵌入式迁移，完成后无条件恢复 `PRAGMA foreign_keys = ON`。
+/// 原因：SQLite 禁止在事务内修改 `foreign_keys`，而 `sqlx-sqlite` 的迁移总是在事务内执行，
+/// 0015 重建被 `pairing` 外键引用的 `device_profile` 表必须在迁移前关闭外键检查。
+async fn run_migrations(pool: &SqlitePool) -> Result<()> {
+    let mut conn = pool.acquire().await?;
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await?;
+    let res = MIGRATOR.run(&mut *conn).await;
+    let restore = sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&mut *conn)
+        .await;
+    res?;
+    restore?;
+    Ok(())
 }
 
 #[cfg(test)]

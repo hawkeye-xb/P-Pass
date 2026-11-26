@@ -208,12 +208,14 @@ try {
     if ($LASTEXITCODE -ne 0) { Write-Error "browse 失败 exit=$LASTEXITCODE"; exit 1 }
     Write-Host "    browse 输出行数: $((($br -split "`n") | Where-Object { $_ }).Count)"
 
-    Write-Host "── 5. IPC 吊销 + revoke-check"
-    # 吊销目标 = 配对设备（testclient 本机）的 NodeId，从 pair.log 提取；
-    # 方法真名 device.revoke（不存在 pairing.revoke），params 用 node_id。
+    Write-Host "── 5. IPC 断开 + 移除 + revoke-check"
+    # 断开目标 = 配对设备（testclient 本机）的 NodeId，从 pair.log 提取；
+    # 已配对设备必须先调 device.disconnect，再调 device.revoke（不存在 pairing.revoke），params 用 node_id。
     $dm = Select-String -Path $pairLog -Pattern "本机 NodeId: ([0-9a-fA-F]{64})" | Select-Object -First 1
     $deviceNode = if ($dm) { $dm.Matches[0].Groups[1].Value } else { $null }
     if (-not $deviceNode) { Write-Error "pair.log 未找到配对设备 NodeId，无法吊销"; exit 1 }
+    $resp = Invoke-Ipc "device.disconnect" ("{`"node_id`":`"$deviceNode`"}")
+    $null = Assert-IpcOk "device.disconnect" $resp   # H-09b：Resp 不许丢弃
     $resp = Invoke-Ipc "device.revoke" ("{`"node_id`":`"$deviceNode`"}")
     $null = Assert-IpcOk "device.revoke" $resp   # H-09b：Resp 不许丢弃
     # revoke-check 复用配对身份（默认 testclient.key，cwd 一致）连 daemon，

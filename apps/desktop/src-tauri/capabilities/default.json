@@ -42,6 +42,7 @@
     "allow-daemon-pairing-confirm",
     "allow-daemon-devices-list",
     "allow-daemon-device-watermarks",
+    "allow-daemon-device-disconnect",
     "allow-daemon-device-revoke",
     "allow-daemon-device-rename",
     "allow-daemon-device-folder",

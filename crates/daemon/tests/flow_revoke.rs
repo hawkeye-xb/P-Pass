@@ -1,11 +1,11 @@
-//! #563: removing a device on the desktop (`device.revoke`) must stop the
-//! daemon pulling from it right away, and a photo from a device that lost
-//! authorization must never enter the library.
+//! #563 / #2079: disconnecting a device on the desktop (`device.disconnect`) must
+//! stop the daemon pulling from it right away, and a photo from a device that
+//! lost authorization must never enter the library.
 //!
 //! Two independent defenses, each with its own test so neither can hide
 //! the other:
-//! - the revoke sweep (IPC `device.revoke` → `unpair::remove_pairing` →
-//!   `FlowDelivery::release_peer`) interrupts the fetch task *at revoke
+//! - the disconnect sweep (IPC `device.disconnect` → `unpair::remove_pairing` →
+//!   `FlowDelivery::release_peer`) interrupts the fetch task *at disconnect
 //!   time*, before the transfer could finish; the grant row itself goes away
 //!   with the pairing record (#1117);
 //! - the pre-ingest re-check drops the item when the pairing record was
@@ -162,16 +162,15 @@ async fn ipc_for(db: &Db, delivery: &FlowDelivery, dir: &Path, tag: &str) -> Ipc
     panic!("ipc socket {socket} never became connectable");
 }
 
-/// Test A — the revoke sweep. `device.revoke` over real IPC while phone A's
-/// 24 MB transfer is mid-flight: by the time the IPC call returns, A's grant
-/// row is gone (deleted with the pairing record, #1117) and out of the GC
-/// protection set (the transfer provably had not finished), A's fetch task is
-/// interrupted and settles as an error, nothing is ingested. Phone B,
-/// transferring at the same time from the same daemon, is untouched and
-/// completes. Then A re-pairs under a new pairing id (#564): the same item
-/// completes there, and the old id leaves no row behind.
+/// Test A — the disconnect sweep. Calling `device.revoke` directly on a paired
+/// device is rejected (`BadRequest`) without dropping pairing or interrupting
+/// its transfer; `device.disconnect` over real IPC while phone A's 24 MB
+/// transfer is mid-flight cancels A's fetch task and deletes its grant row with
+/// the pairing record (#1117). Phone B, transferring at the same time from the
+/// same daemon, is untouched and completes. Then A re-pairs under a new pairing
+/// id (#564): the same item completes there, and the old id leaves no row behind.
 #[tokio::test(flavor = "multi_thread")]
-async fn device_revoke_cancels_the_in_flight_fetch_before_it_can_finish() {
+async fn device_disconnect_cancels_the_in_flight_fetch_before_it_can_finish() {
     let root = tempdir().unwrap();
     let provider_transport =
         IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
@@ -239,9 +238,29 @@ async fn device_revoke_cancels_the_in_flight_fetch_before_it_can_finish() {
             continue;
         }
 
-        let resp = ipc
+        // #2079：已配对设备直接调 device.revoke 必须以 BadRequest 拒绝，且不删配对也不中断传输。
+        let direct_revoke = ipc
             .call(
                 "device.revoke",
+                serde_json::json!({ "node_id": hex::encode(phone_a.0) }),
+            )
+            .await;
+        assert!(!direct_revoke.ok);
+        assert_eq!(
+            direct_revoke.error.as_ref().map(|e| e.reason()),
+            Some(&proto::Reason::BadRequest)
+        );
+        assert!(db
+            .get_device(&phone_a.0)
+            .await
+            .unwrap()
+            .unwrap()
+            .pairing
+            .is_some());
+
+        let resp = ipc
+            .call(
+                "device.disconnect",
                 serde_json::json!({ "node_id": hex::encode(phone_a.0) }),
             )
             .await;
@@ -254,10 +273,10 @@ async fn device_revoke_cancels_the_in_flight_fetch_before_it_can_finish() {
             eprintln!("attempt {attempt}: transfer finished during the IPC round trip, retrying");
             continue;
         }
-        assert_eq!(resp.result.unwrap()["revoked"], true);
+        assert_eq!(resp.result.unwrap()["disconnected"], true);
         assert_eq!(
             state_at_revoke, None,
-            "#1117: device.revoke deletes the removed device's grant with its pairing record"
+            "#1117: device.disconnect deletes the disconnected device's grant with its pairing record"
         );
         assert!(
             !protected_at_revoke.contains(&hash_a),

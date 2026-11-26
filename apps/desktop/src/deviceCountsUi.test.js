@@ -7,7 +7,7 @@
 // 「已配对设备 0 台」变 1 台、第二条的「另有 1 台已断开」消失。
 // 卡片空状态判据由 daemon 计数保证：把 App.svelte 的 pairedCount === 0
 // 改回「数列表里 removal=none 的行」，下面「两次 IPC 之间手机断开」这条用例变红。
-import { cleanup, render } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { invokeMock, handlers } = vi.hoisted(() => {
@@ -232,5 +232,34 @@ describe("断开后总览顶部与备份状态卡一致（#1402 卡1）", () => 
     expect(document.querySelector('[data-testid="device-group-disconnected"]')?.textContent).toContain("Disconnected");
     // 英文 15 天提示
     expect(text()).toContain("No contact for a while");
+    expect(screen.getByRole("button", { name: "Disconnect Paired Device" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove Disconnected Device" })).toBeTruthy();
+  });
+
+  it("已配对行只显示「断开」并调 device.disconnect，已断开行才显示「移除」并调 device.revoke（#2079）", async () => {
+    daemon({ paired: 1, disconnected: 1 }, [
+      row("a", "在用的那台", "none"),
+      row("b", "断开的那台", "disconnected"),
+    ]);
+    await open("#/devices");
+
+    const discBtn = screen.getByRole("button", { name: "断开 在用的那台" });
+    const removeBtn = screen.getByRole("button", { name: "移除 断开的那台" });
+    expect(discBtn).toBeTruthy();
+    expect(removeBtn).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "移除 在用的那台" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "断开 断开的那台" })).toBeNull();
+
+    await fireEvent.click(discBtn);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(invokeMock).toHaveBeenCalledWith("daemon_device_disconnect", {
+      node_id: "a".repeat(64),
+    });
+
+    await fireEvent.click(removeBtn);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(invokeMock).toHaveBeenCalledWith("daemon_device_revoke", {
+      node_id: "b".repeat(64),
+    });
   });
 });

@@ -166,10 +166,10 @@ describe("#1433 三处显示同一个兜底名", () => {
     expect(screen.getByText("手机 · cccc")).toBeTruthy();
   });
 
-  it("移除确认弹窗：点「移除」→ 弹窗正文点名「手机 · cccc」", async () => {
+  it("断开确认弹窗：点「断开」→ 弹窗正文点名「手机 · cccc」", async () => {
     daemon("");
     await openDevices();
-    await fireEvent.click(screen.getByRole("button", { name: "移除 手机 · cccc" }));
+    await fireEvent.click(screen.getByRole("button", { name: "断开 手机 · cccc" }));
     await vi.advanceTimersByTimeAsync(0);
     expect(confirmMock).toHaveBeenCalledWith(
       expect.stringContaining("手机 · cccc"),

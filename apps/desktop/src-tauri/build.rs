@@ -14,6 +14,7 @@ const APP_COMMANDS: &[&str] = &[
     "daemon_pairing_confirm",
     "daemon_devices_list",
     "daemon_device_watermarks",
+    "daemon_device_disconnect",
     "daemon_device_revoke",
     "daemon_device_rename",
     "daemon_device_folder",

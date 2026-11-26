@@ -23,6 +23,7 @@ pub const USER_KINDS_WITH_COPY: &[&str] = &[
     "pair.code_failed",
     "asset.removed_external",
     "device.renamed",
+    "device.disconnected",
     "device.revoked",
     "device.unpaired",
     "device.merged",
@@ -85,6 +86,7 @@ mod tests {
         "pair.expired",
         "pair.code_failed",
         // ipc.rs / router.rs / storage device_repo.rs
+        "device.disconnected",
         "device.revoked",
         "device.renamed",
         "device.unpaired",

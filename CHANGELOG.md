@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- 桌面端：「家人与设备」页将单步移除拆为先「断开」再「移除」——已配对设备先点「断开」立即终止授权并转入「已断开」分组，只有已断开的设备才会显示「移除」（#2079）。
+
 ## [2026.11.5] - 2026-11-25
 
 ### Changed

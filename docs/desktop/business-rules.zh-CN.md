@@ -98,7 +98,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 
 - 唯一入口 `daemon::unpair::remove_pairing`：先删库里的配对记录（级联 + 更新内存副本，从这一刻起该设备的请求在 authz 处被拒），再清它的内存态：`FlowDelivery::release_peer`（中断在途拉取并等其退出、清路径登记与拉取锁）、`BackupEngine::end_session`、关订阅，最后用 iroh 的 `Connection::close` 关掉与这台设备的全部连接（`IrohTransport::close_peer`，关闭码 `UNPAIRED_CLOSE_CODE` = 410，#1119）。撤销的生效不依赖对端知道。
 - 手机自己断开（`device.unpair`）：先让「已断开」回应送达（`BiStream::delivered`，最多等 `UNPAIR_REPLY_GRACE` = 2 s；QUIC 关连接会丢弃未送达的数据），再关连接。
-- 离开原因记在档案 `departed_by`：`owner`（业主移除，IPC `device.revoke`）/ `device`（手机自己断开，`device.unpair`）/ `identity`（电脑换身份，#1109 启动时 `Db::remove_all_pairings`，此时组件尚未启动、没有内存态要清）。
+- 离开原因记在档案 `departed_by`：`owner_disconnect`（业主断开，IPC `device.disconnect`，删除配对记录并入「已断开」分组）/ `owner`（业主从「已断开」移除归档，IPC `device.revoke`；已配对设备禁止直接调 `device.revoke`）/ `device`（手机自己断开，`device.unpair`）/ `identity`（电脑换身份，#1109 启动时 `Db::remove_all_pairings`，此时组件尚未启动、没有内存态要清）。
 - 手机自己断开：带 `pairing_id` 时只删 id 一致的那条（不一致不改、仍回 ok，#565）；不带时删它当前的配对记录。
 - 删除后：`authz::check` 只放行 `hello` / `pair.request` / `pair.status` / `pair.cancel`（与从未配对相同，拒绝原因统一为 `not_paired`）；`record_presence` 不刷新 `last_seen`；入库前复检配对记录（`flow_revoke::revoked_device_is_rechecked_before_ingest_even_without_the_sweep`）。
 
@@ -111,12 +111,12 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 
 - `daemon::presence::presence`（纯函数，只做展示）：有实时连接 → online；否则 `age = now - last_seen`：`≤ ONLINE_HEARTBEAT_MS` online，`≤ OFFLINE_SENTINEL_MS` recent，更大或从未见过 offline。`last_seen` 只由 hello 刷新，hello 不写审计。
 - `daemon::device_projection`（#1044，B4）给 `devices.list` 每行：
-  - `removal`：`none`（有配对记录）/ `disconnected`（手机自己断开，或电脑换了身份需要重新扫码，留在主列表）/ `removed`（业主移除，不进主列表）。
+  - `removal`：`none`（有配对记录）/ `disconnected`（电脑端主动断开 `owner_disconnect`、手机自己断开 `device`，或电脑换了身份需要重新扫码，留在主列表）/ `removed`（业主从已断开列表移除归档 `owner`，不进主列表）。
   - `needs_attention`：有配对记录且最近一次备份距今 `> BACKUP_ATTENTION_MS`；从未备份不算。与 `OFFLINE_SENTINEL_MS` 同值不同义，不互相替代。
   - `row_state` 优先级：`removed` > `disconnected` > `needs_attention` > `transferring`（`flow_connection` 有值）> presence（`online`/`recent`/`offline`）。
   - `last_activity_at`：`last_seen` 与 `last_backup_at` 取较大者。
 - `devices.list` 一行 = 档案 + 当前配对记录，字段 `paired` / `departed_by` / `departed_at`；默认只给主列表的行（`Removal::is_listed`），`include_departed=true` 连业主移除的也给。
-- `status` 的设备计数与列表同一口径（#1402 卡1）：`paired_devices` 数 `none`（有授权），`disconnected_devices` 数 `disconnected`（手机自己断开），`removed_devices` 数 `removed`；三者互斥，相加等于设备档案数。总览顶部、备份状态卡、设备页都读这一组，壳不自己数列表。
+- `status` 的设备计数与列表同一口径（#1402 卡1）：`paired_devices` 数 `none`（有授权），`disconnected_devices` 数 `disconnected`（已断开），`removed_devices` 数 `removed`；三者互斥，相加等于设备档案数。总览顶部、备份状态卡、设备页都读这一组，壳不自己数列表。
 - 测试：`device_projection::row_state_priority`、`ipc_flow::device_rows_carry_daemon_conclusions_and_status_counts_match_the_list`。
 
 ### 2.8 配对入口按需开放与资源上限（#1122）
@@ -306,7 +306,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 | 字段 | 含义 |
 |---|---|
 | `paired_devices` | 有授权的设备数（`removal == none`），即「已配对 N 台」（B4，#1402 卡1） |
-| `disconnected_devices` | 手机自己断开的行数（`removal == disconnected`），界面补「另有 M 台已断开」 |
+| `disconnected_devices` | 已断开的行数（`removal == disconnected`），界面补「另有 M 台已断开」 |
 | `removed_devices` | 业主移除的行数（`removal == removed`，「已移除」区） |
 | `devices` / `unpaired` | 设备档案数 / 其中没有配对记录的数目（诊断口径） |
 | `pending_pairs` | 待审批数（不含已撤回） |

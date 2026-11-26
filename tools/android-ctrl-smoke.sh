@@ -8,8 +8,8 @@
 #      用 testclient 配对并预置 3 张照片（取原图要有东西可取）。
 #   2. 装 debug 包与 androidTest 包；跑 C1124CtrlSmokeTest（-e qr <新配对串>）：配对 → 请求 / 探测 →
 #      取原图 → 订阅挂着。
-#   3. 测试打出 `C1124 READY_FOR_REVOKE node=<手机 NodeId>` 后：关掉配对窗口（pairing.stop），经 IPC 删掉
-#      这台手机（device.revoke ⇒ 电脑以 410 关掉它的全部连接）。测试判定 410 立刻到达关闭监听、订阅结束、
+#   3. 测试打出 `C1124 READY_FOR_REVOKE node=<手机 NodeId>` 后：关掉配对窗口（pairing.stop），经 IPC 先断开
+#      这台手机（device.disconnect ⇒ 电脑以 410 关掉它的全部连接），再移除归档（device.revoke）。测试判定 410 立刻到达关闭监听、订阅结束、
 #      之后的请求被拒，以及从没申请过的新身份在握手时被 401 拒（有类型的关闭码 + 回调）。
 # 不碰手机上 App 自己的身份与配对（测试用一次性随机身份）；debug 包与已装包签名不同时会先卸载已装包（测试机）。
 set -euo pipefail
@@ -86,8 +86,9 @@ for _ in $(seq 1 300); do
   sleep 0.2
 done
 if [ -n "$PHONE" ]; then
-  echo "  手机 ${PHONE:0:8}… 已订阅：关配对窗口并删掉这台设备"
+  echo "  手机 ${PHONE:0:8}… 已订阅：关配对窗口并断开 / 移除这台设备"
   desk_ipc "$DESK" pairing.stop >"$OUT/pairing-stop.json" 2>&1 || true
+  desk_ipc "$DESK" device.disconnect "{\"node_id\": \"$PHONE\"}" >"$OUT/disconnect.json"
   desk_ipc "$DESK" device.revoke "{\"node_id\": \"$PHONE\"}" >"$OUT/revoke.json"
 fi
 wait "$INSTR_PID" || true
