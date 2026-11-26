@@ -437,9 +437,18 @@ internal fun wakePlanOf(reason: WaitReason, fgsBlocked: () -> WakePlan): WakePla
     // #1072：手机过旧只能等用户更新 App（更新后进程重启）；电脑过旧时电脑端可能自己更新，周期重探，兼容了就续传。
     WaitReason.PHONE_OUTDATED -> WakePlan.AwaitsUser
     WaitReason.DESKTOP_OUTDATED -> WakePlan.RetryProbes
-    // #1762：目录授权失效只能等用户重新授权（二级页）；重新授权 / 移除目录都会立刻发起新触发，不排自动唤醒。
+    // #1762 / #2063：目录授权失效不排后台自动唤醒；回到前台或重新授权后会自愈清等待并唤醒。
     WaitReason.SOURCE_UNAVAILABLE -> WakePlan.AwaitsUser
 }
+
+/**
+ * #2063：处于 [WaitReason.SOURCE_UNAVAILABLE] 等待态时，回到前台或确认原目录已恢复可读，
+ * 应清除不可用等待态并唤醒备份队列，避免「目录已恢复可读、菜单隐藏重授入口，引擎却仍卡在等待态」的死锁。
+ */
+internal fun shouldHealSourceUnavailable(
+    waitReason: WaitReason?,
+    sourcesReadable: Boolean,
+): Boolean = waitReason == WaitReason.SOURCE_UNAVAILABLE && sourcesReadable
 
 /**
  * #409：FGS 受阻时的唤醒。

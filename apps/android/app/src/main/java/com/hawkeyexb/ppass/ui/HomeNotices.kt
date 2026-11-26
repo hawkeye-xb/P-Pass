@@ -28,6 +28,7 @@ import com.hawkeyexb.ppass.backup.BackgroundBackupState
 
 enum class HomeNoticeKind {
     PAIRING_LOST,
+    FOLDER_PERMISSION_NEEDED,
     BACKUP_INTERRUPTED,
     PARTIAL_ACCESS,
     SOURCE_MISSING,
@@ -37,6 +38,7 @@ enum class HomeNoticeKind {
 
 val HOME_NOTICE_PRIORITY: List<HomeNoticeKind> = listOf(
     HomeNoticeKind.PAIRING_LOST,
+    HomeNoticeKind.FOLDER_PERMISSION_NEEDED,
     HomeNoticeKind.BACKUP_INTERRUPTED,
     HomeNoticeKind.PARTIAL_ACCESS,
     HomeNoticeKind.LOCATION_REDACTED,
@@ -152,8 +154,30 @@ fun NoticeHost(
     onResolveBackgroundBackup: () -> Unit = {},
     locationRedacted: Boolean = false,
     onAllowLocation: () -> Unit = {},
+    expiredFolderCount: Int = 0,
+    expiredFolderName: String? = null,
+    sourceUnavailableWaiting: Boolean = false,
+    onResolveFolderPermission: () -> Unit = {},
 ) {
+    val folderSpec = folderPermissionNoticeSpec(
+        expiredFolderCount = expiredFolderCount,
+        expiredFolderName = expiredFolderName,
+        sourceUnavailableWaiting = sourceUnavailableWaiting,
+    )
     val candidates = buildList {
+        if (folderSpec != null) add(
+            HomeNotice(
+                kind = HomeNoticeKind.FOLDER_PERMISSION_NEEDED,
+                body = when (folderSpec) {
+                    is FolderNoticeSpec.Single -> stringResource(R.string.folder_reauthorize_notice_single, folderSpec.name)
+                    is FolderNoticeSpec.Multiple -> stringResource(R.string.folder_reauthorize_notice_multiple, folderSpec.count)
+                    FolderNoticeSpec.GenericWaiting -> stringResource(R.string.state_waiting_source_unavailable)
+                },
+                actionLabel = stringResource(folderSpec.actionRes),
+                onAction = onResolveFolderPermission,
+                critical = true,
+            )
+        )
         val backgroundRes = backgroundBackupNoticeRes(backgroundBackupState)
         if (backgroundRes != null) add(
             HomeNotice(
@@ -173,6 +197,33 @@ fun NoticeHost(
         )
     }
     topNotice(candidates)?.let { NoticeCard(it) }
+}
+
+internal sealed interface FolderNoticeSpec {
+    val actionRes: Int
+
+    data class Single(val name: String) : FolderNoticeSpec {
+        override val actionRes: Int get() = R.string.folder_reauthorize
+    }
+
+    data class Multiple(val count: Int) : FolderNoticeSpec {
+        override val actionRes: Int get() = R.string.folder_banner_open_scope
+    }
+
+    data object GenericWaiting : FolderNoticeSpec {
+        override val actionRes: Int get() = R.string.folder_banner_open_scope
+    }
+}
+
+internal fun folderPermissionNoticeSpec(
+    expiredFolderCount: Int,
+    expiredFolderName: String?,
+    sourceUnavailableWaiting: Boolean,
+): FolderNoticeSpec? = when {
+    expiredFolderCount == 1 && !expiredFolderName.isNullOrBlank() -> FolderNoticeSpec.Single(expiredFolderName)
+    expiredFolderCount > 1 -> FolderNoticeSpec.Multiple(expiredFolderCount)
+    expiredFolderCount == 1 || sourceUnavailableWaiting -> FolderNoticeSpec.GenericWaiting
+    else -> null
 }
 
 internal fun backgroundBackupNoticeRes(state: BackgroundBackupState): Pair<Int, Int>? = when (state) {

@@ -178,6 +178,8 @@ private fun BucketSourceCard(
     kindLabel: String,
     selected: Boolean,
     isNew: Boolean = false,
+    needsPermission: Boolean = false,
+    onReauthorize: (() -> Unit)? = null,
     menuActions: List<SourceMenuAction> = emptyList(),
     onClick: () -> Unit,
 ) {
@@ -198,6 +200,9 @@ private fun BucketSourceCard(
         },
         menuActions = menuActions,
         menuContentDescription = stringResource(R.string.source_more_actions),
+        statusLabel = if (needsPermission) stringResource(R.string.folder_status_needs_permission) else null,
+        actionLabel = if (needsPermission && onReauthorize != null) stringResource(R.string.folder_reauthorize) else null,
+        onAction = onReauthorize,
     )
 }
 
@@ -395,7 +400,7 @@ fun BucketScreen(
                         )
                     }
                     items(folderBuckets, key = { "folder:${it.key}" }) { folder ->
-                        // 重新授权与移除收进标准菜单；移除仍先过确认弹窗（语义不变）。
+                        // 重新授权与移除收进标准菜单；失效卡片同时直接在封面标状态并给出醒目重授按钮。
                         BucketSourceCard(
                             title = folder.bucket.name ?: stringResource(R.string.bucket_unnamed),
                             bucketId = folder.bucket.id,
@@ -404,6 +409,12 @@ fun BucketScreen(
                             kind = SourceKind.FOLDER,
                             kindLabel = stringResource(R.string.source_kind_folder),
                             selected = folder.key in checkedFolders,
+                            needsPermission = folder.needsPermission,
+                            onReauthorize = if (folder.needsPermission) {
+                                { onReauthorizeFolder(folder.key) }
+                            } else {
+                                null
+                            },
                             menuActions = buildList {
                                 if (folder.needsPermission) {
                                     add(SourceMenuAction(stringResource(R.string.folder_reauthorize)) { onReauthorizeFolder(folder.key) })

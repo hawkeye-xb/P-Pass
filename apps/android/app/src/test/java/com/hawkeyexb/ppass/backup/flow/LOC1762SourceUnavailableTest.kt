@@ -226,6 +226,87 @@ class LOC1762SourceUnavailableTest {
         rig.close()
     }
 
+    // #2063：进入 SOURCE_UNAVAILABLE 后，若原目录重新可读（例如容器/SAF 恢复），
+    // 回到前台（onAppForeground）应自动清除不可用等待态、恢复对账判定（不跳过源缺失核对）并唤醒备份队列。
+    @Test
+    fun `foreground self-heals SOURCE_UNAVAILABLE and runs full reconciliation when folder becomes readable`() = runTest {
+        val (rig, folder, root) = rigWithFolder()
+        // 先备份一张 folder 照片。
+        rig.trigger(TriggerReason.APP_FOREGROUND)
+        assertEquals(OrderState.CONFIRMED, rig.state(FOLDER_MEDIA_ID))
+
+        // 撤权进入 SOURCE_UNAVAILABLE；同时假设暂停标志为真（或恢复后回到前台应清掉不可用标记）。
+        folder.revoked = true
+        rig.trigger(TriggerReason.APP_FOREGROUND)
+        assertEquals(WaitReason.SOURCE_UNAVAILABLE, rig.control.wait)
+
+        // 目录恢复可读，且原本的那张照片在不可用期间被用户从目录删掉；同时新增一张新照片。
+        folder.revoked = false
+        File(root, "IMG_9.jpg").delete()
+        File(root, "IMG_10.jpg").writeText("ten")
+        val newId = com.hawkeyexb.ppass.backup.folder.FOLDER_ID_FLAG or 3L
+        rig.media.put(FakePhoto(newId, 200L, 3L, "ten", 0L, bucketId = FOLDER_BUCKET))
+
+        // 回到前台：必须自愈清除 SOURCE_UNAVAILABLE、执行源缺失对账（IMG_9 标 sourceMissing）并备份新照片 IMG_10。
+        rig.engine.onAppForeground()
+        advanceUntilIdle()
+
+        assertNull("回到前台且目录可读时应清除 SOURCE_UNAVAILABLE", rig.control.wait)
+        assertTrue("自愈首轮不能再因 SOURCE_UNAVAILABLE 跳过源缺失对账", rig.missing(FOLDER_MEDIA_ID))
+        assertEquals("自愈后新照片应立即被唤醒并备份", OrderState.CONFIRMED, rig.state(newId))
+        rig.close()
+    }
+
+    // #2063：即使处于暂停态（如恢复之前先暂停，或暂停期间触发了不可用），
+    // 回到前台发现目录重新可读时也必须清除过期的 SOURCE_UNAVAILABLE 标记。
+    @Test
+    fun `foreground clears stale SOURCE_UNAVAILABLE wait reason even while paused when folder is readable`() = runTest {
+        val (rig, folder, _) = rigWithFolder()
+        folder.revoked = true
+        rig.control.pausedFlag = true
+        rig.trigger(TriggerReason.APP_FOREGROUND)
+        assertEquals(WaitReason.SOURCE_UNAVAILABLE, rig.control.wait)
+
+        folder.revoked = false
+        rig.engine.onAppForeground()
+        advanceUntilIdle()
+        assertNull("目录恢复可读后即使暂停中也不得残留 SOURCE_UNAVAILABLE 标记", rig.control.wait)
+        rig.close()
+    }
+
+    // #2063：纯判定 shouldHealSourceUnavailable + onSourcesReadable 仅在确实可读且处于 SOURCE_UNAVAILABLE 时唤醒。
+    @Test
+    fun `onSourcesReadable heals only when SOURCE_UNAVAILABLE and directory is actually readable`() = runTest {
+        assertTrue(shouldHealSourceUnavailable(WaitReason.SOURCE_UNAVAILABLE, sourcesReadable = true))
+        assertFalse(shouldHealSourceUnavailable(WaitReason.SOURCE_UNAVAILABLE, sourcesReadable = false))
+        assertFalse(shouldHealSourceUnavailable(WaitReason.WIFI, sourcesReadable = true))
+        assertFalse(shouldHealSourceUnavailable(null, sourcesReadable = true))
+
+        val (rig, folder, _) = rigWithFolder()
+        folder.revoked = true
+        rig.sourcesReadable = false
+        rig.trigger(TriggerReason.APP_FOREGROUND)
+        assertEquals(WaitReason.SOURCE_UNAVAILABLE, rig.control.wait)
+
+        // 目录仍不可读时：回到前台与 onSourcesReadable 都不许误清等待态。
+        rig.engine.onAppForeground()
+        advanceUntilIdle()
+        assertEquals(WaitReason.SOURCE_UNAVAILABLE, rig.control.wait)
+
+        rig.engine.onSourcesReadable()
+        advanceUntilIdle()
+        assertEquals(WaitReason.SOURCE_UNAVAILABLE, rig.control.wait)
+
+        // 目录恢复可读：onSourcesReadable 清等待并唤醒备份队列。
+        folder.revoked = false
+        rig.sourcesReadable = true
+        rig.engine.onSourcesReadable()
+        advanceUntilIdle()
+        assertNull(rig.control.wait)
+        assertEquals(OrderState.CONFIRMED, rig.state(FOLDER_MEDIA_ID))
+        rig.close()
+    }
+
     private fun compositeFor(folder: SwitchableFolder): CompositeMediaSnapshotSource =
         CompositeMediaSnapshotSource(rigMedia, folder)
 

@@ -388,6 +388,7 @@ internal fun HomeScreen(
                     }
                     val heroAction = heroActionOf(state, connection)
                     val outdatedNow = visibleOutdatedSide(outdated, mediaAccess, connection.needsRepair)
+                    val expiredFolders = mediaFolders.filter { it.needsPermission }
                     if (outdatedNow != null && offersAppUpdate(outdatedNow) && onCheckUpdate != null) {
                         Spacer(Modifier.width(12.dp))
                         HeroSecondaryButton(label = stringResource(R.string.update_check_now), onClick = onCheckUpdate)
@@ -401,6 +402,17 @@ internal fun HomeScreen(
                             },
                             enabled = !commandPending,
                             onClick = onBackupNow,
+                        )
+                    } else if (state is BackupUiState.Waiting && state.reason == WaitReason.SOURCE_UNAVAILABLE && !connection.needsRepair) {
+                        Spacer(Modifier.width(12.dp))
+                        HeroSecondaryButton(
+                            label = stringResource(
+                                if (expiredFolders.size == 1) R.string.folder_reauthorize else R.string.folder_banner_open_scope,
+                            ),
+                            onClick = {
+                                if (expiredFolders.size == 1) onFolderReauthorize(expiredFolders.single())
+                                else onOpenBucketPicker()
+                            },
                         )
                     }
                 }
