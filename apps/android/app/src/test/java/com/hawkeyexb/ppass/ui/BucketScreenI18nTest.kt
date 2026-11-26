@@ -88,7 +88,7 @@ class BucketScreenI18nTest {
         ).readText()
         assertTrue(
             "文件夹菜单按钮要接本地化描述",
-            source.contains("menuContentDescription = stringResource(R.string.source_more_actions)"),
+            source.contains("contentDescription = stringResource(R.string.source_more_actions)"),
         )
     }
 

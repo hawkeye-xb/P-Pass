@@ -21,26 +21,28 @@ class UI08BucketScreenTest {
     }
 
     /**
-     * #1797：相册、文件夹和「添加文件夹」都必须走 #1796 的基础组件（SourceCard / AddSourceCard），
-     * 同一网格与尺寸由组件保证；不再有平行的自绘卡片（自画角标、自画类型图形、自画描边点击）。
-     * 反证：恢复自绘平行实现（如旧 BucketCard / SelectBadge / SourceTypeGlyph）后本条变红。
+     * #1797 / #2067：相册走标准 SourceCard（SourceKind.ALBUM）；添加文件夹移入顶栏克制目录图标按钮，
+     * 网格内不再有 AddSourceCard，也不再回退到旧的自绘卡片。
      */
     @Test
-    fun source_cards_use_the_shared_standard_components_not_a_parallel_self_drawn_implementation() {
+    fun album_cards_use_source_card_and_add_folder_moved_to_top_bar() {
         val source = bucketScreenSource()
-        assertTrue("相册卡必须用标准 SourceCard（按类型入口断言）", source.contains("SourceKind.ALBUM"))
-        assertTrue("文件夹卡必须用标准 SourceCard（按类型入口断言）", source.contains("SourceKind.FOLDER"))
+        assertTrue("相册卡必须用标准 SourceCard（SourceKind.ALBUM）", source.contains("SourceKind.ALBUM"))
         assertTrue("必须导入基础组件 SourceCard", source.contains("import com.hawkeyexb.ppass.ui.components.SourceCard"))
-        assertTrue("添加动作必须用标准 AddSourceCard", source.contains("AddSourceCard("))
+        assertFalse("网格内不许再放 AddSourceCard", source.contains("AddSourceCard"))
         assertFalse("自绘勾选角标不许回来", source.contains("SelectBadge"))
         assertFalse("自绘类型图形不许回来", source.contains("SourceTypeGlyph"))
         assertFalse("卡片自绘点击不许回来", source.contains(".clickable(onClick = onToggle)"))
-        assertFalse("卡片自绘封面比例不许回来（同尺寸由组件的固定封面高度保证）", source.contains("aspectRatio(1.6f)"))
+        assertFalse("卡片自绘封面比例不许回来", source.contains("aspectRatio(1.6f)"))
+        val topBar = source.substringAfter("topBar = {").substringBefore(") { innerPadding ->")
+        assertTrue("顶栏右侧必须提供添加文件夹图标按钮", topBar.contains("onAddFolder"))
+        assertTrue("顶栏添加文件夹图标走 ic_create_new_folder", topBar.contains("R.drawable.ic_create_new_folder"))
+        assertTrue("顶栏添加文件夹按钮必须带无障碍标签", topBar.contains("contentDescription = stringResource(R.string.folder_add)"))
+        assertTrue("保存期间禁用顶栏添加文件夹按钮", topBar.contains("enabled = !saving"))
     }
 
     /**
      * #1797：返回也交给标准 IconButton——不再用自绘「‹」字符承载点击（与 FolderScreen 同款）。
-     * 反证：恢复「‹」+ clickable 后本条变红。
      */
     @Test
     fun back_action_uses_a_standard_icon_button_not_a_self_drawn_glyph() {
@@ -52,26 +54,53 @@ class UI08BucketScreenTest {
     }
 
     /**
-     * #1797：同名来源要有类型标识——相册与文件夹的卡分别给各自类型词，由组件用标准图标 + 读屏描述呈现。
-     * 反证：两张卡的 kindLabel 互换后，本条红（标签必须各自出现在对应的卡片调用里）。
+     * #1797 / #2067：同名来源保持类型标识——相册卡带相册类型词，文件夹分组行带文件夹图标类型词，
+     * 且文件夹分组走原生 Material 3 ListItem（与相册双列网格明确区分）。
      */
     @Test
-    fun same_name_sources_get_distinct_type_labels() {
+    fun album_grid_and_compact_folder_rows_keep_distinct_types_and_visual_forms() {
         val source = bucketScreenSource()
-        val albumBlock = source.substringAfter("items(visibleAlbumBuckets").substringBefore("items(folderBuckets")
-        val folderBlock = source.substringAfter("items(folderBuckets").substringBefore("item(key = \"add-folder\")")
+        val albumCardBlock = source.substringAfter("private fun BucketAlbumCard").substringBefore("private fun BucketFolderRow")
+        val folderRowBlock = source.substringAfter("private fun BucketFolderRow").substringBefore("internal fun bucketScreenOffersAlbumChoices")
         assertTrue(
             "相册卡要带相册类型词",
-            albumBlock.contains("kindLabel = stringResource(R.string.source_kind_album)"),
+            albumCardBlock.contains("kindLabel = stringResource(R.string.source_kind_album)"),
         )
         assertTrue(
-            "文件夹卡要带文件夹类型词",
-            folderBlock.contains("kindLabel = stringResource(R.string.source_kind_folder)"),
+            "文件夹行要带文件夹类型词",
+            folderRowBlock.contains("contentDescription = stringResource(R.string.source_kind_folder)"),
         )
+        assertTrue("文件夹行必须使用原生 Material3 ListItem", folderRowBlock.contains("ListItem("))
+        assertTrue("文件夹行使用 Checkbox 勾选", folderRowBlock.contains("Checkbox("))
+    }
+
+    /**
+     * #2067：未添加文件夹时不渲染文件夹区块（无空分组占位）；添加过文件夹后按需在相册网格下方出现。
+     */
+    @Test
+    fun folder_section_appears_only_when_folders_exist_and_sits_below_albums() {
+        assertFalse(
+            "未添加文件夹时完全不出现文件夹区块",
+            bucketScreenShowsFoldersSection(emptyList()),
+        )
+        val folder = FolderBucketUi(
+            key = "content://f1",
+            bucket = MediaScanner.Bucket(10L, "Blackmagic", 5),
+            registered = true,
+        )
+        assertTrue(
+            "已有文件夹时按需显示文件夹分组",
+            bucketScreenShowsFoldersSection(listOf(folder)),
+        )
+        val source = bucketScreenSource()
+        val albumGridIdx = source.indexOf("items(visibleAlbums")
+        val folderSectionIdx = source.indexOf("if (showFoldersSection)")
+        assertTrue("文件夹分组必须位于相册网格下方", folderSectionIdx > albumGridIdx && albumGridIdx > 0)
+        assertTrue("文件夹分组标题必须使用 scope_folders_section", source.contains("R.string.scope_folders_section"))
     }
 
     @Test
-    fun album_and_folder_cards_keep_their_selection_semantics() {
+    fun album_and_folder_selections_keep_their_selection_semantics() {
         val source = bucketScreenSource()
         assertTrue("相册勾选仍按相册 id 记", source.contains("selected = b.id in checked"))
         assertTrue("文件夹勾选仍按文件夹 key 记", source.contains("folder.key in checkedFolders"))
@@ -80,9 +109,12 @@ class UI08BucketScreenTest {
             source.contains("b.name ?: stringResource(R.string.bucket_unnamed)"),
         )
         assertTrue(
+            "文件夹空名仍走本地化词条",
+            source.contains("folder.bucket.name ?: stringResource(R.string.bucket_unnamed)"),
+        )
+        assertTrue(
             "选中/未选中状态要给读屏文案",
-            source.contains("selectedDescription = stringResource(R.string.source_selected)") &&
-                source.contains("unselectedDescription = stringResource(R.string.source_unselected)"),
+            source.contains("R.string.source_selected") && source.contains("R.string.source_unselected"),
         )
     }
 
@@ -97,7 +129,7 @@ class UI08BucketScreenTest {
     }
 
     @Test
-    fun folders_and_alums_share_one_atomic_save() {
+    fun folders_and_albums_share_one_atomic_save() {
         val source = bucketScreenSource()
         assertTrue(source.contains("folderBuckets: List<FolderBucketUi>"))
         assertTrue(source.contains("selectedFolderKeys: Set<String>"))
@@ -108,32 +140,37 @@ class UI08BucketScreenTest {
     }
 
     /**
-     * #1797：失效目录的重新授权与移除收进标准菜单；重新授权仍直连授权动作、只挂在权限失效
-     * 条件里，移除仍先过原确认弹窗。反证：菜单丢掉任一动作、绕过确认弹窗、
-     * 或权限条件反转（needsPermission 为真反而不给重新授权）后，本条红。
+     * #1797 / #2063 / #2067：失效文件夹行必须显性标出「需要重新允许」并提供直达重授按钮，
+     * 菜单保留重授与移除，移除仍先过原确认弹窗。
      */
     @Test
-    fun needs_permission_folder_keeps_reauthorize_and_remove_actions() {
+    fun needs_permission_folder_row_shows_explicit_status_direct_reauthorize_and_confirm_remove() {
         val source = bucketScreenSource()
-        val folderBlock = source.substringBefore("item(key = \"add-folder\")")
-            .substringAfter("items(folderBuckets")
-        assertTrue("文件夹卡的动作收进标准菜单", folderBlock.contains("menuActions = buildList"))
-        assertTrue("重新授权必须挂在 needsPermission 条件里", folderBlock.contains("if (folder.needsPermission) {"))
-        val guarded = folderBlock.substringAfter("if (folder.needsPermission) {")
-            .substringBefore("add(SourceMenuAction(stringResource(R.string.folder_remove))")
-        assertTrue("失效目录仍显示重新授权", guarded.contains("SourceMenuAction(stringResource(R.string.folder_reauthorize))"))
-        assertTrue("失效目录的重新授权仍直连 onReauthorizeFolder(folder.key)", guarded.contains("onReauthorizeFolder(folder.key)"))
-        assertTrue("失效目录同时保留移除", folderBlock.contains("SourceMenuAction(stringResource(R.string.folder_remove))"))
-        assertTrue("移除仍进入原确认弹窗", folderBlock.contains("removing = folder"))
-        assertFalse("移除不许在确认前（网格块里）直接触发 onRemoveFolder", folderBlock.contains("onRemoveFolder("))
+        val folderRow = source.substringAfter("private fun BucketFolderRow")
+            .substringBefore("internal fun bucketScreenOffersAlbumChoices")
+        assertTrue("失效行必须按 needsPermission 分流", folderRow.contains("if (folder.needsPermission)"))
+        assertTrue("失效行必须显性标出「需要重新允许」", folderRow.contains("R.string.folder_status_needs_permission"))
+        assertTrue("失效行必须提供直达重授按钮", folderRow.contains("OutlinedButton(") && folderRow.contains("onReauthorize"))
+        assertTrue("文件夹行菜单保留移除动作", folderRow.contains("R.string.folder_remove"))
+        assertFalse("移除不许在确认前直接触发 onRemoveFolder", folderRow.contains("onRemoveFolder("))
+        val groupBlock = source.substringAfter("if (showFoldersSection)").substringBefore("Spacer(Modifier.height(14.dp))")
+        assertTrue("移除触发确认弹窗挂起态", groupBlock.contains("removing = folder"))
         val dialog = source.substringAfter("removing?.let")
         assertTrue("确认后才回调 onRemoveFolder(folder.key)", dialog.contains("onRemoveFolder(folder.key)"))
+
+        var dir = File(System.getProperty("user.dir"))
+        while (!File(dir, "apps/android").isDirectory) dir = dir.parentFile ?: error("apps/android not found")
+        val enXml = File(dir, "apps/android/app/src/main/res/values/strings.xml").readText()
+        val zhXml = File(dir, "apps/android/app/src/main/res/values-zh/strings.xml").readText()
+        val enWaiting = enXml.substringAfter("name=\"state_waiting_source_unavailable\">").substringBefore("</string>")
+        val zhWaiting = zhXml.substringAfter("name=\"state_waiting_source_unavailable\">").substringBefore("</string>")
+        assertFalse("英文提示不得再指向不存在的 settings 入口", enWaiting.contains("in settings", ignoreCase = true))
+        assertFalse("中文提示不得再指向不存在的「设置」入口", zhWaiting.contains("设置里"))
     }
 
     /**
-     * #1794 / #1961：范围页始终能进（对齐 iOS）。相册自动备份只认完整照片权限：只有 FULL 给选相册，
-     * PARTIAL / NONE 都只说明现状并给开启入口；文件夹区和「添加文件夹」照常可用。
-     * 反证：把 PARTIAL 重新放宽成可选相册（旧 `access != NONE`），本条红。
+     * #1794 / #1961 / #2067：部分照片权限继续直接视同无权限（顶部权限卡、只留已勾选相册供取消、不给新选）；
+     * 顶栏目录入口与文件夹分组不受相册权限门控。
      */
     @Test
     fun only_full_photo_access_offers_album_choices_but_folders_still_work() {
@@ -143,21 +180,22 @@ class UI08BucketScreenTest {
         val source = bucketScreenSource()
         assertTrue(
             "相册卡只展示可见相册（完整授权全部 / 未完整授权仅已勾选）",
-            source.contains("items(visibleAlbumBuckets(buckets, checked, albumAccess)"),
+            source.contains("items(visibleAlbums, key = { \"album:\${it.id}\" })"),
         )
         assertTrue("未完整授权时相册区要有开启入口", source.contains("onRequestAlbumAccess"))
         assertTrue("开启入口用共享词条", source.contains("R.string.scope_album_no_access_action"))
-        val addFolder = source.indexOf("item(key = \"add-folder\")")
-        val folderItems = source.indexOf("items(folderBuckets")
-        assertTrue("「添加文件夹」无条件出现", addFolder > folderItems)
-        assertFalse("「添加文件夹」不能被相册权限门控", source.substring(folderItems, addFolder).contains("offersAlbums"))
+        val topBar = source.substringAfter("topBar = {").substringBefore(") { innerPadding ->")
+        assertFalse("顶栏目录入口不能被相册权限门控", topBar.contains("offersAlbums"))
+        assertTrue(
+            "文件夹分组显示只看文件夹是否非空，不受相册权限门控",
+            bucketScreenShowsFoldersSection(
+                listOf(FolderBucketUi("k", MediaScanner.Bucket(1L, "F", 1), registered = true)),
+            ),
+        )
+        val folderGroupBlock = source.substringAfter("item(key = \"folders-group\"").substringBefore("Spacer(Modifier.height(14.dp))")
+        assertFalse("文件夹分组内容不能被相册权限门控", folderGroupBlock.contains("offersAlbums"))
     }
 
-    /**
-     * #1961 / #1811：未完整授权（含部分权限）时不展示没勾选的受限相册，避免诱使用户误选；
-     * 已勾选的仍保留可见以便取消，完整授权显示全部。反证：`visibleAlbumBuckets` 在 PARTIAL 下
-     * 直接返回全部或直接返回空列表，本条红。
-     */
     @Test
     fun visible_album_buckets_keep_only_checked_ones_until_full_access() {
         val a = MediaScanner.Bucket(1L, "A", 3)
@@ -168,10 +206,6 @@ class UI08BucketScreenTest {
         assertEquals("部分权限下一个都没勾就不展示任何相册", emptyList<MediaScanner.Bucket>(), visibleAlbumBuckets(listOf(a, b), emptySet(), MediaAccess.PARTIAL))
     }
 
-    /**
-     * #1794：整机空文案在 2 列网格里必须整行居中，不能和「添加文件夹」卡片并排只占一格。
-     * 反证：去掉 `span = { GridItemSpan(maxLineSpan) }`，本条红。
-     */
     @Test
     fun whole_phone_empty_copy_spans_the_whole_row() {
         val empty = bucketScreenSource().substringAfter("item(key = \"empty\"")
@@ -181,7 +215,6 @@ class UI08BucketScreenTest {
         )
     }
 
-    /** 只有完整权限才读得到全部照片：部分权限同样不能把「只能读一部分」说成整机没有照片。 */
     @Test
     fun whole_phone_empty_copy_needs_full_photo_access() {
         assertTrue(bucketScreenEmptyNoticeVisible(bucketsEmpty = true, foldersEmpty = true, access = MediaAccess.FULL))
@@ -199,44 +232,36 @@ class UI08BucketScreenTest {
         )
     }
 
-    /**
-     * #1797 / #1868：「添加文件夹」用标准 AddSourceCard；保存期间通过组件层 `enabled` 显式禁用
-     * （无障碍树暴露 disabled），不再靠调用点闭包里的 `if (!saving)` 静默吞点击。
-     */
+    /** #2067：底部已选摘要在各种组合（相册+文件夹 / 仅相册 / 仅文件夹 / 空选，保存与首次开始备份）下清晰准确。 */
     @Test
-    fun add_action_uses_the_standard_card_and_keeps_its_save_guard() {
-        val source = bucketScreenSource()
-        assertTrue("添加动作必须用标准 AddSourceCard", source.contains("AddSourceCard("))
-        val addFolderBlock = source.substringAfter("item(key = \"add-folder\")").substringBefore("}")
-        assertTrue("保存期间必须以 enabled = !saving 禁用添加动作", addFolderBlock.contains("enabled = !saving"))
-        assertFalse("不再靠闭包内 if (!saving) 静默吞点击", addFolderBlock.contains("if (!saving) onAddFolder()"))
-    }
+    fun bottom_action_summary_counts_visible_checked_albums_and_folders_accurately() {
+        val a = MediaScanner.Bucket(1L, "Camera", 10)
+        val b = MediaScanner.Bucket(2L, "Screenshots", 4)
+        val f1 = FolderBucketUi("k1", MediaScanner.Bucket(101L, "Raw", 3), registered = true)
+        val f2 = FolderBucketUi("k2", MediaScanner.Bucket(102L, "Docs", 2), registered = true)
 
-    /**
-     * #2063：失效文件夹卡片必须显式暴露状态标记和直接重授入口，不能仅藏在 `⋮` 菜单里；
-     * 提示文案也不能指向不存在的独立「设置」入口。
-     */
-    @Test
-    fun expired_folder_card_exposes_direct_reauthorize_and_copy_avoids_nonexistent_settings() {
-        val source = bucketScreenSource()
-        val folderBlock = source.substringBefore("item(key = \"add-folder\")")
-            .substringAfter("items(folderBuckets")
-        assertTrue(
-            "BucketSourceCard 必须接收 needsPermission 并显式呈现状态/直达重授",
-            folderBlock.contains("needsPermission = folder.needsPermission"),
-        )
-        assertTrue(
-            "BucketSourceCard 必须直接透传 onReauthorize（不只放进 menuActions）",
-            folderBlock.contains("onReauthorize ="),
-        )
+        assertEquals(2, visibleSelectedAlbumCount(listOf(a, b), setOf(1L, 2L, 99L), MediaAccess.FULL))
+        assertEquals(1, visibleSelectedAlbumCount(listOf(a, b), setOf(1L), MediaAccess.PARTIAL))
+        assertEquals(0, visibleSelectedAlbumCount(emptyList(), setOf(1L), MediaAccess.NONE))
+        assertEquals(1, selectedFolderCount(listOf(f1, f2), setOf("k1", "stale")))
 
-        var dir = File(System.getProperty("user.dir"))
-        while (!File(dir, "apps/android").isDirectory) dir = dir.parentFile ?: error("apps/android not found")
-        val enXml = File(dir, "apps/android/app/src/main/res/values/strings.xml").readText()
-        val zhXml = File(dir, "apps/android/app/src/main/res/values-zh/strings.xml").readText()
-        val enWaiting = enXml.substringAfter("name=\"state_waiting_source_unavailable\">").substringBefore("</string>")
-        val zhWaiting = zhXml.substringAfter("name=\"state_waiting_source_unavailable\">").substringBefore("</string>")
-        assertFalse("英文提示不得再指向不存在的 settings 入口", enWaiting.contains("in settings", ignoreCase = true))
-        assertFalse("中文提示不得再指向不存在的「设置」入口", zhWaiting.contains("设置里"))
+        val withSummaryZh: (String, String) -> String = { base, s -> "$base（已选 $s）" }
+        val emptyZh: (String) -> String = { base -> "$base（未选来源）" }
+        assertEquals(
+            "保存（已选 2 相册 · 1 文件夹）",
+            formatBucketActionLabel("保存", "2 相册", "1 文件夹", withSummaryZh, emptyZh),
+        )
+        assertEquals(
+            "保存（已选 2 相册）",
+            formatBucketActionLabel("保存", "2 相册", null, withSummaryZh, emptyZh),
+        )
+        assertEquals(
+            "开始备份（已选 1 文件夹）",
+            formatBucketActionLabel("开始备份", null, "1 文件夹", withSummaryZh, emptyZh),
+        )
+        assertEquals(
+            "开始备份（未选来源）",
+            formatBucketActionLabel("开始备份", null, null, withSummaryZh, emptyZh),
+        )
     }
 }

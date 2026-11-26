@@ -174,6 +174,10 @@
     <!-- M5 (full-page-states doc): summary sentence + single primary button. -->
     <string name="bucket_start">Start backup</string>
     <string name="bucket_save">Save</string>
+    <string name="bucket_action_with_summary">%1$s (%2$s)</string>
+    <string name="bucket_action_empty">%1$s (none selected)</string>
+    <string name="scope_time_section">Backup time</string>
+    <string name="scope_folders_section">Folders</string>
     <!-- #1263: the two time choices for the backup scope (no custom date). scope_time_* are the picker options, scope_value_* the settings-row value; both always name the date. -->
     <string name="scope_time_since_date">From %1$s onward</string>
     <string name="scope_time_all">Include older photos</string>

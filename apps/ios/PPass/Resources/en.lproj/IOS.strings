@@ -80,7 +80,7 @@
 
 /* Folder sources and authorization actions on the unified backup scope screen. */
 "folder_sources_add" = "Add a Folder";
-"folder_sources_status_wait" = "Re-authorization needed";
+"folder_sources_status_wait" = "Permission needed";
 "folder_sources_reauth" = "Re-authorize";
 "folder_sources_remove" = "Remove";
 "folder_sources_remove_confirm_title" = "Remove \"%@\"?";

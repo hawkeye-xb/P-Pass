@@ -162,6 +162,10 @@
     <!-- M5 全页面状态稿：总结句 + 单个主按钮，取代"取消/备份N个相册"两按钮。 -->
     <string name="bucket_start">开始备份</string>
     <string name="bucket_save">保存</string>
+    <string name="bucket_action_with_summary">%1$s（已选 %2$s）</string>
+    <string name="bucket_action_empty">%1$s（未选来源）</string>
+    <string name="scope_time_section">备份时间</string>
+    <string name="scope_folders_section">文件夹</string>
     <!-- #1263：备份范围的时间二选一（不做自选日期）。scope_time_* 是选范围页的选项，scope_value_* 是设置行的值，一律写日期。 -->
     <string name="scope_time_since_date">%1$s以后</string>
     <string name="scope_time_all">含以前的照片</string>

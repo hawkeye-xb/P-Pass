@@ -2,36 +2,52 @@ package com.hawkeyexb.ppass.ui
 
 import android.graphics.Bitmap
 import android.net.Uri
-import android.os.Build
 import android.util.Size
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,15 +63,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -66,10 +88,8 @@ import com.hawkeyexb.ppass.backup.MediaScanner
 import com.hawkeyexb.ppass.backup.ScopeTime
 import com.hawkeyexb.ppass.backup.decodeBucketCover
 import com.hawkeyexb.ppass.backup.newAlbumIds
-import com.hawkeyexb.ppass.ui.components.AddSourceCard
 import com.hawkeyexb.ppass.ui.components.SourceCard
 import com.hawkeyexb.ppass.ui.components.SourceKind
-import com.hawkeyexb.ppass.ui.components.SourceMenuAction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -151,7 +171,7 @@ private fun AlbumNoAccessNotice(canPrompt: Boolean, onRequest: () -> Unit, onOpe
                 onClick = if (opensSettings) onOpenSettings else onRequest,
                 modifier = Modifier.height(40.dp),
                 shape = RoundedCornerShape(14.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.4f)),
+                border = BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.4f)),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = PPColor.Act),
             ) {
                 Text(
@@ -163,31 +183,22 @@ private fun AlbumNoAccessNotice(canPrompt: Boolean, onRequest: () -> Unit, onOpe
     }
 }
 
-/**
- * 相册与文件夹共用的标准来源卡。勾选/点击/菜单语义由 SourceCard 承载，
- * 封面复用 BucketCoverImage；「新」徽标叠在封面槽内。卡片尺寸（封面高度、内容区）
- * 由 SourceCard 统一给出，相册、文件夹与「添加文件夹」天然同网格同尺寸。
- */
+/** 相册网格卡片：走标准 SourceCard，封面复用 BucketCoverImage，「新」徽标叠在封面槽内。 */
 @Composable
-private fun BucketSourceCard(
+private fun BucketAlbumCard(
     title: String,
     bucketId: Long,
     coverUri: Uri?,
     count: Int,
-    kind: SourceKind,
-    kindLabel: String,
     selected: Boolean,
-    isNew: Boolean = false,
-    needsPermission: Boolean = false,
-    onReauthorize: (() -> Unit)? = null,
-    menuActions: List<SourceMenuAction> = emptyList(),
+    isNew: Boolean,
     onClick: () -> Unit,
 ) {
     SourceCard(
         title = title,
         countLabel = stringResource(R.string.bucket_count, count),
-        kind = kind,
-        kindLabel = kindLabel,
+        kind = SourceKind.ALBUM,
+        kindLabel = stringResource(R.string.source_kind_album),
         selected = selected,
         selectedDescription = stringResource(R.string.source_selected),
         unselectedDescription = stringResource(R.string.source_unselected),
@@ -198,11 +209,140 @@ private fun BucketSourceCard(
                 NewBadge(Modifier.align(Alignment.TopStart).padding(8.dp))
             }
         },
-        menuActions = menuActions,
-        menuContentDescription = stringResource(R.string.source_more_actions),
-        statusLabel = if (needsPermission) stringResource(R.string.folder_status_needs_permission) else null,
-        actionLabel = if (needsPermission && onReauthorize != null) stringResource(R.string.folder_reauthorize) else null,
-        onAction = onReauthorize,
+    )
+}
+
+/** 紧凑文件夹列表行（放相册网格下方）：用 Material3 ListItem 传达「立即管理 vs 点保存生效」的区分；
+ *  整行 toggleable 负责勾选（点底部保存生效），失效行显性标出「需要重新允许」与直达重授按钮，菜单收移除确认。 */
+@Composable
+private fun BucketFolderRow(
+    folder: FolderBucketUi,
+    selected: Boolean,
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit,
+    onReauthorize: () -> Unit,
+    onRequestRemove: () -> Unit,
+) {
+    val stateDesc = stringResource(if (selected) R.string.source_selected else R.string.source_unselected)
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    ListItem(
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(
+                value = selected,
+                enabled = enabled,
+                role = Role.Checkbox,
+                onValueChange = onToggle,
+            )
+            .semantics { stateDescription = stateDesc },
+        leadingContent = {
+            Checkbox(
+                checked = selected,
+                onCheckedChange = null,
+                enabled = enabled,
+                colors = CheckboxDefaults.colors(
+                    checkedColor = PPColor.Ink,
+                    checkmarkColor = PPColor.Paper,
+                    uncheckedColor = PPColor.BorderStrong,
+                ),
+            )
+        },
+        headlineContent = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_folder),
+                    contentDescription = stringResource(R.string.source_kind_folder),
+                    modifier = Modifier.size(16.dp),
+                    tint = if (folder.needsPermission) PPColor.Act else PPColor.Ink60,
+                )
+                Text(
+                    text = folder.bucket.name ?: stringResource(R.string.bucket_unnamed),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = PPColor.Ink,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        },
+        supportingContent = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (folder.needsPermission) {
+                    Text(
+                        text = stringResource(R.string.folder_status_needs_permission),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = PPColor.Act,
+                    )
+                    OutlinedButton(
+                        onClick = onReauthorize,
+                        enabled = enabled,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.45f)),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = PPColor.ActBg,
+                            contentColor = PPColor.Act,
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.heightIn(min = 36.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.folder_reauthorize),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                } else {
+                    Text(
+                        text = stringResource(R.string.bucket_count, folder.bucket.count),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = PPColor.Ink40,
+                    )
+                }
+            }
+        },
+        trailingContent = {
+            Box {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    enabled = enabled,
+                    modifier = Modifier.size(PPSize.TapMin),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = stringResource(R.string.source_more_actions),
+                        tint = PPColor.Ink60,
+                    )
+                }
+                DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                    if (folder.needsPermission) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.folder_reauthorize)) },
+                            onClick = {
+                                menuExpanded = false
+                                onReauthorize()
+                            },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.folder_remove)) },
+                        onClick = {
+                            menuExpanded = false
+                            onRequestRemove()
+                        },
+                    )
+                }
+            }
+        },
+        colors = ListItemDefaults.colors(
+            containerColor = Color.Transparent,
+            headlineColor = PPColor.Ink,
+            supportingColor = PPColor.Ink40,
+        ),
     )
 }
 
@@ -210,7 +350,7 @@ private fun BucketSourceCard(
  * 相册区能不能选。相册自动备份只认完整照片权限——「部分照片权限」对相册自动备份
  * 与「无权限」没有区别（底层引擎和首页 HeroCard 在 PARTIAL 下都停止相册自动备份），所以只有 FULL
  * 才给选相册；PARTIAL / NONE 都在顶部显示现状与开启入口。
- * 文件夹区和「添加文件夹」不受影响（对齐 iOS，范围页始终能进）。
+ * 文件夹区与顶栏目录入口不受影响（对齐 iOS，范围页始终能进）。
  */
 internal fun bucketScreenOffersAlbumChoices(access: MediaAccess): Boolean = access == MediaAccess.FULL
 
@@ -239,6 +379,32 @@ internal fun bucketScreenEmptyNoticeVisible(
     access: MediaAccess,
 ): Boolean = bucketsEmpty && foldersEmpty && bucketScreenOffersAlbumChoices(access)
 
+/** 文件夹分组仅在已有文件夹时按需出现；从未添加过时完全不占版面。 */
+internal fun bucketScreenShowsFoldersSection(folderBuckets: List<FolderBucketUi>): Boolean =
+    folderBuckets.isNotEmpty()
+
+internal fun visibleSelectedAlbumCount(
+    buckets: List<MediaScanner.Bucket>,
+    checked: Set<Long>,
+    access: MediaAccess,
+): Int = visibleAlbumBuckets(buckets, checked, access).count { it.id in checked }
+
+internal fun selectedFolderCount(
+    folderBuckets: List<FolderBucketUi>,
+    checkedFolders: Set<String>,
+): Int = folderBuckets.count { it.key in checkedFolders }
+
+internal fun formatBucketActionLabel(
+    baseLabel: String,
+    albumPart: String?,
+    folderPart: String?,
+    formatWithSummary: (String, String) -> String,
+    formatEmpty: (String) -> String,
+): String {
+    val summary = listOfNotNull(albumPart, folderPart).joinToString(" · ")
+    return if (summary.isEmpty()) formatEmpty(baseLabel) else formatWithSummary(baseLabel, summary)
+}
+
 /**
  * 范围页相册提示的动作去向——系统还肯弹框（rationale=true）就页内申请；不再弹框
  * （问过至少一次后被锁，Android 官方口径：shouldShowRequestPermissionRationale）改「去设置」。
@@ -247,18 +413,6 @@ internal fun bucketScreenEmptyNoticeVisible(
  */
 internal fun albumNoAccessNoticeOpensSettings(canPrompt: Boolean): Boolean = !canPrompt
 
-/** 范围页两个时间胶囊放不下、需要换行——纯函数，单测用三星 SM-S928N 实测像素钉住。
- *
- *  输入是两段胶囊的**自身宽度**（含内边距，px）与行可用宽、间距；两段自身宽 + 间距超过可用宽就换行。
- *  这是两个胶囊容器（`FlowRow`）按内容换行的契约：不设宽度 / 字号 / 百分比阈值。旧写法（普通 `Row`）
- *  里第二个胶囊只吃第一个剩下的宽度，会被挤窄到装不下标签、底边把换行后的第二行裁掉。 */
-internal fun scopeTimeChipsWrap(
-    firstChipWidthPx: Int,
-    secondChipWidthPx: Int,
-    gapPx: Int,
-    availableWidthPx: Int,
-): Boolean = firstChipWidthPx + gapPx + secondChipWidthPx > availableWidthPx
-
 data class FolderBucketUi(
     val key: String,
     val bucket: MediaScanner.Bucket,
@@ -266,7 +420,7 @@ data class FolderBucketUi(
     val needsPermission: Boolean = false,
 )
 
-@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BucketScreen(
     buckets: List<MediaScanner.Bucket>,
@@ -296,6 +450,8 @@ fun BucketScreen(
     var time by remember { mutableStateOf(initialTime) }
     val newIds = newAlbumIds(buckets.map { it.id }.toSet(), knownBuckets)
     val offersAlbums = bucketScreenOffersAlbumChoices(albumAccess)
+    val visibleAlbums = visibleAlbumBuckets(buckets, checked, albumAccess)
+    val showFoldersSection = bucketScreenShowsFoldersSection(folderBuckets)
 
     LaunchedEffect(folderBuckets) {
         val pending = folderBuckets.filter { !it.registered && it.key !in seenFolderKeys }.map { it.key }
@@ -331,6 +487,15 @@ fun BucketScreen(
                             )
                         }
                     },
+                    actions = {
+                        IconButton(onClick = onAddFolder, enabled = !saving) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_create_new_folder),
+                                contentDescription = stringResource(R.string.folder_add),
+                                tint = if (!saving) PPColor.Ink else PPColor.Ink40,
+                            )
+                        }
+                    },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = PPColor.Paper,
                         scrolledContainerColor = PPColor.Paper,
@@ -340,29 +505,72 @@ fun BucketScreen(
                 )
             },
         ) { innerPadding ->
-        Column(Modifier.fillMaxSize().padding(innerPadding).padding(24.dp)) {
-            Spacer(Modifier.height(12.dp))
-            // 两个时间胶囊改放可换行的 FlowRow——普通 Row 里第二个胶囊只能吃第一个剩下的宽度，
-            // 英文 1.5× 时被挤成 145px（51.5dp），标签被硬裁成「Incl」。FlowRow 放不下时把第二个胶囊
-            // 整体落到下一行、各自保持自身宽度，不再互相挤；换行契约见 scopeTimeChipsWrap（纯函数，单测钉住）。
-            // 筛选条必须画在下方列表之上——列表向上滚动时，顶边被裁剩 1px 的相册卡
-            // 虚拟触控框会外扩 24dp 遮住上面的 Chip，TalkBack 读到的可点区只剩 32dp。
-            // zIndex 抬高绘制/命中层级，配上下方 Box 的 clipToBounds 把卡片触控框夹在视口内。
-            FlowRow(
-                modifier = Modifier.zIndex(1f),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
-                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+        Column(Modifier.fillMaxSize().padding(innerPadding).padding(horizontal = 24.dp, vertical = 16.dp)) {
+            Text(
+                text = stringResource(R.string.scope_time_section),
+                style = MaterialTheme.typography.labelMedium,
+                color = PPColor.Ink60,
+                modifier = Modifier.semantics { heading() },
+            )
+            Spacer(Modifier.height(8.dp))
+            // 原生 M3 分段控件与照片页筛选胶囊彻底区分；IntrinsicSize.Min + fillMaxHeight 让两段在大字号
+            // 换行时同步长高、不裁字不重叠；zIndex(1f) 与下方 Box.clipToBounds() 防止滚动卡片触控框外溢遮挡。
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(IntrinsicSize.Min)
+                    .zIndex(1f),
             ) {
-                PhotoFilterChip(sinceLabel, time == ScopeTime.SINCE_TODAY) { time = ScopeTime.SINCE_TODAY }
-                PhotoFilterChip(stringResource(R.string.scope_time_all), time == ScopeTime.ALL) { time = ScopeTime.ALL }
+                val segmentColors = SegmentedButtonDefaults.colors(
+                    activeContainerColor = PPColor.Ink,
+                    activeContentColor = PPColor.Paper,
+                    activeBorderColor = PPColor.Ink,
+                    inactiveContainerColor = PPColor.Linen,
+                    inactiveContentColor = PPColor.Ink60,
+                    inactiveBorderColor = PPColor.BorderStrong,
+                )
+                SegmentedButton(
+                    selected = time == ScopeTime.SINCE_TODAY,
+                    onClick = { time = ScopeTime.SINCE_TODAY },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    modifier = Modifier.fillMaxHeight().heightIn(min = 48.dp),
+                    colors = segmentColors,
+                    icon = {},
+                    label = {
+                        Text(
+                            text = sinceLabel,
+                            style = MaterialTheme.typography.labelLarge,
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
+                            softWrap = true,
+                        )
+                    },
+                )
+                SegmentedButton(
+                    selected = time == ScopeTime.ALL,
+                    onClick = { time = ScopeTime.ALL },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    modifier = Modifier.fillMaxHeight().heightIn(min = 48.dp),
+                    colors = segmentColors,
+                    icon = {},
+                    label = {
+                        Text(
+                            text = stringResource(R.string.scope_time_all),
+                            style = MaterialTheme.typography.labelLarge,
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
+                            softWrap = true,
+                        )
+                    },
+                )
             }
             Spacer(Modifier.height(14.dp))
 
             Box(Modifier.weight(1f).clipToBounds()) {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
-                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     // 没有完整相册权限时相册区不给新增选择，只说现状 + 申请入口；文件夹区照常。
                     if (!offersAlbums) {
@@ -384,14 +592,12 @@ fun BucketScreen(
                         }
                     }
                     // 未完整授权时只剩编辑态里勾着的相册（可取消），不显示诱选受限相册。
-                    items(visibleAlbumBuckets(buckets, checked, albumAccess), key = { "album:${it.id}" }) { b ->
-                        BucketSourceCard(
+                    items(visibleAlbums, key = { "album:${it.id}" }) { b ->
+                        BucketAlbumCard(
                             title = b.name ?: stringResource(R.string.bucket_unnamed),
                             bucketId = b.id,
                             coverUri = b.coverUri,
                             count = b.count,
-                            kind = SourceKind.ALBUM,
-                            kindLabel = stringResource(R.string.source_kind_album),
                             selected = b.id in checked,
                             isNew = b.id in newIds,
                             onClick = {
@@ -399,59 +605,83 @@ fun BucketScreen(
                             },
                         )
                     }
-                    items(folderBuckets, key = { "folder:${it.key}" }) { folder ->
-                        // 重新授权与移除收进标准菜单；失效卡片同时直接在封面标状态并给出醒目重授按钮。
-                        BucketSourceCard(
-                            title = folder.bucket.name ?: stringResource(R.string.bucket_unnamed),
-                            bucketId = folder.bucket.id,
-                            coverUri = folder.bucket.coverUri,
-                            count = folder.bucket.count,
-                            kind = SourceKind.FOLDER,
-                            kindLabel = stringResource(R.string.source_kind_folder),
-                            selected = folder.key in checkedFolders,
-                            needsPermission = folder.needsPermission,
-                            onReauthorize = if (folder.needsPermission) {
-                                { onReauthorizeFolder(folder.key) }
-                            } else {
-                                null
-                            },
-                            menuActions = buildList {
-                                if (folder.needsPermission) {
-                                    add(SourceMenuAction(stringResource(R.string.folder_reauthorize)) { onReauthorizeFolder(folder.key) })
+                    if (showFoldersSection) {
+                        item(key = "folders-header", span = { GridItemSpan(maxLineSpan) }) {
+                            Text(
+                                text = stringResource(R.string.scope_folders_section),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = PPColor.Ink60,
+                                modifier = Modifier
+                                    .padding(top = if (visibleAlbums.isEmpty() && offersAlbums) 0.dp else 10.dp)
+                                    .semantics { heading() },
+                            )
+                        }
+                        item(key = "folders-group", span = { GridItemSpan(maxLineSpan) }) {
+                            Surface(
+                                color = PPColor.Paper,
+                                shape = RoundedCornerShape(PPSize.RadiusCard),
+                                border = BorderStroke(1.dp, PPColor.Border),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column {
+                                    folderBuckets.forEachIndexed { index, folder ->
+                                        if (index > 0) {
+                                            HorizontalDivider(color = PPColor.Divider)
+                                        }
+                                        BucketFolderRow(
+                                            folder = folder,
+                                            selected = folder.key in checkedFolders,
+                                            enabled = !saving,
+                                            onToggle = { isChecked ->
+                                                checkedFolders = if (isChecked) {
+                                                    checkedFolders + folder.key
+                                                } else {
+                                                    checkedFolders - folder.key
+                                                }
+                                            },
+                                            onReauthorize = { onReauthorizeFolder(folder.key) },
+                                            onRequestRemove = { removing = folder },
+                                        )
+                                    }
                                 }
-                                add(SourceMenuAction(stringResource(R.string.folder_remove)) { removing = folder })
-                            },
-                            onClick = {
-                                checkedFolders = if (folder.key in checkedFolders) {
-                                    checkedFolders - folder.key
-                                } else {
-                                    checkedFolders + folder.key
-                                }
-                            },
-                        )
-                    }
-                    item(key = "add-folder") {
-                        AddSourceCard(
-                            label = stringResource(R.string.folder_add),
-                            actionContentDescription = stringResource(R.string.folder_add),
-                            enabled = !saving,
-                            onClick = onAddFolder,
-                        )
+                            }
+                        }
                     }
                 }
             }
 
             Spacer(Modifier.height(14.dp))
+            val selectedAlbumsCount = visibleSelectedAlbumCount(buckets, checked, albumAccess)
+            val selectedFoldersCount = selectedFolderCount(folderBuckets, checkedFolders)
+            val baseAction = stringResource(if (firstTime) R.string.bucket_start else R.string.bucket_save)
+            val albumPart = if (selectedAlbumsCount > 0) {
+                pluralStringResource(R.plurals.backup_scope_n, selectedAlbumsCount, selectedAlbumsCount)
+            } else {
+                null
+            }
+            val folderPart = if (selectedFoldersCount > 0) {
+                pluralStringResource(R.plurals.backup_scope_folder_n, selectedFoldersCount, selectedFoldersCount)
+            } else {
+                null
+            }
+            val summary = listOfNotNull(albumPart, folderPart).joinToString(" · ")
+            val actionText = if (summary.isEmpty()) {
+                stringResource(R.string.bucket_action_empty, baseAction)
+            } else {
+                stringResource(R.string.bucket_action_with_summary, baseAction, summary)
+            }
             Button(
                 onClick = { onDone(checked, checkedFolders, time) },
                 enabled = !saving,
-                modifier = Modifier.fillMaxWidth().height(60.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp),
                 shape = RoundedCornerShape(PPSize.RadiusControl),
                 colors = ButtonDefaults.buttonColors(containerColor = PPColor.Ink, contentColor = PPColor.Paper),
             ) {
                 Text(
-                    stringResource(if (firstTime) R.string.bucket_start else R.string.bucket_save),
-                    fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                    text = actionText,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
                 )
             }
         }
