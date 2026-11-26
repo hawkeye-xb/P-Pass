@@ -628,10 +628,9 @@ elif sub == "list":
     for tag in sorted(os.listdir(os.path.join(STATE, "releases"))) if os.path.isdir(os.path.join(STATE, "releases")) else []:
         m = meta(tag)
         if flag("--exclude-drafts") and m["draft"]: continue
-        rows.append({"tagName": tag, "publishedAt": m["publishedAt"] or "", "isDraft": m["draft"]})
-    q = opt("-q") or opt("--jq") or "."
-    r = subprocess.run(["jq", "-r", q], input=json.dumps(rows), text=True, capture_output=True)
-    sys.stdout.write(r.stdout); sys.stderr.write(r.stderr); sys.exit(r.returncode)
+        if flag("--exclude-pre-releases") and m["prerelease"]: continue
+        rows.append({"tagName": tag, "publishedAt": m["publishedAt"] or "", "isDraft": m["draft"], "isPrerelease": m["prerelease"]})
+    emit(rows)
 else:
     fail(f"gh stub: unsupported release {sub}", 2)
 '''

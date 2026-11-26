@@ -187,6 +187,20 @@ jobs:
             exit 1
           fi
 
+      # #1636：正式版发版前检查 CHANGELOG.md 没有滞留的草稿版本小节（必须已并入或显式标注未发布）。
+      - name: CHANGELOG 草稿小节去向检查（#1636）
+        if: ${{ inputs.release }}
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
+            echo "test 包（${TAG}）不查 CHANGELOG 草稿小节"; exit 0
+          fi
+          tools/release/changelog-section.sh --check
+
       - name: Plan builds (#838)
         id: plan
         env:

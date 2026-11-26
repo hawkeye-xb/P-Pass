@@ -591,7 +591,10 @@ desktop-dead-components-test:
 doc-anchors-test:
   @bash tools/test-check-doc-anchors.sh
 
-flow-tests: doc-anchors-test hooks-test flow-engine-test flow-ci-review-test flow-gate-status-test macos-runner-test main-red-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test dead-i18n-test desktop-dead-components-test
+changelog-section-test:
+  @bash tools/test-changelog-section.sh
+
+flow-tests: doc-anchors-test changelog-section-test hooks-test flow-engine-test flow-ci-review-test flow-gate-status-test macos-runner-test main-red-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test dead-i18n-test desktop-dead-components-test
   @echo "==> flow-tests: green ✅"
 
 flow-engine-test:
