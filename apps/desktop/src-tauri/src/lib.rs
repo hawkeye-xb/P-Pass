@@ -4668,4 +4668,50 @@ mod tests {
             "opener 作用域 {scope:?} 不覆盖 {releases}"
         );
     }
+
+    /// #2065：桌面端「设置 → 关于」外链按最小权限白名单放行（docs/decisions/2026-11-26-desktop-about-opener-allowlist.md），
+    /// 不开放任意 http/https；反证：删掉任一条允许前缀或精确地址，对应外链断言红。
+    #[test]
+    fn about_links_are_covered_by_opener_capability() {
+        let cap: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).expect("json");
+        let perms = cap["permissions"].as_array().expect("permissions");
+        assert!(
+            !perms
+                .iter()
+                .any(|p| p.as_str() == Some("opener:allow-default-urls")),
+            "不许开放任意 http/https"
+        );
+        let scope: Vec<&str> = perms
+            .iter()
+            .find(|p| p["identifier"] == "opener:allow-open-url")
+            .expect("capabilities/default.json 缺 opener:allow-open-url")["allow"]
+            .as_array()
+            .expect("allow")
+            .iter()
+            .filter_map(|a| a["url"].as_str())
+            .collect();
+        let covers = |target: &str| -> bool {
+            scope.iter().any(|pat| match pat.strip_suffix('*') {
+                Some(prefix) => target.starts_with(prefix),
+                None => *pat == target,
+            })
+        };
+        for required in [
+            "https://p-pass.hawkeye-xb.com/",
+            "https://p-pass.hawkeye-xb.com/zh/",
+            "https://p-pass.hawkeye-xb.com/faq/",
+            "https://p-pass.hawkeye-xb.com/zh/faq/",
+            "https://p-pass.hawkeye-xb.com/privacy/",
+            "https://p-pass.hawkeye-xb.com/zh/privacy/",
+            "https://github.com/hawkeye-xb/P-Pass",
+            "https://github.com/hawkeye-xb/P-Pass/discussions",
+            "mailto:ppass@hawkeye-xb.com",
+        ] {
+            assert!(
+                covers(required),
+                "opener 作用域 {scope:?} 不覆盖 {required}"
+            );
+        }
+    }
 }

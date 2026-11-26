@@ -104,4 +104,5 @@
     <string name="folder_reauthorize_notice_multiple">%1$d folders need permission again to keep backing up.</string>
     <string name="folder_banner_open_scope">Backup range</string>
     <string name="folder_boundary_note">Folders that Android protects, such as Android/data, can\'t be selected.</string>
+    <string name="about_open_link_failed">No app on this phone can open this link.</string>
 </resources>

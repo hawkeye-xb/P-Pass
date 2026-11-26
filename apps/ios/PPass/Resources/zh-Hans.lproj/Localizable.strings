@@ -193,6 +193,15 @@
 "auto_backup_rule_none_hint" = "没有照片访问权限。";
 "auto_backup_from_today_empty" = "今天新拍的照片会自动传到电脑。去拍一张试试。";
 "more_label" = "更多";
+"about_label" = "关于";
+"about_tagline" = "跨生态家庭的照片中心，不用自己搭服务器。";
+"about_website" = "官网";
+"about_faq" = "常见问题";
+"about_feedback_email" = "问题反馈（邮件）";
+"about_feedback_discussions" = "问题反馈（Discussions）";
+"about_source_code" = "开源仓库";
+"about_source_license" = "AGPL-3.0";
+"about_privacy" = "隐私政策";
 "source_kind_album" = "相册";
 "source_kind_folder" = "文件夹";
 "source_selected" = "已选择";

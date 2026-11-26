@@ -304,6 +304,15 @@
     <string name="auto_backup_rule_none_hint">没有照片访问权限。</string>
     <string name="auto_backup_from_today_empty">今天新拍的照片会自动传到电脑。去拍一张试试。</string>
     <string name="more_label">更多</string>
+    <string name="about_label">关于</string>
+    <string name="about_tagline">跨生态家庭的照片中心，不用自己搭服务器。</string>
+    <string name="about_website">官网</string>
+    <string name="about_faq">常见问题</string>
+    <string name="about_feedback_email">问题反馈（邮件）</string>
+    <string name="about_feedback_discussions">问题反馈（Discussions）</string>
+    <string name="about_source_code">开源仓库</string>
+    <string name="about_source_license">AGPL-3.0</string>
+    <string name="about_privacy">隐私政策</string>
     <!-- #1797：范围页来源卡（#1796 标准组件）。类型词区分同名的相册与文件夹；已选/未选喂给卡片的读屏状态；更多操作是卡片菜单按钮的描述。 -->
     <string name="source_kind_album">相册</string>
     <string name="source_kind_folder">文件夹</string>

@@ -2,7 +2,7 @@ import PhotosUI
 import SwiftUI
 
 enum LaunchRoute: String {
-    case photos, family, settings, viewer, video, bucket, storage, diagnostics
+    case photos, family, settings, viewer, video, bucket, storage, diagnostics, about
     case decision
     case welcome, scan, manual, pairWaiting, pairCode, pairRefused, pairLapsed, pairFailed
 
@@ -59,7 +59,7 @@ struct RootView: View {
 
     private func applyLaunchRoute() {
         switch LaunchRoute.current {
-        case .settings, .bucket, .storage, .diagnostics: app.tab = .settings
+        case .settings, .bucket, .storage, .diagnostics, .about: app.tab = .settings
         case .welcome, .scan, .manual, .pairWaiting, .pairCode, .pairRefused, .pairLapsed, .pairFailed: app.phase = .onboarding
         case .decision: app.phase = .decision
         default: break

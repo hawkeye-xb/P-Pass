@@ -117,6 +117,7 @@ import com.hawkeyexb.ppass.ui.UpdateDialog
 import com.hawkeyexb.ppass.ui.WelcomeScreen
 import com.hawkeyexb.ppass.ui.evictPhotoPreviews
 import com.hawkeyexb.ppass.ui.offersAppUpdate
+import com.hawkeyexb.ppass.ui.openExternalUrlIntent
 import com.hawkeyexb.ppass.ui.outdatedTextRes
 import com.hawkeyexb.ppass.ui.pairRefusalDetailRes
 import com.hawkeyexb.ppass.ui.pairRefusalErrorCode
@@ -1139,6 +1140,17 @@ fun PPassApp() {
                         mixedAlbumIncomplete = homeAvailability.mixedAlbumIncomplete,
                         hasSelectedAlbum = homeAvailability.hasSelectedAlbum,
                         onPickFiles = { filePickLauncher.launch(com.hawkeyexb.ppass.ui.SingleTransferFilePicker.intent()) },
+                        onOpenExternalUrl = { url ->
+                            PLog.i("PPassFlow", "about: open external url=$url")
+                            try {
+                                context.startActivity(openExternalUrlIntent(url))
+                            } catch (_: android.content.ActivityNotFoundException) {
+                                PLog.w("PPassFlow", "about: no activity for external url=$url")
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(context.getString(R.string.about_open_link_failed))
+                                }
+                            }
+                        },
                         selectedBucketCount = selectedBucketCount,
                         selectedFolderCount = selectedFolderCount,
                         scopeUnreadable = scopeUnreadable,

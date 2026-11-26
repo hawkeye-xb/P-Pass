@@ -96,4 +96,5 @@
     <string name="folder_reauthorize_notice_multiple">有 %1$d 个文件夹需要重新允许访问才能继续备份</string>
     <string name="folder_banner_open_scope">前往备份范围</string>
     <string name="folder_boundary_note">系统保护的目录（如 Android/data）无法选择</string>
+    <string name="about_open_link_failed">手机上没有能打开这个链接的应用。</string>
 </resources>

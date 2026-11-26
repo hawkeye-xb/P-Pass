@@ -148,12 +148,14 @@ internal fun HomeScreen(
     mixedAlbumIncomplete: Boolean = false,
     hasSelectedAlbum: Boolean = true,
     onPickFiles: () -> Unit = {},
+    onOpenExternalUrl: (String) -> Unit = {},
     notice: (@Composable () -> Unit)? = null,
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
 
     var showStorageDetail by remember { mutableStateOf(false) }
+    var showAbout by remember { mutableStateOf(false) }
     var showMore by remember { mutableStateOf(false) }
     var showFolders by remember { mutableStateOf(false) }
     androidx.compose.runtime.LaunchedEffect(showFolders) { onFoldersOpenChange(showFolders) }
@@ -179,10 +181,18 @@ internal fun HomeScreen(
             onBack = { showStorageDetail = false },
             onDisconnect = onDisconnect,
         )
+    } else if (showAbout) {
+        BackHandler { showAbout = false }
+        AboutPage(
+            versionLine = appVersionLine(),
+            onOpenUrl = onOpenExternalUrl,
+            onBack = { showAbout = false },
+        )
     } else if (showMore) {
         BackHandler { showMore = false; onStorageDetailOpenChange(false) }
         MorePage(
             onOpenStorage = { showStorageDetail = true },
+            onOpenAbout = { showAbout = true },
             onCheckUpdate = onCheckUpdate,
             updateRowValue = updateRowValue,
             onBack = { showMore = false; onStorageDetailOpenChange(false) },
@@ -705,10 +715,20 @@ internal fun HomeScreen(
     }
 }
 
+internal fun appVersionLine(): String {
+    val buildStamp = BuildConfig.BUILD_STAMP
+    return if (buildStamp.isBlank()) {
+        "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+    } else {
+        "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) $buildStamp"
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MorePage(
     onOpenStorage: () -> Unit,
+    onOpenAbout: () -> Unit,
     onCheckUpdate: (() -> Unit)?,
     updateRowValue: String?,
     onBack: () -> Unit,
@@ -758,14 +778,14 @@ private fun MorePage(
                     onClick = onOpenStorage,
                 )
                 HorizontalDivider(color = PPColor.Divider)
-                val buildStamp = BuildConfig.BUILD_STAMP
                 CellRow(
                     label = stringResource(R.string.setting_version),
-                    value = if (buildStamp.isBlank()) {
-                        "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
-                    } else {
-                        "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) $buildStamp"
-                    },
+                    value = appVersionLine(),
+                )
+                HorizontalDivider(color = PPColor.Divider)
+                CellRow(
+                    label = stringResource(R.string.about_label),
+                    onClick = onOpenAbout,
                 )
                 if (onCheckUpdate != null) {
                     HorizontalDivider(color = PPColor.Divider)
