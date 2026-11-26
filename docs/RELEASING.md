@@ -628,7 +628,7 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
 - `ci-android.yml`（apps/android/** assets/i18n/**）→ 单测 + APK。
 - `ci-desktop.yml`（apps/desktop/** assets/**）→ src-tauri lib tests + cargo-deny + vite build。
   #1555：Linux 桌面检查（`desktop (ubuntu-latest)`）整个移除（P-Pass 不发 Linux 安装包），桌面检查
-  只剩 `desktop (windows-latest)`：PR 上按 #1468 跳过，push 到 main 与发版调用照跑；cargo-deny 与
+  只剩 `desktop (windows-latest)`：PR、push 到 main 与发版调用均按影响图/全量运行（#2089 已开启 PR 对称门禁）；cargo-deny 与
   vite build 不再带平台判断，跟着 Windows 跑。
 - 五条 lane（`ci-rust` / `ci-desktop` / `ci-android` / `ci-ios` / `ci-docs`）带 `concurrency`；
   其余 workflow（`ci-identity`、`ci-dco`、`ci-secrets`、`ci-review`、`e2e`、`release`、`repair-manifests`）没有。

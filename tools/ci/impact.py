@@ -40,7 +40,7 @@ EXCLUDE_SELF_DATA = frozenset({
 
 CLOSURE_MAX = 300
 DYN_TOOLS_RE = re.compile(r"tools/[A-Za-z0-9_./-]*[*$]")
-USES_ACTION_RE = re.compile(r"uses:\s*\./(\.github/actions/[A-Za-z0-9_-]+)")
+USES_ACTION_RE = re.compile(r"""uses:\s*['"]?\./(\.github/actions/[A-Za-z0-9_-]+)['"]?""")
 TOOL_REF_RE = re.compile(r"tools/[A-Za-z0-9_./-]*[A-Za-z0-9_-]")
 INCLUDE_MACRO_RE = re.compile(r'include_(?:str|bytes)!\(\s*"([^"]+)"')
 QUOTED_REPO_PATH_RE = re.compile(
@@ -462,9 +462,7 @@ class RepoGraph:
                 if "CARGO_MANIFEST_DIR" in txt or "include_str!" in txt:
                     for qpath in QUOTED_REPO_PATH_RE.findall(txt):
                         qnorm = norm_rel(qpath)
-                        if " " in qnorm or "$" in qnorm:
-                            continue
-                        if not (self.repo_root / qnorm).exists():
+                        if " " in qnorm or "$" in qnorm or "{" in qnorm or "}" in qnorm:
                             continue
                         if not (qnorm == owner_dir or qnorm.startswith(owner_dir + "/")):
                             self.rust_readers.setdefault(qnorm, set()).add(owner)
@@ -475,13 +473,13 @@ class RepoGraph:
             txt = _strip_c_comments(_read_text(fp))
             for target in URL_IMPORT_RE.findall(txt) + READFILE_RE.findall(txt):
                 resolved = _resolve_rel(rel, target)
-                if resolved and not resolved.startswith("apps/desktop/src/") and (self.repo_root / resolved).exists():
+                if resolved and not resolved.startswith("apps/desktop/src/") and "{" not in resolved and "}" not in resolved:
                     self.desktop_ui_readers.add(resolved)
             for qpath in QUOTED_REPO_PATH_RE.findall(txt):
                 qnorm = norm_rel(qpath)
-                if " " in qnorm or "$" in qnorm:
+                if " " in qnorm or "$" in qnorm or "{" in qnorm or "}" in qnorm:
                     continue
-                if not qnorm.startswith("apps/desktop/src/") and (self.repo_root / qnorm).exists():
+                if not qnorm.startswith("apps/desktop/src/"):
                     self.desktop_ui_readers.add(qnorm)
 
         # 3. Android Kotlin + Gradle readers（仅测试目录与 build.gradle.kts，且要求真实文件读取上下文）
@@ -494,10 +492,9 @@ class RepoGraph:
                 continue
             for qpath in QUOTED_REPO_PATH_RE.findall(txt):
                 qnorm = norm_rel(qpath)
-                if " " in qnorm or "$" in qnorm or qnorm.startswith("apps/android/"):
+                if " " in qnorm or "$" in qnorm or "{" in qnorm or "}" in qnorm or qnorm.startswith("apps/android/"):
                     continue
-                if (self.repo_root / qnorm).exists():
-                    self.android_readers.add(qnorm)
+                self.android_readers.add(qnorm)
         gradle_file = self.repo_root / "apps/android/app/build.gradle.kts"
         if gradle_file.is_file():
             gtxt = _strip_c_comments(_read_text(gradle_file))
@@ -517,9 +514,7 @@ class RepoGraph:
                 continue
             for qpath in QUOTED_REPO_PATH_RE.findall(txt):
                 qnorm = norm_rel(qpath)
-                if " " in qnorm or "$" in qnorm or qnorm.startswith("apps/ios/"):
-                    continue
-                if not (self.repo_root / qnorm).exists():
+                if " " in qnorm or "$" in qnorm or "{" in qnorm or "}" in qnorm or qnorm.startswith("apps/ios/"):
                     continue
                 self.ios_readers.add(qnorm)
                 if rel.startswith("apps/ios/TransportFFITests/"):
@@ -755,6 +750,14 @@ def _is_non_rust_code_inert_for_docs(rel_path: str) -> bool:
 def _static_inert_lane(rel_path: str, lane: str, graph: RepoGraph) -> bool:
     if lane in ("default", "rust-workspace"):
         return _static_inert_rust(rel_path, lane, graph)
+
+    # 代码/测试消费者（含读 docs/ 的测试夹具）优先级高于纯文档静态排除
+    if lane == "android" and (rel_path in graph.android_readers or graph.path_hits_any(rel_path, graph.android_ffi_inputs)):
+        return False
+    if lane == "ios" and (rel_path in graph.ios_readers or graph.path_hits_any(rel_path, graph.ios_ffi_inputs)):
+        return False
+    if lane == "ios-ffi" and (rel_path in graph.ios_ffi_readers or graph.path_hits_any(rel_path, graph.ios_ffi_inputs)):
+        return False
 
     # 非 Rust lane 通用无害文件（与 docs 无关，docs 单独处理）
     if lane in ("android", "ios", "ios-ffi"):
@@ -1020,6 +1023,8 @@ def decide_ci(
     if graph is None:
         graph = RepoGraph(repo_root)
     slices, slices_bad = _lane_workflow_slices(lane, repo_root)
+    if slices_bad:
+        return True, f"lane「{lane}」门禁 workflow/action 缺失，保守判定：要跑"
     dyn_dyn = any(bool(DYN_TOOLS_RE.search(txt)) for txt in slices.values())
 
     # 仅在确实触发过 tools/ 闭包校验或有动态 ref 时注意工作流真实存在；
@@ -1051,6 +1056,8 @@ def decide_ci(
         hit_wf = _lane_direct_workflow_hit(f, lane, slices)
         if hit_wf:
             return True, f"「{f}」被「{hit_wf}」直接调用（lane={lane}）→ 要跑"
+        if dyn_dyn and f.startswith("tools/"):
+            return True, f"门禁 workflow/action 含有动态 tools/ 引用，「{f}」不做静态排除 → 要跑"
 
         if _static_inert_lane(f, lane, graph):
             continue
@@ -1132,7 +1139,15 @@ def compute_local_gates(files: list[str], repo_dir: str | Path) -> list[str]:
         is_pure_doc_like = f.startswith(("docs/", "release/notes/")) or f.endswith(".md")
         has_rust_readers = f in graph.rust_readers
         has_desktop_readers = f in graph.desktop_ui_readers
-        if is_pure_doc_like and not has_rust_readers and not has_desktop_readers:
+        has_android_readers = f in graph.android_readers
+        has_ios_readers = f in graph.ios_readers or f in graph.ios_ffi_readers
+        if (
+            is_pure_doc_like
+            and not has_rust_readers
+            and not has_desktop_readers
+            and not has_android_readers
+            and not has_ios_readers
+        ):
             add("just md-check")
             continue
 

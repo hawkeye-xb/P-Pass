@@ -140,5 +140,5 @@ owner 复核放行：PR 上评论 `/review-override <理由>` 触发 `issue_comm
 - 改 trait / 门禁清单：除了 `just ci`，再跑 `for t in tools/test-*.sh; do bash "$t"; done`。
 - 升依赖：先 `git ls-files '*Cargo.lock'`，每一份锁（主 workspace + `src-tauri`）都要改到；
   本地 `cargo deny fetch` 拉最新公告库再验。
-- 批 PR 合并前等 PR 上**全部** lane 结束，不只看必需检查。Windows 三个 job 在 PR 上不跑，合入后看 main 上 push 全量的结果，
+- 批 PR 合并前等 PR 上**全部** lane 结束，不只看必需检查；Windows 三个 job 在 PR 上也按影响图运行（#2089），合入后再由 main 上 push 全量兜底，
   红了按上面「main 红了自动开卡」处理。

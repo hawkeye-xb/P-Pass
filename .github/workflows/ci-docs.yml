@@ -25,7 +25,7 @@ on:
   # #1187：路径判定挪到 job 层（.github/actions/changes），本 lane 进必过项。
   # 下面每个 job 都是秒级、无编译；路径没碰到时只跑 changes 与 gate。
   # #1422：edited / ready_for_review 让「改 PR 正文补方案引用」「草稿转正式」重跑 acceptance gate（#1471 起合入不再要验收行）。
-  # #1468：合入 main 后批量跑全量（含 Windows）。PR 上只跑快检，Windows 留到这里。
+  # #1468 / #2089：PR 与合入 main 均按四端对称门禁触发；合入 main 后全量跑一次，PR 上只跑受影响的 lane。
   # 同组同一时间只跑一次：正在跑的不取消（cancel-in-progress 对 push 为 false），
   # 排队只留最新（GitHub concurrency 原生行为：新来的替掉还在排队的）。
   push:

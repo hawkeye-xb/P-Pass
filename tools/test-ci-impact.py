@@ -175,11 +175,30 @@ class ImpactEngineTests(unittest.TestCase):
         self.assertIn("third_party/noq-udp", g.ios_ffi_inputs)
 
     def test_2_toml_python310_fallback_parity(self) -> None:
-        sample = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
-        parsed_fb = impact._parse_toml_fallback(sample)
-        parsed_std = impact.load_toml(sample)
-        self.assertEqual(parsed_fb["workspace"]["members"], parsed_std["workspace"]["members"])
-        self.assertEqual(parsed_fb["patch"]["crates-io"]["noq-udp"], parsed_std["patch"]["crates-io"]["noq-udp"])
+        fixed_toml = (
+            '[workspace]\n'
+            'members = [\n'
+            '  "crates/proto",\n'
+            '  "crates/transport",\n'
+            '  "crates/daemon",\n'
+            ']\n'
+            '[patch.crates-io]\n'
+            'noq-udp = { path = "third_party/noq-udp" }\n'
+        )
+        expected_members = ["crates/proto", "crates/transport", "crates/daemon"]
+        parsed_fixed_fb = impact._parse_toml_fallback(fixed_toml)
+        self.assertEqual(parsed_fixed_fb["workspace"]["members"], expected_members)
+        self.assertEqual(parsed_fixed_fb["patch"]["crates-io"]["noq-udp"]["path"], "third_party/noq-udp")
+        parsed_fixed_load = impact.load_toml(fixed_toml)
+        self.assertEqual(parsed_fixed_load["workspace"]["members"], expected_members)
+        self.assertEqual(parsed_fixed_load["patch"]["crates-io"]["noq-udp"]["path"], "third_party/noq-udp")
+
+        if impact.tomllib is not None:
+            sample = _read(ROOT / "Cargo.toml")
+            parsed_fb = impact._parse_toml_fallback(sample)
+            parsed_std = impact.tomllib.loads(sample)
+            self.assertEqual(parsed_fb["workspace"]["members"], parsed_std["workspace"]["members"])
+            self.assertEqual(parsed_fb["patch"]["crates-io"]["noq-udp"], parsed_std["patch"]["crates-io"]["noq-udp"])
 
     def test_3_synthetic_symmetry_closures_and_fail_closed(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="ci_impact_syn_"))
@@ -243,10 +262,55 @@ class ImpactEngineTests(unittest.TestCase):
             self.assertTrue(impact.decide_ci_from_base("", "android", tmp)[0])
             self.assertTrue(impact.decide_ci_from_base("0" * 40, "ios", tmp)[0])
 
-            # 注释中的 tools/ios/** 不误报动态通配；真实动态通配触发 fail-closed
+            # 注释中的 tools/ios/** 不误报动态通配；真实动态通配触发 fail-closed（含 tools/flow/ 等通常惰性脚本）
             self.assertFalse(d("ios-ffi", ["tools/clean-local-builds.sh"]))
+            self.assertFalse(d("ios", ["tools/flow/pr-watch.sh"]))
             _write(tmp / ".github/workflows/ci-ios.yml", _read(tmp / ".github/workflows/ci-ios.yml") + "      - run: tools/dyn/*.sh\n")
             self.assertTrue(d("ios", ["tools/clean-local-builds.sh"]))
+            self.assertTrue(d("ios", ["tools/flow/pr-watch.sh"]))
+
+            # 带引号的本地 action 引用（"./.github/actions/..." 与 './.github/actions/...'）纳入切片并触发对应 lane
+            _write(tmp / ".github/actions/native-double/action.yml", "runs:\n  using: composite\n  steps:\n    - run: tools/native-double.sh\n")
+            _write(tmp / ".github/actions/native-single/action.yml", "runs:\n  using: composite\n  steps:\n    - run: tools/native-single.sh\n")
+            _write(tmp / "tools/native-double.sh", "#!/usr/bin/env bash\necho ok\n")
+            _write(tmp / "tools/native-single.sh", "#!/usr/bin/env bash\necho ok\n")
+            _write(
+                tmp / ".github/workflows/ci-android.yml",
+                _read(tmp / ".github/workflows/ci-android.yml")
+                + '      - uses: "./.github/actions/native-double"\n'
+                + "      - uses: './.github/actions/native-single'\n",
+            )
+            subprocess.run(["git", "-C", str(tmp), "add", "-A"], check=True, env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"})
+            subprocess.run(["git", "-C", str(tmp), "commit", "-q", "-m", "add-quoted-actions"], check=True, env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"})
+            self.assertTrue(d("android", ["tools/native-double.sh"]))
+            self.assertTrue(d("android", ["tools/native-single.sh"]))
+
+            # 已删除但仍被 Android/iOS/Rust 测试读取的夹具路径保留在 reader 集合中，防删除夹具漏触发
+            _write(
+                tmp / f"apps/android/app/src/test/java/DeletedFixtureTest.{EXT_KT}",
+                'val f = File("assets/contracts/extra-golden.json")\nval g = File("docs/android/golden.md")\n',
+            )
+            _write(
+                tmp / f"apps/ios/PPassTests/DeletedFixtureTest.{EXT_SWIFT}",
+                'let d = repoFile("docs/ios/golden.md")\n',
+            )
+            g2 = impact.RepoGraph(tmp)
+            self.assertIn("assets/contracts/extra-golden.json", g2.android_readers)
+            self.assertIn("docs/android/golden.md", g2.android_readers)
+            self.assertIn("docs/ios/golden.md", g2.ios_readers)
+            self.assertTrue(impact.decide_ci("android", ["assets/contracts/extra-golden.json"], tmp, graph=g2)[0])
+            self.assertTrue(impact.decide_ci("android", ["docs/android/golden.md"], tmp, graph=g2)[0])
+            self.assertTrue(impact.decide_ci("ios", ["docs/ios/golden.md"], tmp, graph=g2)[0])
+
+            # 存在 Android/iOS 代码消费者的文档不得提前跳过为只跑 md-check
+            android_doc_gates = impact.compute_local_gates(["docs/android/golden.md"], tmp)
+            self.assertIn("just android-test", android_doc_gates)
+            ios_doc_gates = impact.compute_local_gates(["docs/ios/golden.md"], tmp)
+            self.assertIn("just ios-test", ios_doc_gates)
+
+            # 缺失 lane workflow 文件时即便是纯文档改动也 fail-closed 返回要跑
+            (tmp / ".github/workflows/ci-android.yml").unlink()
+            self.assertTrue(impact.decide_ci("android", ["docs/a.md"], tmp, graph=g2)[0])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

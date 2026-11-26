@@ -36,15 +36,10 @@ runs:
     # 下游按 `!= 'false'` 照跑，汇总 job 因本 job failure 判红。
     - name: 判据自检（含变异反证）
       shell: bash
-      env:
-        LANE: ${{ inputs.lane }}
       run: |
         set -euo pipefail
-        if [ -n "${LANE:-}" ]; then
-          python3 -B -I tools/test-ci-impact.py
-        else
-          tools/test-ci-paths.sh
-        fi
+        bash tools/test-ci-paths.sh
+        python3 -B -I tools/test-ci-impact.py
     - id: decide
       shell: bash
       env:
@@ -65,8 +60,8 @@ runs:
             ;;
         esac
         if [ -n "${LANE:-}" ]; then
-          run="$(python3 -B -I tools/ci/impact.py ci --base "$base" --lane "$LANE")"
-          rc=$?
+          rc=0
+          run="$(python3 -B -I tools/ci/impact.py ci --base "$base" --lane "$LANE")" || rc=$?
           if [ "$rc" -ne 0 ] || { [ "$run" != "true" ] && [ "$run" != "false" ]; }; then
             echo "impact.py 异常（rc=${rc}，out=${run}）→ fail-closed: true" >&2
             run=true

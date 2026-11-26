@@ -159,16 +159,8 @@ build-stamp-check:
     need() { # <file> <literal> <说明>
       if has_literal "$1" "$2"; then ok "$3"; else ko "$3（$1 里找不到「$2」）"; fi
     }
-    find_recipe_file() { # <配方头正则>：从 justfile 与 tools/just/*.just 里找定义该配方的文件
-      local f
-      for f in justfile tools/just/*.just; do
-        [ -f "$f" ] || continue
-        if grep -Eq "^$1" "$f"; then
-          printf '%s\n' "$f"
-          return 0
-        fi
-      done
-      return 1
+    show_recipe() { # <配方名> <输出文件>：通过 just --show 读取实际加载并生效的配方正文（未导入的备份 .just 不算数）
+      just --justfile "{{ justfile_directory() }}/justfile" --show "$1" >"$2" 2>/dev/null && [ -s "$2" ]
     }
     recipe_body() { # <justfile> <配方头正则>：从配方头到下一个配方头（列 0 的小写名 + 空格/冒号）
       sed -n "/^$2/,/^[a-z][a-z0-9-]*[ :]/p" "$1"
@@ -216,9 +208,14 @@ build-stamp-check:
     tmp="$(mktemp -d "${TMPDIR:-/tmp}/ppass-stamp.XXXXXX")" || { ko "建临时目录失败，反证跑不了"; exit 1; }
     trap 'rm -rf "$tmp"' EXIT
 
-    # 1) 时间戳来源：只看 dev 配方正文，格式能分辨先后（MM-DD HH:MM）。
-    dev_justfile="$(find_recipe_file 'dev \*args:' || true)"
-    if [ -n "$dev_justfile" ] && has_dev_stamp "$dev_justfile"; then ok "just dev 配方用 date 注入 PPF_BUILD_STAMP"; else ko "just dev 配方缺少时间戳注入"; fi
+    # 1) 时间戳来源：只看 dev 配方正文（通过 just --show 读取实际生效配方），格式能分辨先后（MM-DD HH:MM）。
+    dev_recipe="$tmp/recipe-dev.just"
+    if show_recipe dev "$dev_recipe" && has_dev_stamp "$dev_recipe"; then
+      ok "just dev 配方用 date 注入 PPF_BUILD_STAMP"
+    else
+      ko "just dev 配方无法解析或缺少时间戳注入"
+      dev_recipe=""
+    fi
     stamp="$(date '+%m-%d %H:%M')"
     case "$stamp" in
       [0-9][0-9]-[0-9][0-9]" "[0-9][0-9]:[0-9][0-9]) ok "date 产出 MM-DD HH:MM（${stamp}）" ;;
@@ -266,41 +263,52 @@ build-stamp-check:
       echo "  ⏭ 非 macOS：跳过 PlistBuddy 真实写入测试"
     fi
 
-    # 4) 设备测试：只看 android-instrumented 正文；just android-test（JVM 单测）语义不变。
-    android_inst_justfile="$(find_recipe_file 'android-instrumented \*args:' || true)"
-    android_test_justfile="$(find_recipe_file 'android-test:' || true)"
-    if [ -n "$android_inst_justfile" ] && has_keep_apks "$android_inst_justfile"; then ok "android-instrumented 跑 connected 并带 keep-apks 参数"; else ko "android-instrumented 缺少 connected 命令或 keep-apks 参数"; fi
-    if [ -z "$android_test_justfile" ]; then
-      ko "找不到 android-test 配方"
-    elif sed -n '/^android-test:/,/^[a-z][a-z0-9-]*[ :]/p' "$android_test_justfile" | stdin_has 'connectedDebugAndroidTest'; then
+    # 4) 设备测试：只看 android-instrumented 正文（通过 just --show 读取实际生效配方）；just android-test（JVM 单测）语义不变。
+    android_inst_recipe="$tmp/recipe-android-inst.just"
+    android_test_recipe="$tmp/recipe-android-test.just"
+    if show_recipe android-instrumented "$android_inst_recipe" && has_keep_apks "$android_inst_recipe"; then
+      ok "android-instrumented 跑 connected 并带 keep-apks 参数"
+    else
+      ko "android-instrumented 无法解析或缺少 connected 命令或 keep-apks 参数"
+      android_inst_recipe=""
+    fi
+    if ! show_recipe android-test "$android_test_recipe"; then
+      ko "无法解析 android-test 配方"
+    elif recipe_body "$android_test_recipe" 'android-test:' | stdin_has 'connectedDebugAndroidTest'; then
       ko "just android-test 仍是 JVM 单测，不该跑 connectedDebugAndroidTest"
     else
       ok "just android-test 仍是 JVM 单测（未跑 connectedDebugAndroidTest）"
     fi
 
-    # 5) 反证：删掉时间戳注入 / connected 命令 / iOS 的 Add 行 / trim 任一段后，上面的断言必须判红。
-    if [ -n "$dev_justfile" ]; then
-      grep -v 'export PPF_BUILD_STAMP=' "$dev_justfile" >"$tmp/justfile-no-stamp"
+    # 5) 反证：删掉时间戳注入 / connected 命令 / iOS 的 Add 行 / trim 任一段后，上面的断言必须判红；
+    #    且无法解析的配方（或未导入的备份 .just 影子配方）也必须判红。
+    if show_recipe '__nonexistent_stamp_recipe__' "$tmp/missing-recipe.just"; then
+      ko "反证：不存在的配方竟然被 just --show 解析成功"
+    else
+      ok "反证：未生效/不存在的配方 → 判红"
+    fi
+    if [ -n "$dev_recipe" ]; then
+      grep -v 'export PPF_BUILD_STAMP=' "$dev_recipe" >"$tmp/justfile-no-stamp"
       if has_dev_stamp "$tmp/justfile-no-stamp"; then
         ko "反证：删掉时间戳注入后检查仍通过"
       else
         ok "反证：删掉时间戳注入 → 判红"
       fi
-      sed 's/^\( *\)export PPF_BUILD_STAMP=/\1# export PPF_BUILD_STAMP=/' "$dev_justfile" >"$tmp/justfile-commented-stamp"
+      sed 's/^\( *\)export PPF_BUILD_STAMP=/\1# export PPF_BUILD_STAMP=/' "$dev_recipe" >"$tmp/justfile-commented-stamp"
       if has_dev_stamp "$tmp/justfile-commented-stamp"; then
         ko "反证：把时间戳注入缩进注释掉后检查仍通过"
       else
         ok "反证：把时间戳注入缩进注释掉 → 判红"
       fi
     fi
-    if [ -n "$android_inst_justfile" ]; then
-      grep -v 'connectedDebugAndroidTest' "$android_inst_justfile" >"$tmp/justfile-no-connected"
+    if [ -n "$android_inst_recipe" ]; then
+      grep -v 'connectedDebugAndroidTest' "$android_inst_recipe" >"$tmp/justfile-no-connected"
       if has_keep_apks "$tmp/justfile-no-connected"; then
         ko "反证：删掉 connected 命令后检查仍通过"
       else
         ok "反证：删掉 connected 命令 → 判红"
       fi
-      sed '/connectedDebugAndroidTest/ s/^\( *\)/\1# /' "$android_inst_justfile" >"$tmp/justfile-commented-connected"
+      sed '/connectedDebugAndroidTest/ s/^\( *\)/\1# /' "$android_inst_recipe" >"$tmp/justfile-commented-connected"
       if has_keep_apks "$tmp/justfile-commented-connected"; then
         ko "反证：把 connected 命令缩进注释掉后检查仍通过"
       else
@@ -435,6 +443,7 @@ changelog-section-test:
   @bash tools/test-changelog-section.sh
 
 flow-tests: doc-anchors-test changelog-section-test hooks-test flow-engine-test flow-ci-review-test flow-gate-status-test macos-runner-test main-red-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test dead-i18n-test desktop-dead-components-test pr-watch-test
+  @bash tools/test-ci-paths.sh
   @python3 -B -I tools/test-ci-impact.py
   @echo "==> flow-tests: green ✅"
 

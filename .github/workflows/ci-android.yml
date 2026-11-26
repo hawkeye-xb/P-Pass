@@ -17,7 +17,7 @@ on:
   # #1187：路径判定从触发层挪到 job 层（.github/actions/changes），本 lane 进必过项。
   # 被 workflow 级 paths 过滤掉的 workflow 不汇报状态，设成必过就永久 Pending；job 级跳过
   # 汇报 skipped，对必过项算通过。没改到安卓相关路径的 PR 只跑十几秒的 changes 与 gate。
-  # #1468：合入 main 后批量跑全量（含 Windows）。PR 上只跑快检，Windows 留到这里。
+  # #1468 / #2089：PR 与合入 main 均按四端对称门禁触发；合入 main 后全量跑一次，PR 上按影响范围判定。
   # 同组同一时间只跑一次：正在跑的不取消（cancel-in-progress 对 push 为 false），
   # 排队只留最新（GitHub concurrency 原生行为：新来的替掉还在排队的）。
   push:

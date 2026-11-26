@@ -86,9 +86,6 @@ jobs:
       - name: Version stamp rule
         run: tools/ios/test-stamp-version.sh
 
-      - name: iOS test lane contract
-        run: tools/test-ios-lanes.sh
-
       - name: TestFlight signing shape (archive unsigned, cloud signing on export)
         run: |
           tools/ios/check-testflight-signing.sh --self-test
@@ -167,6 +164,9 @@ jobs:
           [ -n "$bin" ] || { echo "::error::xcodegen.zip 里找不到可执行文件"; exit 1; }
           dirname "$bin" >> "$GITHUB_PATH"
           "$bin" --version
+
+      - name: iOS test lane contract
+        run: tools/test-ios-lanes.sh
 
       - name: App unit tests (iOS simulator)
         run: tools/ios/test.sh

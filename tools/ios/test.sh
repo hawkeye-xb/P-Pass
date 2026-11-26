@@ -10,9 +10,6 @@ MANIFEST="$ROOT/tools/ios/host-only-tests.txt"
 source "$ROOT/tools/ios/lanes.sh"
 ios_lane_select
 
-command -v xcodegen >/dev/null || { echo "error: 缺 xcodegen（brew install xcodegen）" >&2; exit 1; }
-command -v jq >/dev/null || { echo "error: 缺 jq（brew install jq）" >&2; exit 1; }
-
 if ios_lane_is_device; then
   ios_lane_validate_manifest "$ROOT" "$MANIFEST"
   ios_lane_print_plan "$ROOT" "$MANIFEST"
@@ -39,6 +36,9 @@ if [ "${PPASS_IOS_TEST_PLAN_ONLY:-0}" = 1 ]; then
   for arg in ${SKIP_ARGS[@]+"${SKIP_ARGS[@]}"}; do printf 'XCODEBUILD_ARG=%s\n' "$arg"; done
   exit 0
 fi
+
+command -v xcodegen >/dev/null || { echo "error: 缺 xcodegen（brew install xcodegen）" >&2; exit 1; }
+command -v jq >/dev/null || { echo "error: 缺 jq（brew install jq）" >&2; exit 1; }
 
 # App 依赖传输 XCFramework（TransportFFITests/Generated，不入库）：交由构建脚本按输入树摘要决定是否重编。
 "$ROOT/tools/build-ios-transport-xcframework.sh" "$IOS/TransportFFITests/Generated"
