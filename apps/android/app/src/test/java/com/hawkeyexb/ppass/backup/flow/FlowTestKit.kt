@@ -350,6 +350,9 @@ internal class Rig(
     var supersedeReply: suspend (oldHash: String, newHash: String) -> SupersedeOutcome = { _, _ -> SupersedeOutcome.Replaced }
     val supersedeCalls = mutableListOf<Triple<String, String, String>>()
 
+    /** #2063：目录来源是否全部可读（控制 SOURCE_UNAVAILABLE 自愈检查）。 */
+    var sourcesReadable = true
+
     init {
         foreground.bootNow = { boot }
         if (cursors) store.saveVolumeState(VolumeState(LEGACY_VOLUME, 0L, 0L, "v1"))
@@ -412,6 +415,7 @@ internal class Rig(
         picked = picked,
         onPickedSettled = { pickedSettled += it.uri },
         folderDiscovery = folderDiscovery,
+        sourcesReadable = { sourcesReadable },
         route = object : NetworkRoute {
             override suspend fun ensure(): Boolean {
                 netEvents += "route"

@@ -103,6 +103,8 @@ internal class FlowEngine(
      * 的成本 = 一次树枚举，不放进每轮。
      */
     private val folderDiscovery: (() -> Sequence<MediaSnapshot>)? = null,
+    /** #2063：当前已登记目录来源是否都可读；用于在回到前台/恢复检查时自愈清除 [WaitReason.SOURCE_UNAVAILABLE]。 */
+    private val sourcesReadable: () -> Boolean = { true },
 ) {
     // 写 `_status` 就是写原始运行态；要不要刷新通知 / 首页由 [LoopStatusCell] 按「值变了 + 节流」决定。
     private val _status = LoopStatusCell(scope, publish = { foreground.update(it) }, now = monotonicClock)
@@ -411,10 +413,32 @@ internal class FlowEngine(
         stopCycle(WaitReason.FGS_BLOCKED, FgsStall.LOST)
     }
 
-    /** App 回到前台：一次触发（含对账）。#522：回过前台 = 系统下一次 startForeground 会复位额度，先把「确定被拒」清掉。 */
+    /** App 回到前台：一次触发（含对账）。#522：回过前台 = 复位额度；#2063：若等待 SOURCE_UNAVAILABLE 且目录恢复可读则自愈清等待。 */
     fun onAppForeground(): Job = scope.launch {
         resetBudgetRefusal("app came to the foreground")
+        if (control.waitReason() == WaitReason.SOURCE_UNAVAILABLE) {
+            val readable = withContext(io) { runCatching { sourcesReadable() }.getOrDefault(false) }
+            if (shouldHealSourceUnavailable(control.waitReason(), readable)) {
+                clearSourceUnavailableWait("app came to the foreground and folder is readable")
+            }
+        }
         onTrigger(TriggerReason.APP_FOREGROUND)
+    }
+
+    /** #2063：前台检查确认所有目录来源恢复可读时，清除 [WaitReason.SOURCE_UNAVAILABLE] 并唤醒对账循环。 */
+    fun onSourcesReadable(): Job = scope.launch {
+        if (control.waitReason() != WaitReason.SOURCE_UNAVAILABLE) return@launch
+        val readable = withContext(io) { runCatching { sourcesReadable() }.getOrDefault(false) }
+        if (!shouldHealSourceUnavailable(control.waitReason(), readable)) return@launch
+        clearSourceUnavailableWait("directory became readable again")
+        onTrigger(TriggerReason.APP_FOREGROUND)
+    }
+
+    private fun clearSourceUnavailableWait(why: String) {
+        log.log("source_unavailable self-healed ($why): clearing waitReason")
+        setWait(null)
+        _status.update { if (it.waitReason == WaitReason.SOURCE_UNAVAILABLE) it.copy(waitReason = null) else it }
+        bump()
     }
 
     private fun resetBudgetRefusal(why: String) {
@@ -660,6 +684,12 @@ internal class FlowEngine(
 
         // ---- 入口：不持有 FGS，只读元数据 ----
         val cycleStarted = System.nanoTime()
+        if (reconcile && control.waitReason() == WaitReason.SOURCE_UNAVAILABLE) {
+            val readable = withContext(io) { runCatching { sourcesReadable() }.getOrDefault(false) }
+            if (shouldHealSourceUnavailable(control.waitReason(), readable)) {
+                clearSourceUnavailableWait("reconcile cycle detected readable sources")
+            }
+        }
         prepareCursors(reconcile)
         // #1771：本轮来源缺席是否可信——由各来源自己证明（MediaStore 看完整相册权限、目录看根授权与完整枚举），
         // 不再由全局相册权限门控。可信才让桌面缺失触发 REUPLOAD / UNRECOVERABLE。

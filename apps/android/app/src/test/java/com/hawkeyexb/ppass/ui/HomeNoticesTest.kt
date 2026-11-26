@@ -1,6 +1,7 @@
 // MOB-37: 提示优先级的骨架（给 UI-04 留的接口）。
 package com.hawkeyexb.ppass.ui
 
+import com.hawkeyexb.ppass.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -122,5 +123,64 @@ class HomeNoticesTest {
             assertFalse("$name 不许自绘 clickable 文本动作", block.contains(".clickable("))
         }
         assertTrue("两处动作文案来源不变", card.contains("notice.dismissLabel") && card.contains("notice.actionLabel"))
+    }
+
+    // ── #2063：首页目录失效横幅（单一失效直接重授 / 多个或兜底直达备份范围） ───────
+
+    @Test
+    fun folder_permission_notice_offers_direct_reauthorize_for_single_expired_folder() {
+        val spec = folderPermissionNoticeSpec(
+            expiredFolderCount = 1,
+            expiredFolderName = "Camera",
+            sourceUnavailableWaiting = true,
+        )
+        assertEquals(FolderNoticeSpec.Single("Camera"), spec)
+        assertEquals(R.string.folder_reauthorize, spec!!.actionRes)
+    }
+
+    @Test
+    fun folder_permission_notice_routes_to_backup_range_for_multiple_or_generic_waiting() {
+        val multi = folderPermissionNoticeSpec(
+            expiredFolderCount = 2,
+            expiredFolderName = null,
+            sourceUnavailableWaiting = true,
+        )
+        assertEquals(FolderNoticeSpec.Multiple(2), multi)
+        assertEquals(R.string.folder_banner_open_scope, multi!!.actionRes)
+
+        val generic = folderPermissionNoticeSpec(
+            expiredFolderCount = 0,
+            expiredFolderName = null,
+            sourceUnavailableWaiting = true,
+        )
+        assertEquals(FolderNoticeSpec.GenericWaiting, generic)
+        assertEquals(R.string.folder_banner_open_scope, generic!!.actionRes)
+
+        assertNull(
+            folderPermissionNoticeSpec(
+                expiredFolderCount = 0,
+                expiredFolderName = null,
+                sourceUnavailableWaiting = false,
+            ),
+        )
+    }
+
+    @Test
+    fun folder_permission_notice_ranks_above_background_interrupted_and_below_pairing_lost() {
+        val top = topNotice(
+            listOf(
+                notice(HomeNoticeKind.BACKUP_INTERRUPTED),
+                notice(HomeNoticeKind.FOLDER_PERMISSION_NEEDED),
+            ),
+        )
+        assertEquals(HomeNoticeKind.FOLDER_PERMISSION_NEEDED, top?.kind)
+
+        val pairingTop = topNotice(
+            listOf(
+                notice(HomeNoticeKind.FOLDER_PERMISSION_NEEDED),
+                notice(HomeNoticeKind.PAIRING_LOST),
+            ),
+        )
+        assertEquals(HomeNoticeKind.PAIRING_LOST, pairingTop?.kind)
     }
 }

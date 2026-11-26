@@ -377,6 +377,9 @@ fun PPassApp() {
                     heartbeat.start()
                     timeline.start()
                     foregroundCatchup()
+                    if (pairings.load() != null) {
+                        com.hawkeyexb.ppass.backup.flow.healFlowSourceUnavailableIfReadable(context)
+                    }
                     updateController.onResume()
                 }
                 Lifecycle.Event.ON_STOP -> {
@@ -731,9 +734,12 @@ fun PPassApp() {
             var foldersError by remember { mutableStateOf<Int?>(null) }
             var folderToReauthorize by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
             LaunchedEffect(folderRevision, resumeCount) {
-                mediaFolders = withContext(Dispatchers.IO) {
+                val entries = withContext(Dispatchers.IO) {
                     com.hawkeyexb.ppass.backup.folder.FolderAccess.listEntries(context)
-                        .map { FolderUi(it.sourceId, it.name, it.needsPermission) }
+                }
+                mediaFolders = entries.map { FolderUi(it.sourceId, it.name, it.needsPermission) }
+                if (entries.none { it.needsPermission }) {
+                    com.hawkeyexb.ppass.backup.flow.healFlowSourceUnavailableIfReadable(context)
                 }
             }
             LaunchedEffect(foldersError) {
@@ -751,20 +757,30 @@ fun PPassApp() {
                 }
                 val reauth = folderToReauthorize
                 folderToReauthorize = null
-                scope.launch(Dispatchers.IO) {
-                    val changed: Boolean = if (reauth != null) {
-                        val ok = com.hawkeyexb.ppass.backup.folder.FolderAccess.reauthorize(context, reauth, uri)
-                        if (!ok) foldersError = R.string.folder_reauthorize_failed
-                        ok
-                    } else {
-                        val added = com.hawkeyexb.ppass.backup.folder.FolderAccess.addFolder(context, uri)
-                        if (added == null) foldersError = R.string.folder_add_failed
-                        added != null
+                scope.launch {
+                    val (changed, errorRes) = withContext(Dispatchers.IO) {
+                        if (reauth != null) {
+                            val ok = com.hawkeyexb.ppass.backup.folder.FolderAccess.reauthorize(context, reauth, uri)
+                            if (ok) {
+                                com.hawkeyexb.ppass.backup.folder.FolderAccess.changed(context)
+                                com.hawkeyexb.ppass.backup.flow.healFlowSourceUnavailableIfReadable(context)
+                                true to null
+                            } else {
+                                false to R.string.folder_reauthorize_failed
+                            }
+                        } else {
+                            val added = com.hawkeyexb.ppass.backup.folder.FolderAccess.addFolder(context, uri)
+                            if (added != null) {
+                                com.hawkeyexb.ppass.backup.folder.FolderAccess.changed(context)
+                                com.hawkeyexb.ppass.backup.flow.healFlowSourceUnavailableIfReadable(context)
+                                true to null
+                            } else {
+                                false to R.string.folder_add_failed
+                            }
+                        }
                     }
-                    if (changed) {
-                        com.hawkeyexb.ppass.backup.folder.FolderAccess.changed(context)
-                        folderRevision++
-                    }
+                    if (errorRes != null) foldersError = errorRes
+                    if (changed) folderRevision++
                 }
             }
             val autoPrefsRevision by AutoBackupPrefs.revision.collectAsState()
@@ -1147,12 +1163,27 @@ fun PPassApp() {
                             else -> null
                         },
                         notice = {
+                            val expiredFolders = mediaFolders.filter { it.needsPermission }
+                            val sourceUnavailableWaiting =
+                                (holder.state.value as? com.hawkeyexb.ppass.ui.BackupUiState.Waiting)?.reason ==
+                                    com.hawkeyexb.ppass.backup.flow.WaitReason.SOURCE_UNAVAILABLE
                             NoticeHost(
                                 backgroundBackupState = backgroundBackupState,
                                 onResolveBackgroundBackup = resolveBackgroundBackup,
                                 locationRedacted = mediaAccess != MediaAccess.NONE && !mediaLocation,
                                 onAllowLocation = {
                                     if (Build.VERSION.SDK_INT >= 29) locationPermission.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)
+                                },
+                                expiredFolderCount = expiredFolders.size,
+                                expiredFolderName = expiredFolders.singleOrNull()?.name,
+                                sourceUnavailableWaiting = sourceUnavailableWaiting,
+                                onResolveFolderPermission = {
+                                    if (expiredFolders.size == 1) {
+                                        folderToReauthorize = expiredFolders.single().id
+                                        folderPicker.launch(null)
+                                    } else {
+                                        enterBucketPicker(s.pairing, firstTime = false)
+                                    }
                                 },
                             )
                         },
@@ -1210,8 +1241,12 @@ fun PPassApp() {
                 }
             }
             LaunchedEffect(folderRevision, resumeCount) {
-                folderEntries = withContext(Dispatchers.IO) {
+                val entries = withContext(Dispatchers.IO) {
                     com.hawkeyexb.ppass.backup.folder.FolderAccess.listEntries(context)
+                }
+                folderEntries = entries
+                if (entries.none { it.needsPermission }) {
+                    com.hawkeyexb.ppass.backup.flow.healFlowSourceUnavailableIfReadable(context)
                 }
             }
             val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -1224,11 +1259,18 @@ fun PPassApp() {
                 if (reauth == null) {
                     if (!pendingFolderUris.contains(uri.toString())) pendingFolderUris = ArrayList(pendingFolderUris + uri.toString())
                 } else {
-                    scope.launch(Dispatchers.IO) {
-                        val ok = com.hawkeyexb.ppass.backup.folder.FolderAccess.reauthorize(context, reauth, uri)
-                        if (!ok) foldersError = R.string.folder_reauthorize_failed
-                        if (ok) {
-                            com.hawkeyexb.ppass.backup.folder.FolderAccess.changed(context)
+                    scope.launch {
+                        val ok = withContext(Dispatchers.IO) {
+                            val reauthorized = com.hawkeyexb.ppass.backup.folder.FolderAccess.reauthorize(context, reauth, uri)
+                            if (reauthorized) {
+                                com.hawkeyexb.ppass.backup.folder.FolderAccess.changed(context)
+                                com.hawkeyexb.ppass.backup.flow.healFlowSourceUnavailableIfReadable(context)
+                            }
+                            reauthorized
+                        }
+                        if (!ok) {
+                            foldersError = R.string.folder_reauthorize_failed
+                        } else {
                             folderRevision++
                         }
                     }

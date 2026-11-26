@@ -211,4 +211,32 @@ class UI08BucketScreenTest {
         assertTrue("保存期间必须以 enabled = !saving 禁用添加动作", addFolderBlock.contains("enabled = !saving"))
         assertFalse("不再靠闭包内 if (!saving) 静默吞点击", addFolderBlock.contains("if (!saving) onAddFolder()"))
     }
+
+    /**
+     * #2063：失效文件夹卡片必须显式暴露状态标记和直接重授入口，不能仅藏在 `⋮` 菜单里；
+     * 提示文案也不能指向不存在的独立「设置」入口。
+     */
+    @Test
+    fun expired_folder_card_exposes_direct_reauthorize_and_copy_avoids_nonexistent_settings() {
+        val source = bucketScreenSource()
+        val folderBlock = source.substringBefore("item(key = \"add-folder\")")
+            .substringAfter("items(folderBuckets")
+        assertTrue(
+            "BucketSourceCard 必须接收 needsPermission 并显式呈现状态/直达重授",
+            folderBlock.contains("needsPermission = folder.needsPermission"),
+        )
+        assertTrue(
+            "BucketSourceCard 必须直接透传 onReauthorize（不只放进 menuActions）",
+            folderBlock.contains("onReauthorize ="),
+        )
+
+        var dir = File(System.getProperty("user.dir"))
+        while (!File(dir, "apps/android").isDirectory) dir = dir.parentFile ?: error("apps/android not found")
+        val enXml = File(dir, "apps/android/app/src/main/res/values/strings.xml").readText()
+        val zhXml = File(dir, "apps/android/app/src/main/res/values-zh/strings.xml").readText()
+        val enWaiting = enXml.substringAfter("name=\"state_waiting_source_unavailable\">").substringBefore("</string>")
+        val zhWaiting = zhXml.substringAfter("name=\"state_waiting_source_unavailable\">").substringBefore("</string>")
+        assertFalse("英文提示不得再指向不存在的 settings 入口", enWaiting.contains("in settings", ignoreCase = true))
+        assertFalse("中文提示不得再指向不存在的「设置」入口", zhWaiting.contains("设置里"))
+    }
 }

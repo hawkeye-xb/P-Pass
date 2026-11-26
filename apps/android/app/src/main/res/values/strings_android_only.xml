@@ -100,5 +100,8 @@
     <string name="folder_cancel">Cancel</string>
     <string name="folder_add_failed">Couldn\'t add the folder. Try again.</string>
     <string name="folder_reauthorize_failed">Re-authorize didn\'t finish. Pick the same folder and try again.</string>
+    <string name="folder_reauthorize_notice_single">Folder \"%1$s\" needs permission again to keep backing up.</string>
+    <string name="folder_reauthorize_notice_multiple">%1$d folders need permission again to keep backing up.</string>
+    <string name="folder_banner_open_scope">Backup range</string>
     <string name="folder_boundary_note">Folders that Android protects, such as Android/data, can\'t be selected.</string>
 </resources>

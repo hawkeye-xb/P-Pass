@@ -152,6 +152,19 @@ internal fun onFlowAppForeground(context: Context) {
     }
 }
 
+/** #2063：处于 SOURCE_UNAVAILABLE 时检查目录是否已恢复可读；已可读则清等待态并唤醒循环。 */
+internal fun healFlowSourceUnavailableIfReadable(context: Context) {
+    val app = context.applicationContext
+    thread(name = "ppass-flow-heal") {
+        runCatching {
+            val live = runtimeFor(app) ?: return@runCatching
+            if (live.control.waitReason() == WaitReason.SOURCE_UNAVAILABLE) {
+                live.engine.onSourcesReadable()
+            }
+        }.onFailure { PLog.e(TAG, "source heal check failed", it) }
+    }
+}
+
 /** #439：前台心跳确认桌面可达（引擎只在「等待中（桌面不可达 / #652 桌面不健康）」时据此叫醒循环）。 */
 internal fun onFlowDesktopReachable(context: Context) {
     val app = context.applicationContext
@@ -458,6 +471,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         // #1762：reconcile 轮的目录段全集对账（新素材不置脏，只有对账扫得到）。
         // ruleOn=false（单张备份模式）时目录段与相册段同一开关：不枚举、不进待办。
         folderDiscovery = { if (ruleOn()) compositeMedia.readFolderInScope() else emptySequence() },
+        sourcesReadable = { com.hawkeyexb.ppass.backup.folder.FolderAccess.areAllReadable(app) },
     )
     FlowForegroundHandoff.control = control
     FlowForegroundHandoff.onLost = { reason -> engine.onForegroundLost(reason) }

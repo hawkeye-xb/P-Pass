@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -26,6 +27,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -69,6 +71,8 @@ private fun SourceCellFrame(
     cover: @Composable BoxScope.() -> Unit,
     content: @Composable RowScope.() -> Unit,
     enabled: Boolean = true,
+    attention: Boolean = false,
+    footer: (@Composable () -> Unit)? = null,
 ) {
     Card(
         onClick = onClick,
@@ -87,7 +91,14 @@ private fun SourceCellFrame(
             },
         shape = RoundedCornerShape(16.dp),
         colors = sourceCardColors(selected),
-        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) PPColor.Ink else PPColor.Border),
+        border = BorderStroke(
+            width = if (selected || attention) 2.dp else 1.dp,
+            color = when {
+                attention -> PPColor.Act
+                selected -> PPColor.Ink
+                else -> PPColor.Border
+            },
+        ),
     ) {
         Column {
             Box(modifier = Modifier.fillMaxWidth().height(180.dp), content = cover)
@@ -98,6 +109,7 @@ private fun SourceCellFrame(
             ) {
                 content()
             }
+            footer?.invoke()
         }
     }
 }
@@ -116,6 +128,9 @@ fun SourceCard(
     menuActions: List<SourceMenuAction> = emptyList(),
     menuContentDescription: String = "更多操作",
     tag: String? = null,
+    statusLabel: String? = null,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
 ) {
     SourceCellFrame(
         selected = selected,
@@ -123,8 +138,24 @@ fun SourceCard(
         stateDescription = if (selected) selectedDescription else unselectedDescription,
         tag = tag,
         onClick = onClick,
+        attention = statusLabel != null,
         cover = {
             cover()
+            if (statusLabel != null) {
+                Surface(
+                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+                    shape = RoundedCornerShape(6.dp),
+                    color = PPColor.ActBg,
+                ) {
+                    Text(
+                        text = statusLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = PPColor.Act,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
             Surface(
                 modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).size(24.dp),
                 shape = CircleShape,
@@ -146,7 +177,7 @@ fun SourceCard(
                 imageVector = if (kind == SourceKind.ALBUM) Icons.AutoMirrored.Filled.List else Icons.Default.Menu,
                 contentDescription = kindLabel,
                 modifier = Modifier.padding(end = 8.dp).size(20.dp),
-                tint = PPColor.Ink60,
+                tint = if (statusLabel != null) PPColor.Act else PPColor.Ink60,
             )
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -156,7 +187,11 @@ fun SourceCard(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(text = countLabel, style = MaterialTheme.typography.bodySmall, color = PPColor.Ink40)
+                Text(
+                    text = statusLabel ?: countLabel,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (statusLabel != null) PPColor.Act else PPColor.Ink40,
+                )
             }
             if (menuActions.isNotEmpty()) {
                 var expanded by remember { mutableStateOf(false) }
@@ -177,6 +212,33 @@ fun SourceCard(
                     }
                 }
             }
+        },
+        footer = if (actionLabel != null && onAction != null) {
+            {
+                OutlinedButton(
+                    onClick = onAction,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, bottom = 10.dp)
+                        .heightIn(min = 40.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.45f)),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = PPColor.ActBg,
+                        contentColor = PPColor.Act,
+                    ),
+                ) {
+                    Text(
+                        text = actionLabel,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        } else {
+            null
         },
     )
 }
