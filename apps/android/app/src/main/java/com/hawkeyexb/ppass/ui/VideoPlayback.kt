@@ -1,7 +1,7 @@
-// 视频页的取回与播放：翻到视频页只显示封面和播放按钮（按钮标出文件大小），
-// 用户点了才下载、下完才播放。下载前先看手机剩余空间；下载中收到的字节超过
-// 电脑声明的大小立即中止（DaemonClient.downloadAsset 的 DeclaredSizeGuard）。
-// 播放的始终是原片，不转码。
+// 视频页的取回与播放：翻到视频页只显示封面和播放按钮（按钮标出文件大小）以及保存/分享入口，
+// 不自动发起下载。点播放优先直读本机已有原片，其次命中完整缓存，否则检查空间后下载并播；
+// 未点播放前直接点保存/分享也按需准备原片来源，但不切进 Ready 自动开播。
+// 下载中收到的字节超过电脑声明的大小立即中止（DaemonClient.downloadAsset 的 DeclaredSizeGuard）。
 //
 // 状态机放在这个与 Compose 无关的类里：翻页只会创建它、不会调 [play]，所以
 // 「翻到 / 滑过视频页不下载」可以在 JVM 上直接断言（VideoPlaybackTest）。
@@ -15,16 +15,28 @@ import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+internal sealed interface VideoSource {
+    data class LocalUri(val uri: String) : VideoSource
+    data class CachedFile(val file: File) : VideoSource
+}
 
 internal sealed interface VideoPhase {
     /** 只有封面和播放按钮，没有发起任何下载。 */
     data object Cover : VideoPhase
     data class Fetching(val percent: Int) : VideoPhase
-    data class Ready(val file: File) : VideoPhase
+    data class Ready(val source: VideoSource) : VideoPhase {
+        val file: File? get() = (source as? VideoSource.CachedFile)?.file
+        val localUri: String? get() = (source as? VideoSource.LocalUri)?.uri
+    }
     /** 手机剩余空间不够，没有开始下载。 */
     data object NoRoom : VideoPhase
     data object Failed : VideoPhase
 }
+
+internal fun videoActionsEnabled(busy: Boolean): Boolean = !busy
 
 /**
  * 下载一段视频要占的空间：取回时临时仓库里一份、导出到缓存文件又一份（iroh-blobs 的
@@ -54,33 +66,52 @@ internal class VideoPlayback(
     private val freeBytes: () -> Long,
     /** 把原片取到 dest；进度回调 (已收字节, 声明字节)。失败时不留 dest。 */
     private val download: suspend (dest: File, onProgress: (Long, Long) -> Unit) -> Unit,
+    /** 优先解析本机已验证可读的原片 URI（MediaStore 或已授权 SAF 目录）；命中则免下载直读。 */
+    private val resolveLocalUri: suspend () -> String? = { null },
     private val log: (String) -> Unit = { PLog.i("PPassVideo", it) },
 ) {
     private val _phase = MutableStateFlow<VideoPhase>(VideoPhase.Cover)
     val phase: StateFlow<VideoPhase> = _phase.asStateFlow()
+    private val fetchMutex = Mutex()
 
-    /** 用户点了播放。已在下载或已就绪时忽略重复点击。 */
+    /** 用户点了播放。已在下载或已就绪时复用结果，不重复下载。 */
     suspend fun play() {
-        when (_phase.value) {
-            is VideoPhase.Fetching, is VideoPhase.Ready -> return
-            else -> Unit
+        prepare(forPlayback = true)
+    }
+
+    /**
+     * 未点播放前点「保存到相册 / 分享」按需准备原片来源（对位 iOS timeline.original）：
+     * 若尚未进 [VideoPhase.Ready]，准备完成后回到 [VideoPhase.Cover]（不切 Ready 自动开播）；
+     * 若已处于 [VideoPhase.Ready] 则直接复用，不打断播放。
+     */
+    suspend fun prepareOriginal(): VideoSource? = prepare(forPlayback = false)
+
+    private suspend fun prepare(forPlayback: Boolean): VideoSource? = fetchMutex.withLock {
+        (_phase.value as? VideoPhase.Ready)?.let { return it.source }
+        log("video $tag ${if (forPlayback) "play" else "action"} tapped, declared=$declared")
+        val localUri = runCatching { resolveLocalUri() }.getOrNull()
+        if (!localUri.isNullOrBlank()) {
+            val source = VideoSource.LocalUri(localUri)
+            log("video $tag local hit, ${if (forPlayback) "playing direct uri" else "using direct uri"}")
+            _phase.value = if (forPlayback) VideoPhase.Ready(source) else VideoPhase.Cover
+            return source
         }
-        log("video $tag play tapped, declared=$declared")
         if (isCompleteOriginal(cache, declared)) {
-            log("video $tag cached, playing")
-            _phase.value = VideoPhase.Ready(cache)
-            return
+            val source = VideoSource.CachedFile(cache)
+            log("video $tag cached, ${if (forPlayback) "playing" else "using cache"}")
+            _phase.value = if (forPlayback) VideoPhase.Ready(source) else VideoPhase.Cover
+            return source
         }
         when (val check = videoStartCheck(declared, freeBytes())) {
             VideoStartCheck.UnknownSize -> {
                 log("video $tag not fetched: size unknown")
                 _phase.value = VideoPhase.Failed
-                return
+                return null
             }
             is VideoStartCheck.NoRoom -> {
                 log("video $tag not fetched: needs ${check.needed} bytes, ${check.free} free")
                 _phase.value = VideoPhase.NoRoom
-                return
+                return null
             }
             VideoStartCheck.Go -> log("video $tag space ok, fetching")
         }
@@ -98,15 +129,17 @@ internal class VideoPlayback(
             PLog.w("PPassVideo", "video $tag fetch stopped: more data than declared", e)
             cache.delete()
             _phase.value = VideoPhase.Failed
-            return
+            return null
         } catch (e: Throwable) {
             PLog.w("PPassVideo", "video $tag fetch failed", e)
             cache.delete()
             _phase.value = VideoPhase.Failed
-            return
+            return null
         }
-        log("video $tag fetched in ${System.currentTimeMillis() - started}ms, playing")
-        _phase.value = VideoPhase.Ready(cache)
+        val source = VideoSource.CachedFile(cache)
+        log("video $tag fetched in ${System.currentTimeMillis() - started}ms, ${if (forPlayback) "playing" else "ready for action"}")
+        _phase.value = if (forPlayback) VideoPhase.Ready(source) else VideoPhase.Cover
+        return source
     }
 }
 

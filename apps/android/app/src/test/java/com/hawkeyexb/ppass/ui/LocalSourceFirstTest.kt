@@ -20,6 +20,7 @@ import com.hawkeyexb.ppass.backup.LocalSourceIndex
 import com.hawkeyexb.ppass.backup.OriginalReader
 import com.hawkeyexb.ppass.backup.localIndexReloadDue
 import com.hawkeyexb.ppass.backup.sampleSizeFor
+import com.hawkeyexb.ppass.backup.folder.FOLDER_ID_FLAG
 import com.hawkeyexb.ppass.backup.order.Order
 import com.hawkeyexb.ppass.backup.order.OrderState
 import com.hawkeyexb.ppass.proto.AssetMeta
@@ -72,8 +73,10 @@ class LocalSourceFirstTest {
         val thumbed = mutableListOf<Pair<String, Int>>()
         val versions = mutableListOf<String>()
         val copied = mutableListOf<String>()
+        val playableChecked = mutableListOf<String>()
         var thumbAvailable = true
         var copyAvailable = true
+        var playableAvailable = true
 
         override suspend fun thumb(uri: String, sourceVersion: String, maxPx: Int): String? {
             thumbed += uri to maxPx
@@ -87,6 +90,12 @@ class LocalSourceFirstTest {
             if (!copyAvailable) return false
             dest.writeText("local")
             return true
+        }
+
+        override suspend fun playableUri(uri: String, sourceVersion: String): String? {
+            playableChecked += uri
+            versions += sourceVersion
+            return if (playableAvailable) uri else null
         }
     }
 
@@ -158,6 +167,47 @@ class LocalSourceFirstTest {
         media.thumb(photo(mediaType = "video/mp4"), ThumbSize.S256, isMine = true)
 
         assertEquals(listOf(videoUri), reader.thumbed.map { it.first })
+    }
+
+    @Test
+    fun localVideoResolvesDirectUriForMediaStoreAndSafFolderWithoutRemote() = runBlocking {
+        val safMediaId = FOLDER_ID_FLAG or 7L
+        val safUri = "content://com.android.externalstorage.documents/tree/primary%3ABlackmagic/document/primary%3ABlackmagic%2Fclip.mov"
+        val reader = FakeReader()
+        val remote = Remote()
+        val index = LocalSourceIndex.of(
+            sequenceOf(
+                order(42, "vidMedia"),
+                order(safMediaId, "vidSaf"),
+            ),
+        )
+        val media = LocalFirstLoader(
+            local = LocalFirstOriginals(
+                reader = reader,
+                loadIndex = { index },
+                resolveUri = { mediaType, mediaId ->
+                    if (mediaId == safMediaId) safUri else com.hawkeyexb.ppass.backup.localMediaUri(mediaType, mediaId)
+                },
+            ),
+            remoteThumb = remote.thumb,
+            remoteDownload = remote.download,
+        )
+
+        val mediaStoreVideo = photo(hash = "vidMedia", mediaType = "video/mp4")
+        val safVideo = photo(hash = "vidSaf", mediaType = "video/quicktime")
+
+        assertEquals(videoUri, media.localVideoUri(mediaStoreVideo, isMine = true))
+        assertEquals(safUri, media.localVideoUri(safVideo, isMine = true))
+
+        val dest = File(tmp.root, "saf-copy.mov")
+        media.fetchOriginal(safVideo, isMine = true, dest = dest)
+        assertEquals("local", dest.readText())
+        assertEquals("本机视频（MediaStore + SAF）直读与导出均不走远端下载", 0, remote.downloadCalls)
+
+        // 反证：非本机来源或版本校验失败必须退回 null（走远端）。
+        assertNull(media.localVideoUri(safVideo, isMine = false))
+        reader.playableAvailable = false
+        assertNull(media.localVideoUri(mediaStoreVideo, isMine = true))
     }
 
     // ── ② 取不到就走老路：全部只回退远端，不展示成别的照片 ──

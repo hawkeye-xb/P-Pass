@@ -5,9 +5,13 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import com.hawkeyexb.ppass.backup.flow.liveFlowRuntime
 import com.hawkeyexb.ppass.backup.flow.sourceVersionOf
+import com.hawkeyexb.ppass.backup.folder.FolderAccess
+import com.hawkeyexb.ppass.backup.folder.SafFolderTree
+import com.hawkeyexb.ppass.backup.folder.isFolderId
 import com.hawkeyexb.ppass.backup.order.Order
 import com.hawkeyexb.ppass.backup.order.OrderState
 import com.hawkeyexb.ppass.proto.AssetMeta
@@ -58,12 +62,16 @@ internal fun localIndexReloadDue(nowMs: Long, loadedAtMs: Long?, hasEntries: Boo
 internal interface OriginalReader<T> {
     suspend fun thumb(uri: String, sourceVersion: String, maxPx: Int): T?
     suspend fun copy(uri: String, sourceVersion: String, dest: File): Boolean
+    suspend fun playableUri(uri: String, sourceVersion: String): String? = null
 }
 
 internal class LocalFirstOriginals<T>(
     private val reader: OriginalReader<T>,
     private val loadIndex: suspend () -> LocalSourceIndex,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val resolveUri: suspend (mediaType: String, mediaId: Long) -> String? = { mediaType, mediaId ->
+        if (isFolderId(mediaId)) null else localMediaUri(mediaType, mediaId)
+    },
 ) {
     private val mutex = Mutex()
     private var index: LocalSourceIndex = LocalSourceIndex.EMPTY
@@ -84,9 +92,13 @@ internal class LocalFirstOriginals<T>(
     suspend fun copy(asset: AssetMeta, dest: File): Boolean =
         withLocal(asset) { uri, version -> reader.copy(uri, version, dest) } ?: false
 
+    suspend fun playableUri(asset: AssetMeta): String? =
+        withLocal(asset) { uri, version -> reader.playableUri(uri, version) }
+
     private suspend fun <R : Any> withLocal(asset: AssetMeta, block: suspend (String, String) -> R?): R? {
         val hit = currentIndex().find(asset.hash) ?: return null
-        return block(localMediaUri(asset.mediaType, hit.mediaId), hit.sourceVersion)
+        val uri = runCatching { resolveUri(asset.mediaType, hit.mediaId) }.getOrNull() ?: return null
+        return block(uri, hit.sourceVersion)
     }
 }
 
@@ -104,6 +116,11 @@ internal class LocalFirstLoader<T>(
         if (isMine && runCatching { local.copy(asset, dest) }.getOrDefault(false)) return dest
         remoteDownload(asset.hash, dest)
         return dest
+    }
+
+    suspend fun localVideoUri(asset: AssetMeta, isMine: Boolean): String? {
+        if (!isMine) return null
+        return runCatching { local.playableUri(asset) }.getOrNull()
     }
 }
 
@@ -133,16 +150,40 @@ internal class AndroidOriginalReader(private val context: Context) : OriginalRea
             copied
         }
 
+    override suspend fun playableUri(uri: String, sourceVersion: String): String? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val target = Uri.parse(uri)
+                if (!versionMatches(target, sourceVersion)) return@runCatching null
+                resolver.openAssetFileDescriptor(target, "r")?.use { uri }
+            }.getOrNull()
+        }
+
     private fun versionMatches(uri: Uri, expected: String): Boolean = runCatching {
-        resolver.query(
-            uri,
-            arrayOf(MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.SIZE),
-            null,
-            null,
-            null,
-        )?.use { row ->
-            row.moveToFirst() && sourceVersionOf(row.getLong(0), row.getLong(1)) == expected
-        } ?: false
+        if (DocumentsContract.isDocumentUri(context, uri)) {
+            resolver.query(
+                uri,
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                    DocumentsContract.Document.COLUMN_SIZE,
+                ),
+                null,
+                null,
+                null,
+            )?.use { row ->
+                row.moveToFirst() && sourceVersionOf(row.getLong(0) / 1000L, row.getLong(1)) == expected
+            } ?: false
+        } else {
+            resolver.query(
+                uri,
+                arrayOf(MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.SIZE),
+                null,
+                null,
+                null,
+            )?.use { row ->
+                row.moveToFirst() && sourceVersionOf(row.getLong(0), row.getLong(1)) == expected
+            } ?: false
+        }
     }.getOrDefault(false)
 
     private fun decodeDownscaled(uri: Uri, maxPx: Int): Bitmap? {
@@ -165,3 +206,17 @@ internal fun sampleSizeFor(width: Int, height: Int, maxPx: Int): Int {
 
 internal fun readLocalSourceIndex(): LocalSourceIndex =
     liveFlowRuntime()?.store?.readCurrentOrders { LocalSourceIndex.of(it) } ?: LocalSourceIndex.EMPTY
+
+internal suspend fun resolveLocalMediaUri(context: Context, mediaType: String, mediaId: Long): String? {
+    if (!isFolderId(mediaId)) return localMediaUri(mediaType, mediaId)
+    return withContext(Dispatchers.IO) {
+        runCatching {
+            val registry = FolderAccess.registry(context)
+            val sourceId = registry.sourceIdOfMedia(mediaId) ?: return@runCatching null
+            val opaqueId = registry.opaqueIdOfMedia(mediaId) ?: return@runCatching null
+            val relativePath = registry.relativePath(sourceId, opaqueId) ?: return@runCatching null
+            val record = registry.record(sourceId) ?: return@runCatching null
+            SafFolderTree(context, Uri.parse(record.treeUri)).uriOf(relativePath)
+        }.getOrNull()
+    }
+}

@@ -83,7 +83,6 @@
     <!-- UI-12: dismiss action ： "I know, don\'t ask again for this state",
          distinct from turning auto-backup off entirely. -->
     <string name="notice_dismiss_label">Got it</string>
-    <string name="open_with_app">Open with…</string>
     <string name="no_app_for_file">No app on this phone can open this file.</string>
     <string name="share_to">Share to…</string>
     <!-- #1762 素材文件夹：设置入口 + 最小二级页（添加 / 查看 / 移除 / 重新授权）。只在 Android。 -->

@@ -23,6 +23,22 @@ fun sniffMimeFromHeader(file: File, isVideo: Boolean): String {
     val n = runCatching {
         file.inputStream().use { it.read(head) }
     }.getOrDefault(0)
+    return sniffMimeFromBytes(head, n, isVideo)
+}
+
+fun sniffMimeFromUri(context: Context, uri: Uri, isVideo: Boolean): String {
+    val head = ByteArray(12)
+    val n = runCatching {
+        context.contentResolver.openInputStream(uri)?.use { it.read(head) } ?: 0
+    }.getOrDefault(0)
+    if (n > 0) return sniffMimeFromBytes(head, n, isVideo)
+    return runCatching { context.contentResolver.getType(uri) }
+        .getOrNull()
+        ?.takeIf { it.isNotBlank() }
+        ?: if (isVideo) "video/mp4" else "image/jpeg"
+}
+
+private fun sniffMimeFromBytes(head: ByteArray, n: Int, isVideo: Boolean): String {
     if (n >= 3 && head[0] == 0xFF.toByte() && head[1] == 0xD8.toByte() &&
         head[2] == 0xFF.toByte()
     ) return "image/jpeg"
@@ -58,6 +74,25 @@ fun mimeExtension(mime: String): String = when (mime) {
 suspend fun saveToGallery(context: Context, file: File, asset: AssetMeta): SaveResult {
     val isVideo = asset.mediaType.startsWith("video")
     val mime = sniffMimeFromHeader(file, isVideo)
+    return saveStreamToGallery(context, asset, isVideo, mime) { file.inputStream() }
+}
+
+suspend fun saveUriToGallery(context: Context, sourceUri: Uri, asset: AssetMeta): SaveResult =
+    withContext(Dispatchers.IO) {
+        val isVideo = asset.mediaType.startsWith("video")
+        val mime = sniffMimeFromUri(context, sourceUri, isVideo)
+        saveStreamToGallery(context, asset, isVideo, mime) {
+            context.contentResolver.openInputStream(sourceUri) ?: error("openInputStream returned null")
+        }
+    }
+
+private suspend fun saveStreamToGallery(
+    context: Context,
+    asset: AssetMeta,
+    isVideo: Boolean,
+    mime: String,
+    openSource: () -> java.io.InputStream,
+): SaveResult {
     val displayName = "P-Pass-${asset.hash.take(12)}.${mimeExtension(mime)}"
     return withContext(Dispatchers.IO) {
         val resolver = context.contentResolver
@@ -97,7 +132,7 @@ suspend fun saveToGallery(context: Context, file: File, asset: AssetMeta): SaveR
                 ?: error("MediaStore insert returned null")
             try {
                 resolver.openOutputStream(uri)?.use { out ->
-                    file.inputStream().use { it.copyTo(out) }
+                    openSource().use { it.copyTo(out) }
                 } ?: error("openOutputStream returned null")
                 values.clear()
                 values.put(MediaStore.MediaColumns.IS_PENDING, 0)
@@ -121,7 +156,7 @@ suspend fun saveToGallery(context: Context, file: File, asset: AssetMeta): SaveR
             if (target.isFile) {
                 return@withContext SaveResult(Uri.fromFile(target), alreadyExisted = true)
             }
-            file.inputStream().use { i ->
+            openSource().use { i ->
                 target.outputStream().use { o -> i.copyTo(o) }
             }
             MediaScannerConnection.scanFile(

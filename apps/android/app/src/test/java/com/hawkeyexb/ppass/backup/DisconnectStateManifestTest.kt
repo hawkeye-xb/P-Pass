@@ -318,6 +318,8 @@ class DisconnectStateManifestTest {
     /** 构造参数带 File、但不是持久状态的类。新增一行要写明理由。 */
     private val notPersistentState = mapOf(
         "com.hawkeyexb.ppass.ui.VideoPhase" to "播放器状态（cacheDir 里的临时视频文件），不是持久状态",
+        "com.hawkeyexb.ppass.ui.VideoSource" to
+            "#1963 视频来源值对象（本机 content:// URI 或已登记为 ORIGINAL_VIDEO_CACHE 的临时缓存文件），不是持久状态",
         "com.hawkeyexb.ppass.ui.VideoPlayback" to
             "视频页的取回状态机，只读写 cacheDir/video-<hash>.mp4，该缓存已登记为 ORIGINAL_VIDEO_CACHE",
         "com.hawkeyexb.ppass.update.UpdateArtifacts" to
