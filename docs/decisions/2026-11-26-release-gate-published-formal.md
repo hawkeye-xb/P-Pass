@@ -31,33 +31,41 @@
 ### 2. `tools/release/changelog-section.sh`：新增 `--check` 模式并接入 CI 与发版预检
 
 - **保持既有正文抽取行为不变**：`changelog-section.sh <tag> <输出文件> [CHANGELOG 路径]` 继续原样组装 `## 本版更新（<批次号>）` 与正文。
-- **新增 `--check [CHANGELOG 路径，默认 CHANGELOG.md]` 模式**：
-  - 查询 GitHub Releases（排除 `-test.` tag，涵盖 `isDraft == true` 的草稿 Release）并结合仓库内已存在的非 `-test.` 正式形状 git tag（`v*` 且不含 `-`），识别所有「存在 git tag 但对应 Release 仍为草稿（尚未 Publish）」的批次号 `<batch>`；
-  - 逐个检查 `CHANGELOG.md` 中是否存在 `## [<batch>]` 小节：
-    - 若不存在该小节（条目已并入当前发布段或 `[Unreleased]` 并移除旧草稿头）→ 通过；
-    - 若仍保留 `## [<batch>]` 标题，则其小节正文必须显式标注去向（对齐既有写法如 `本版本未发布，内容已并入 [2026.11.2]。`，或明确标注「本版本未发布 / 不发布 / 已并入」），且不得滞留独立的未归并变更列表（`### Added` / `### Changed` / `### Fixed` / `### Security` 或条目列表）；
-    - 任一草稿小节既未移除/并入、又未按约定显式标注去向，或 `gh` 查询失败（fail-closed）→ 退出码 `1`。
-- **双处门禁接入**：
+- **新增 `--check [--current <tag>] [CHANGELOG 路径，默认 CHANGELOG.md]` 模式（仅依赖 `contents: read` 可见信息）**：
+  - 由于 GitHub API 在 `contents: read` 权限下会隐藏 `isDraft == true` 的草稿 Release，不给 `ci-docs.yml` 或 `plan-builds` 提权至 `contents: write`，改用 `contents: read` 下完全可见的差集逻辑：
+    - 查询 `gh release list --exclude-drafts --exclude-pre-releases --limit 1000` 获取全部**已 Publish 的正式 Release**（`isDraft == false && isPrerelease == false && ^v[^-]+$`）；
+    - 结合仓库内正式形状 git tag（`v*` 且不含 `-`），跳过严格早于「GitHub 上最早保留的已 Publish 正式 Release」的历史 tag（旧 Release 已被平台清理），并排除当前候选版（显式 `--current <tag>`；未传 `--current` 时，若该未发布小节位于 `CHANGELOG.md` 顶部且无更新的正式 tag/Release，视为正在等待人工 Publish 的当前候选版）；
+  - 对差集里仍存在于 `CHANGELOG.md` 中的 `## [<batch>]` 小节：
+    - 必须显式标注去向（对齐既有写法如 `本版本未发布，内容已并入 [2026.11.2]。`，或明确标注「本版本未发布 / 不发布 / 已并入 / 改号为」），且不得滞留独立的未归并变更列表（`### Added` / `### Changed` / `### Fixed` / `### Security` 或条目列表）；
+    - 任一滞留小节不满足要求，或 `gh` / `git` 查询失败（fail-closed）→ 退出码 `1`。
+  - 历史特例核实与对齐：`v2026.11.2` 因 GitHub immutable releases 锁死作废并改号为 `v2026.11.3` 发布，在 `CHANGELOG.md` 中如实拆为 `## [2026.11.3]`（正式发布内容）与 `## [2026.11.2]`（标注未发布并改号为 `[2026.11.3]`）。
+- **双处门禁接入（均维持 `contents: read`）**：
   - `.github/workflows/ci-docs.yml`：在文档 / 发布链门禁中运行 `changelog-section.sh --check`（及配套单测），PR 改到 `CHANGELOG.md`、`tools/release/**` 或发布相关文档时即拦截滞留草稿段；
-  - `.github/workflows/release.yml`：在 `plan-builds`（正式版 `release=true` 预检，构建任何平台之前）调用 `tools/release/changelog-section.sh --check`，红了立即终止构建；`tools/release/dry_run.py` / `gha_sim.py` 的 `gh` 桩同步兼容该调用。
+  - `.github/workflows/release.yml`：在 `plan-builds`（正式版 `release=true` 预检，构建任何平台之前）调用 `tools/release/changelog-section.sh --check --current "$TAG"`，红了立即终止构建；`tools/release/dry_run.py` / `gha_sim.py` 的 `gh` 桩同步兼容该调用。
 
-### 3. 文档同步
+### 3. `tools/release/notes-presence.sh` 与 `release.yml` 版本门禁基线对齐
+
+- 新增 `tools/release/prev-published-tag.sh`（同样只依赖 `contents: read`，查询 `gh release list --exclude-drafts --exclude-pre-releases` 并验证 `git merge-base --is-ancestor`），替代 `git tag -l 'v*' --sort=-v:refname`：
+  - `.github/workflows/release.yml` 的 `Version bump gate (UPD-13)`（`tools/check-version-bump.sh`）改按上一个已 Publish 正式 Release 计算版本与改动基线（`gh` 失败时 fail-closed）；
+  - `tools/release/notes-presence.sh` 改按上一个已 Publish 正式 Release 比较 `release/versions.json` 触发缺失说明告警。
+
+### 4. 文档同步
 
 - 更新 `docs/RELEASING.md` 与 `docs/release-notes-rules.md`：
-  - 写明验收范围（`release-scope`）与 `CHANGELOG.md` 均以**真正 Publish 过的正式版**为基准；
+  - 写明验收范围（`release-scope`）、`CHANGELOG.md`、UPD-13 版本门禁及 `notes-presence` 缺失告警均以**真正 Publish 过的正式版**为基准；
   - 写明中间产生的 Draft Release 若未发布，其条目在 `CHANGELOG.md` 中必须去向明确：并入下一个正式版本段（可删去草稿标题，或仅保留「本版本未发布，内容已并入 [x.y.z]」占位说明），或明确标注不发布；不能滞留独立变更条目或因上一版是草稿而漏进下一版的更新说明。
 
-### 4. 带反证的自动化测试
+### 5. 带反证的自动化测试
 
 - **`tools/test-release-scope.sh`**：扩展 `gh` 桩支持 `gh release list` / `gh api`，补充用例与反证：
   1. 造一个「`v1.1.0` tag 存在但 Release 为 Draft，`v1.0.0` 为已 Publish Release」的仓库：旧逻辑（不过滤草稿）取到 `v1.1.0` 判红，新逻辑跳过草稿取到 `v1.0.0` 判绿；
   2. `v1.1.0-test.1` 等 `-test.` 与 Prerelease 不干扰正式起点判定；
   3. 已有台账记着旧 `since=` 且与最新已 Publish 版不一致时，保持 `since=` 不被改写并输出不一致警告；
   4. `gh` 查询失败时 fail-closed 退出非 0。
-- **`tools/test-changelog-section.sh`**（接入 `justfile` / `ci-docs.yml`）：覆盖正文提取与 `--check` 门禁及反证：
-  1. 造一个「存在非 test tag 且 Release 为 Draft、但 `CHANGELOG.md` 仍滞留该段正式条目」的夹具 → `--check` 必红（退出 `1`）；
-  2. 将该草稿段条目并入当前段并删掉旧头，或改为约定去向标注（如 `本版本未发布，内容已并入 [2026.11.2]。`） → `--check` 必绿（退出 `0`）；
-  3. 反证：撤掉或绕过 `--check` 校验后，上述滞留草稿段夹具错误放行（判红）。
+- **`tools/test-changelog-section.sh`**（接入 `justfile` / `ci-docs.yml`）：模拟 `contents: read` 下 `gh release list --exclude-drafts --exclude-pre-releases` 只返回已 Publish Release 的真实行为，覆盖正文提取、`--check` 差集门禁、`--current` 排除、历史保留边界、`tools/release/prev-published-tag.sh` / `tools/release/notes-presence.sh` 及反证：
+  1. 造一个「存在非 test tag 且未 Publish（只读 token 看不到草稿）、但 `CHANGELOG.md` 仍滞留该段正式条目」的夹具 → `--check` 必红（退出 `1`）；
+  2. 传入 `--current`（或位于顶部且无更新 tag/Release 的当前候选版）不误报，将滞留草稿段条目并入当前段并删掉旧头、或改为约定去向标注（如 `本版本未发布，内容已并入 [2026.11.2]。`） → `--check` 必绿（退出 `0`）；
+  3. 反证：撤掉或绕过 `--check` 校验后，上述滞留草稿段夹具错误放行（判红）；`prev-published-tag.sh` / `notes-presence.sh` 跳过未发布草稿 tag 并正确按上一已 Publish 正式版告警缺失说明。
 
 ## 理由
 
@@ -69,9 +77,9 @@
 
 - **正面**：彻底堵住「未 Publish 的 Draft tag 截断验收范围」与「草稿版本 CHANGELOG 条目滞留或整段漏进正式版」两类发布事故路径。
 - **代价与约束**：
-  - `release-scope.sh` 与 `changelog-section.sh --check` 均依赖 `gh` 读取仓库 Release 列表，在无网络或 `gh` 未鉴权环境下会 fail-closed 报错，无法离线猜测已发布状态；
-  - `ci-docs.yml` 新增对 GitHub Releases 的只读查询（使用 `GITHUB_TOKEN`，`contents: read` 即可）；测试套件与 `dry-run` 需通过 `gh` 测试桩隔离网络。
-- **边界**：本阶段 PR 仅合入本 ADR 文档，不修改任何代码或脚本；待本方案合入 `origin/main` 后，由实现阶段按本方案修改脚本、workflow、文档与反证单测。
+  - `release-scope.sh`、`changelog-section.sh --check` 与 `prev-published-tag.sh` 均依赖 `gh` 读取仓库已 Publish Release 列表，在无网络或 `gh` 未鉴权环境下会 fail-closed 报错，无法离线猜测已发布状态；
+  - `ci-docs.yml`、`release.yml`（`plan-builds`）均维持 `contents: read` 最小权限（通过已 Publish Release 列表与 git tag 差集识别未发布版本，无需读取私有 Draft 的写权限）；测试套件与 `dry-run` 需通过 `gh` 测试桩隔离网络。
+- **边界**：本方案经产品负责人 2026-11-26 拍板按「`contents: read` 可见差集 + `--current` 候选排除 + `notes-presence.sh` / `Version bump gate` 同步改按已 Publish 正式版」落地实施（PR #2070）。
 
 ## 备选
 

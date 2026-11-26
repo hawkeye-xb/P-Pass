@@ -77,7 +77,7 @@ FORMAL_SECTION = "**Android 9.8.2 · macOS 9.8.2**\n\n### Fixed\n- 演练条目�
 CHANGELOG = (
     "# Changelog\n\n## [Unreleased]\n\n- 未发布的条目不许进正文\n\n"
     f"## [2099.1.1] - 2099-01-02\n\n{FORMAL_SECTION}\n\n\n"
-    "## [2099.1.0] - 2099-01-01\n\n- 上一版的条目不许进正文\n"
+    "## [2099.0.9] - 2099-01-01\n\n- 上一版的条目不许进正文\n"
 )
 
 
@@ -848,7 +848,7 @@ def verify_gate(ck: Check, base: Path, key: dict, rel: dict):
 
 
 def draft_changelog_gate(ck: Check, base: Path, key: dict, rel: dict):
-    """#1636：上一版仍为 Draft 且 CHANGELOG.md 滞留该段正式条目时，plan-builds 必须失败、不建草稿。"""
+    """#1636：上一版未 Publish 且 CHANGELOG.md 滞留该段正式条目时，plan-builds 必须失败、不建草稿。"""
     print(f"\n== #1636 草稿版本 CHANGELOG 小节滞留挡发布（正式 tag {FORMAL_TAG}）")
     bad_changelog = (
         "# Changelog\n\n"
@@ -859,7 +859,6 @@ def draft_changelog_gate(ck: Check, base: Path, key: dict, rel: dict):
     origin, sha = make_origin(base, "draft-cl", [(PREV_VERSIONS, {}, [PREV_TAG]), (CUR_VERSIONS, good_notes(), [FORMAL_TAG])],
                               changelog=bad_changelog)
     sc = Scenario(base, "draft-cl", origin, sha, key, av, dv, rel)
-    sh([str(sc.bin / "gh"), "release", "create", PREV_TAG, "--draft", "--notes", "draft"], stdout=subprocess.DEVNULL)
     jobs = sc.release(rel, FORMAL_TAG, jobs=["plan-builds", "create-draft"])
     job_ok(ck, jobs, "plan-builds", "failure")
     s = step_is(ck, jobs, "plan-builds", "CHANGELOG 草稿小节去向检查（#1636）", "failure")
