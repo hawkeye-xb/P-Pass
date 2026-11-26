@@ -136,18 +136,76 @@ cp "${TMP}/gate.uibak" "$G"
 # 用法错误
 bash "$G" check >/dev/null 2>&1; [ $? = 2 ] && ok "缺参数 → 退出码 2" || bad "缺参数退出码不对"
 
-# 反假考卷门禁：彻底拒绝任何新增/留存的 exam_* 一次性考卷及读取源码字符串假测试；物理删除存量 exam_*（HEAD 中已不存在）放行
-mkdir -p "${TMP}/repo/crates/daemon/tests/v3" "${TMP}/repo/tests"
+# 反假考卷门禁：彻底拒绝任何新增/留存的 exam_* 一次性考卷及多语言读取源码字符串假测试；物理删除存量 exam_*（HEAD 中已不存在）放行
+mkdir -p "${TMP}/repo/crates/daemon/tests/v3" "${TMP}/repo/tests" \
+  "${TMP}/repo/apps/android/app/src/test/java/com/hawkeyexb/ppass" \
+  "${TMP}/repo/apps/ios/PPassTests" "${TMP}/repo/apps/desktop/src"
 printf 'x = 1\n' >"${TMP}/repo/crates/daemon/tests/v3/exam_1927.py"
 printf 'echo 1\n' >"${TMP}/repo/exam_foo.sh"
-FAKE_EXT=rs
-printf 's = (ROOT / "crates/platform/src/lib.%s").read_text()\nassert "fn foo" in s\n' "$FAKE_EXT" >"${TMP}/repo/tests/fake_check.py"
+EXT_RS=rs
+EXT_KT=kt
+EXT_SWIFT=swift
+EXT_SVELTE=svelte
+printf 's = (ROOT / "crates/platform/src/lib.%s").read_text()\nassert "fn foo" in s\n' "$EXT_RS" >"${TMP}/repo/tests/fake_check.py"
+printf 'val s = File("src/main/java/MainActivity.%s").readText()\n' "$EXT_KT" >"${TMP}/repo/apps/android/app/src/test/java/com/hawkeyexb/ppass/FakeKtTest.kt"
+printf 'String s = Files.readString(Paths.get(dir, "Main.%s"));\n' "$EXT_KT" >"${TMP}/repo/apps/android/app/src/test/java/com/hawkeyexb/ppass/FakeJavaTest.java"
+printf 'let s = try String(contentsOf: root.appendingPathComponent("Home.%s"), encoding: .utf8)\n' "$EXT_SWIFT" >"${TMP}/repo/apps/ios/PPassTests/FakeSwiftTests.swift"
+printf 'const s = readFileSync(new URL("./App.%s", import.meta.url), "utf8");\n' "$EXT_SVELTE" >"${TMP}/repo/apps/desktop/src/fakeJs.test.js"
+printf 'const s = await fs.promises.readFile("src/App.%s", "utf8");\n' "$EXT_SVELTE" >"${TMP}/repo/apps/desktop/src/fakeTs.test.ts"
+printf 'let s = include_str!("../src/lib.%s");\n' "$EXT_RS" >"${TMP}/repo/crates/daemon/tests/fake_rust.rs"
 gate 1 "反假考卷：PR 含新增/留存的 exam_1927.py 一次性考卷 → acceptance gate 判红拒绝" "crates/daemon/tests/v3/exam_1927.py" "closes #1"
 gate 1 "反假考卷：PR 含顶层 exam_foo.sh 考卷 → acceptance gate 判红拒绝" "exam_foo.sh" "closes #1"
 gate 1 "反假考卷：PR 含读取业务源码字符串充当断言的 tests/fake_check.py → acceptance gate 判红拒绝" "tests/fake_check.py" "closes #1"
-rm -f "${TMP}/repo/crates/daemon/tests/v3/exam_1927.py" "${TMP}/repo/exam_foo.sh" "${TMP}/repo/tests/fake_check.py"
+gate 1 "反假考卷：Kotlin 测试读取 .kt 源码 → acceptance gate 判红拒绝" "apps/android/app/src/test/java/com/hawkeyexb/ppass/FakeKtTest.kt" "closes #1"
+gate 1 "反假考卷：Java 测试读取 .kt 源码 → acceptance gate 判红拒绝" "apps/android/app/src/test/java/com/hawkeyexb/ppass/FakeJavaTest.java" "closes #1"
+gate 1 "反假考卷：Swift 测试读取 .swift 源码 → acceptance gate 判红拒绝" "apps/ios/PPassTests/FakeSwiftTests.swift" "closes #1"
+gate 1 "反假考卷：JS 测试读取 .svelte 源码 → acceptance gate 判红拒绝" "apps/desktop/src/fakeJs.test.js" "closes #1"
+gate 1 "反假考卷：TS 测试读取 .svelte 源码 → acceptance gate 判红拒绝" "apps/desktop/src/fakeTs.test.ts" "closes #1"
+gate 1 "反假考卷：Rust 测试 include_str! 业务源码 → acceptance gate 判红拒绝" "crates/daemon/tests/fake_rust.rs" "closes #1"
+
+# 反证（门禁有效性）：若撤回多语言扩展恢复 and f.endswith(".py")，上述多语言假测试将漏放变绿
+cp "$G" "${TMP}/gate.pyonly"
+sed 's/elif test_re.search(f) and target.is_file():/elif test_re.search(f) and f.endswith(".py") and target.is_file():/' "${TMP}/gate.pyonly" >"$G"
+gate 0 "反证：撤销多语言扩展恢复仅限 .py 时，Kotlin 假测试漏放变绿（证明扩展真实生效）" "apps/android/app/src/test/java/com/hawkeyexb/ppass/FakeKtTest.kt" "closes #1"
+cp "${TMP}/gate.pyonly" "$G"
+
+rm -f "${TMP}/repo/crates/daemon/tests/v3/exam_1927.py" "${TMP}/repo/exam_foo.sh" "${TMP}/repo/tests/fake_check.py" \
+  "${TMP}/repo/apps/android/app/src/test/java/com/hawkeyexb/ppass/FakeKtTest.kt" \
+  "${TMP}/repo/apps/android/app/src/test/java/com/hawkeyexb/ppass/FakeJavaTest.java" \
+  "${TMP}/repo/apps/ios/PPassTests/FakeSwiftTests.swift" \
+  "${TMP}/repo/apps/desktop/src/fakeJs.test.js" \
+  "${TMP}/repo/apps/desktop/src/fakeTs.test.ts" \
+  "${TMP}/repo/crates/daemon/tests/fake_rust.rs"
+
+# 正例：合法资源读取、跨端常量同步（flow_health.rs）、非 UTF-8 字节容错、基线存量修改零误报
+printf 'val xml = File("src/main/res/values/strings.xml").readText()\n' >"${TMP}/repo/apps/android/app/src/test/java/com/hawkeyexb/ppass/RealStringsTest.kt"
+printf 'const cfg = readFileSync("assets/i18n/en.json", "utf8");\n' >"${TMP}/repo/apps/desktop/src/realJson.test.ts"
+printf 'let s1 = std::fs::read_to_string(root.join("apps/android/FlowContract.%s")).unwrap();\nlet s2 = std::fs::read_to_string(root.join("apps/ios/FlowTypes.%s")).unwrap();\n' "$EXT_KT" "$EXT_SWIFT" >"${TMP}/repo/crates/daemon/tests/flow_health.rs"
+python3 -B -I -c 'import pathlib; pathlib.Path(r"'"${TMP}"'/repo/apps/ios/PPassTests/BinaryCommentTests.swift").write_bytes(b"// \xff\xfe non-utf8\nlet x = 1\n")'
 gate 0 "反证：物理 git rm 删除旧 exam_1927.py（工作区已不存在）→ 合法放行" "crates/daemon/tests/v3/exam_1927.py" "closes #1"
 gate 0 "反证：正式测试目录 crates/daemon/tests/reparse_test.rs → 绿" "crates/daemon/tests/reparse_test.rs" "closes #1"
+gate 0 "正例：Kotlin 读取 strings.xml 与 TS 读取 en.json → 合法放行" "apps/android/app/src/test/java/com/hawkeyexb/ppass/RealStringsTest.kt apps/desktop/src/realJson.test.ts" "closes #1"
+gate 0 "正例：crates/daemon/tests/flow_health.rs 跨端常量同步读取 FlowContract/FlowTypes → 合法放行" "crates/daemon/tests/flow_health.rs" "closes #1"
+gate 0 "正例：含非 UTF-8 字节的合法测试不崩溃 → 绿" "apps/ios/PPassTests/BinaryCommentTests.swift" "closes #1"
+
+# 反证：flow_health.rs 若读取非白名单 UI 文件仍判红拦截
+printf 'let s = include_str!("../../../apps/desktop/src/App.%s");\n' "$EXT_SVELTE" >"${TMP}/repo/crates/daemon/tests/flow_health.rs"
+gate 1 "反证：flow_health.rs 偷读非白名单 UI 源码 → 判红拦截" "crates/daemon/tests/flow_health.rs" "closes #1"
+rm -f "${TMP}/repo/crates/daemon/tests/flow_health.rs"
+
+# 基线存量文件棘轮：存量已有 readText 的测试只补真实断言放行，新增 readText 拦截
+printf 'val old = File("Old.%s").readText()\n' "$EXT_KT" >"${TMP}/repo/apps/android/app/src/test/java/com/hawkeyexb/ppass/LegacyTest.kt"
+(
+  cd "${TMP}/repo" || exit 1
+  export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+  git add apps/android/app/src/test/java/com/hawkeyexb/ppass/LegacyTest.kt &&
+    git -c user.name=t -c user.email=t@example.invalid commit -q -m legacy &&
+    git update-ref refs/remotes/origin/main HEAD
+) || bad "（准备）写入存量测试失败"
+printf 'val old = File("Old.%s").readText()\nassertEquals(2, 1 + 1)\n' "$EXT_KT" >"${TMP}/repo/apps/android/app/src/test/java/com/hawkeyexb/ppass/LegacyTest.kt"
+gate 0 "正例：修改存量测试仅补真实行为断言（未新增源码读取）→ 合法放行" "apps/android/app/src/test/java/com/hawkeyexb/ppass/LegacyTest.kt" "closes #1"
+printf 'val old = File("Old.%s").readText()\nval added = File("Added.%s").readText()\n' "$EXT_KT" "$EXT_KT" >"${TMP}/repo/apps/android/app/src/test/java/com/hawkeyexb/ppass/LegacyTest.kt"
+gate 1 "反证：修改存量测试同时新增源码读取 → 判红拦截" "apps/android/app/src/test/java/com/hawkeyexb/ppass/LegacyTest.kt" "closes #1"
 
 echo
 echo "通过 ${PASS}，失败 ${FAIL}"

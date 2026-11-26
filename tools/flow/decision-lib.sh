@@ -17,3 +17,19 @@ adopted_adrs() {
       printf '%s\n' "$p"
   done
 }
+
+# 跨脚本唯一真源：flow.py 与 acceptance-gate.sh 共用的多语言假测试检测规则（JSON）。
+fake_src_read_spec() {
+  cat <<'FAKE_SRC_SPEC'
+{
+  "ext": "\\.(?:rs|kt|swift|svelte)(?![A-Za-z0-9_])",
+  "py_read_text": "\\.(?:rs|kt|swift|svelte)(?![A-Za-z0-9_])(?:[^\\n;=()]{0,100}\\.?|\\s*\\)\\s*(?:\\n[ \\t]*)?\\.)read_(?:text|bytes)\\b|\\.(?:rs|kt|swift|svelte)\\b[^\\n]{0,120}read_text",
+  "call_head": "\\b(?:open|(?:fs\\s*\\.\\s*promises\\s*\\.\\s*)?readFile(?:Sync)?|Files\\.(?:readString|readAllLines)|(?:(?:std::)?fs::)?read_to_string|include_str!)\\s*\\(|\\b(?:NS)?(?:String|Data)(?:\\.init)?\\s*\\(\\s*contentsOf(?:File)?\\s*:|\\.contents\\s*\\(\\s*atPath\\s*:",
+  "path_ctor_head": "\\b(?:(?:java\\.io\\.)?File|Path)\\s*\\(",
+  "path_read_meth": "\\.(?:readText|readBytes|readLines|read_text|read_bytes)\\b",
+  "cross_end_allowlist": {
+    "crates/daemon/tests/flow_health.rs": ["FlowContract.kt", "FlowTypes.swift"]
+  }
+}
+FAKE_SRC_SPEC
+}

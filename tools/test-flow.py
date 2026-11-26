@@ -260,6 +260,173 @@ class CleanFlowEngineTests(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_7_multilang_fake_source_reads_and_zero_false_positives(self) -> None:
+        ext_rs, ext_kt, ext_swift, ext_svelte = "rs", "kt", "swift", "svelte"
+        # 1) Parity with decision-lib.sh single source of truth
+        lib_res = subprocess.run(
+            ["bash", "-c", f'source "{ROOT / "tools/flow/decision-lib.sh"}" && fake_src_read_spec'],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(flow.FAKE_SRC_SPEC, json.loads(lib_res.stdout))
+
+        # 2) Multi-language negative fixtures (all must be blocked by flow.py)
+        tmp = tempfile.mkdtemp(prefix="v3_ml_ft_")
+        try:
+            neg_samples = {
+                "apps/android/app/src/test/java/com/hawkeyexb/ppass/FakeKtTest.kt": (
+                    f'val s = File("src/main/java/MainActivity.{ext_kt}").readText()\n'
+                ),
+                "apps/android/app/src/test/java/com/hawkeyexb/ppass/FakeJavaTest.java": (
+                    f'String s = Files.readString(Paths.get(dir, "Main.{ext_kt}"));\n'
+                ),
+                "apps/ios/PPassTests/FakeSwiftTests.swift": (
+                    f'let s = try String(contentsOf: root.appendingPathComponent("Home.{ext_swift}"), encoding: .utf8)\n'
+                ),
+                "apps/ios/PPassTests/FakeSwiftDataTests.swift": (
+                    f'let d = FileManager.default.contents(atPath: "Home.{ext_swift}")\n'
+                ),
+                "apps/desktop/src/fakeJs.test.js": (
+                    f'const s = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "App.{ext_svelte}"), "utf8");\n'
+                ),
+                "apps/desktop/src/fakeTs.test.ts": (
+                    f'const s = await fs.promises.readFile("src/App.{ext_svelte}", "utf8");\n'
+                ),
+                "crates/daemon/tests/fake_rust.rs": (
+                    f'let s = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.{ext_rs}")).unwrap();\n'
+                ),
+                "crates/daemon/tests/fake_include.rs": (
+                    f'let s = include_str!("../src/lib.{ext_rs}");\n'
+                ),
+                "tests/fake_py_multiline.py": (
+                    f'txt = Path(\n    "crates/platform/src/lib.{ext_rs}"\n).read_text()\n'
+                ),
+            }
+            for rel, code in neg_samples.items():
+                p = Path(tmp, rel)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(code, encoding="utf-8")
+                ok, msg = flow.verify_real_tests_and_counterproof(tmp, tmp, "HEAD", [rel], "feature")
+                self.assertFalse(ok, f"expected FAKE_TEST_BLOCKED for {rel}")
+                self.assertIn("FAKE_TEST_BLOCKED", msg)
+
+            # 3) Positive fixtures: resource/JSON/strings/xml/comment-trap/cross-end constant sync
+            pos_samples = {
+                "apps/android/app/src/test/java/com/hawkeyexb/ppass/RealStringsTest.kt": (
+                    'val xml = File("src/main/res/values/strings.xml").readText()\n'
+                    f'// see MainActivity.{ext_kt}\n'
+                ),
+                "apps/ios/PPassTests/RealJsonTests.swift": (
+                    'let d = try Data(contentsOf: url("ui-state-truth-table.json"))\n'
+                    f'// reference Home.{ext_swift}\n'
+                ),
+                "apps/desktop/src/realConfig.test.ts": (
+                    'const cfg = readFileSync("assets/i18n/en.json", "utf8");\n'
+                    f'// App.{ext_svelte}\n'
+                ),
+                "crates/daemon/tests/real_fixture.rs": (
+                    'let doc = include_str!("../../../docs/desktop/business-rules.zh-CN.md");\n'
+                ),
+                "crates/daemon/tests/flow_health.rs": (
+                    f'let a = std::fs::read_to_string(root.join("apps/android/FlowContract.{ext_kt}")).unwrap();\n'
+                    f'let b = std::fs::read_to_string(root.join("apps/ios/FlowTypes.{ext_swift}")).unwrap();\n'
+                ),
+                "tests/real_comment_trap.py": (
+                    'sample = "foo." + "rs"\n'
+                    'cfg = Path("fixture.json").read_text()\n'
+                    f'with open("data.json") as f:\n    pass\n# lib.{ext_rs}\n'
+                ),
+            }
+            for rel, code in pos_samples.items():
+                p = Path(tmp, rel)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(code, encoding="utf-8")
+                ok, msg = flow.verify_real_tests_and_counterproof(tmp, tmp, "HEAD", [rel], "feature")
+                self.assertTrue(ok, f"unexpected failure for {rel}: {msg}")
+
+            # Counterproof: flow_health.rs reading non-allowlisted UI file must still be blocked
+            Path(tmp, "crates/daemon/tests/flow_health.rs").write_text(
+                f'let s = include_str!("../../../apps/desktop/src/App.{ext_svelte}");\n',
+                encoding="utf-8",
+            )
+            ok_fh_bad, msg_fh_bad = flow.verify_real_tests_and_counterproof(
+                tmp, tmp, "HEAD", ["crates/daemon/tests/flow_health.rs"], "feature"
+            )
+            self.assertFalse(ok_fh_bad)
+            self.assertIn("FAKE_TEST_BLOCKED", msg_fh_bad)
+
+            # 4) Baseline diff ratchet: editing pre-existing test file without adding fake reads passes; adding one fails
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "--template=", "-q", "-b", "main", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+            legacy_rel = "apps/ios/PPassTests/LegacyTests.swift"
+            (repo / legacy_rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / legacy_rel).write_text(
+                f'let old = try String(contentsOf: root.appendingPathComponent("Old.{ext_swift}"), encoding: .utf8)\n',
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "base"], check=True)
+            base_sha = subprocess.run(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+            ).stdout.strip()
+            (repo / legacy_rel).write_text(
+                f'let old = try String(contentsOf: root.appendingPathComponent("Old.{ext_swift}"), encoding: .utf8)\n'
+                'XCTAssertEqual(1 + 1, 2)\n',
+                encoding="utf-8",
+            )
+            ok_legacy_clean, msg_legacy_clean = flow.verify_real_tests_and_counterproof(
+                str(repo), str(repo), base_sha, [legacy_rel], "feature"
+            )
+            self.assertTrue(ok_legacy_clean, msg_legacy_clean)
+            (repo / legacy_rel).write_text(
+                f'let old = try String(contentsOf: root.appendingPathComponent("Old.{ext_swift}"), encoding: .utf8)\n'
+                f'let added = try String(contentsOf: root.appendingPathComponent("New.{ext_swift}"), encoding: .utf8)\n',
+                encoding="utf-8",
+            )
+            ok_legacy_bad, msg_legacy_bad = flow.verify_real_tests_and_counterproof(
+                str(repo), str(repo), base_sha, [legacy_rel], "feature"
+            )
+            self.assertFalse(ok_legacy_bad)
+            self.assertIn("FAKE_TEST_BLOCKED", msg_legacy_bad)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+        # 5) Zero false positives across entire current repo's existing test files
+        tracked = subprocess.check_output(["git", "-C", str(ROOT), "ls-files"], text=True).splitlines()
+        all_tests = [f for f in tracked if flow.TEST_RE.search(f)]
+        self.assertGreater(len(all_tests), 500)
+        for tf in all_tests:
+            if tf.startswith("tools/"):
+                self.assertEqual(
+                    flow.find_fake_source_reads(Path(ROOT, tf).read_text(encoding="utf-8", errors="ignore"), tf),
+                    [],
+                    f"tool test {tf} must not self-trigger",
+                )
+        ok_repo, msg_repo = flow.verify_real_tests_and_counterproof(str(ROOT), str(ROOT), "HEAD", all_tests, "feature")
+        self.assertTrue(ok_repo, f"repo baseline test audit failed: {msg_repo}")
+
+    def test_8_review_stop_loss_reminder_and_docs_rules(self) -> None:
+        c_sugg = flow.format_review_comment("a" * 40, "PASS", "", 0, 1, 0, "- [建议] a:1 —— x", "d1", "PASS")
+        self.assertIn(flow.STOP_LOSS_REMINDER, c_sugg)
+        c_sty = flow.format_review_comment("a" * 40, "PASS", "", 0, 0, 1, "- [风格] a:1 —— x", "d1", "PASS")
+        self.assertIn(flow.STOP_LOSS_REMINDER, c_sty)
+        c_clean = flow.format_review_comment("a" * 40, "PASS", "", 0, 0, 0, "未发现问题。", "d1", "PASS")
+        self.assertNotIn(flow.STOP_LOSS_REMINDER, c_clean)
+        c_fail = flow.format_review_comment("a" * 40, "FAIL", "", 1, 2, 0, "- [阻断] a:1 —— x", "d1", "FAIL")
+        self.assertNotIn(flow.STOP_LOSS_REMINDER, c_fail)
+
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("等齐一次推", agents)
+        self.assertIn("0 阻断止损", agents)
+        self.assertIn("bounds.height > 0", agents)
+        prompt = (ROOT / "tools/flow/review-prompt.md").read_text(encoding="utf-8")
+        self.assertIn("bounds.height > 0", prompt)
+        self.assertIn("[阻断]", prompt)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
