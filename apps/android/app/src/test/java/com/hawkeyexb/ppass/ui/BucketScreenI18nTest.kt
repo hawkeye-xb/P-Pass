@@ -1,5 +1,6 @@
 package com.hawkeyexb.ppass.ui
 
+import com.hawkeyexb.ppass.R
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 import org.junit.Assert.assertEquals
@@ -17,33 +18,50 @@ class BucketScreenI18nTest {
         return dir
     }
 
-    private fun stringValue(localeDir: String, name: String): String {
-        val xml = File(repoRoot(), "apps/android/app/src/main/res/$localeDir/strings.xml")
-        val strings = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+    private fun xmlValues(localeDir: String, fileName: String, tag: String, name: String): Element {
+        val xml = File(repoRoot(), "apps/android/app/src/main/res/$localeDir/$fileName")
+        val nodes = DocumentBuilderFactory.newInstance().newDocumentBuilder()
             .parse(xml)
-            .getElementsByTagName("string")
-        for (i in 0 until strings.length) {
-            val element = strings.item(i) as Element
-            if (element.getAttribute("name") == name) return element.textContent.trim()
+            .getElementsByTagName(tag)
+        for (i in 0 until nodes.length) {
+            val element = nodes.item(i) as Element
+            if (element.getAttribute("name") == name) return element
         }
-        error("$name missing from $localeDir")
+        error("$tag/$name missing from $localeDir/$fileName")
     }
 
-    @Test
-    fun unnamed_bucket_card_uses_localized_resource() {
-        val source = File(
-            repoRoot(),
-            "apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/BucketScreen.kt",
-        ).readText()
+    private fun stringValue(localeDir: String, name: String, fileName: String = "strings.xml"): String =
+        xmlValues(localeDir, fileName, "string", name).textContent.trim()
 
-        assertTrue(
-            "BucketCard must localize a null bucket name",
-            source.contains("b.name ?: stringResource(R.string.bucket_unnamed)"),
-        )
-        assertTrue(
-            "folder card must localize a null bucket name too (deleting either fallback must fail)",
-            source.contains("folder.bucket.name ?: stringResource(R.string.bucket_unnamed)"),
-        )
+    private fun pluralValue(localeDir: String, name: String, count: Int): String {
+        val el = xmlValues(localeDir, "strings.xml", "plurals", name)
+        val items = el.getElementsByTagName("item")
+        val map = (0 until items.length).associate { idx ->
+            val item = items.item(idx) as Element
+            item.getAttribute("quantity") to item.textContent.trim()
+        }
+        val tpl = if (count == 1 && "one" in map) map.getValue("one") else map.getValue("other")
+        return String.format(tpl, count)
+    }
+
+    private fun renderActionSummary(localeDir: String, firstTime: Boolean, albumCount: Int, folderCount: Int): String {
+        val spec = bucketActionSummarySpec(firstTime = firstTime, albumCount = albumCount, folderCount = folderCount)
+        val baseKey = when (spec.baseRes) {
+            R.string.bucket_start -> "bucket_start"
+            R.string.bucket_save -> "bucket_save"
+            else -> error("unexpected baseRes ${spec.baseRes}")
+        }
+        val tplKey = when (spec.templateRes) {
+            R.string.bucket_action_empty -> "bucket_action_empty"
+            R.string.bucket_action_with_summary -> "bucket_action_with_summary"
+            else -> error("unexpected templateRes ${spec.templateRes}")
+        }
+        val base = stringValue(localeDir, baseKey)
+        val albumPart = if (spec.albumCount > 0) pluralValue(localeDir, "backup_scope_n", spec.albumCount) else null
+        val folderPart = if (spec.folderCount > 0) pluralValue(localeDir, "backup_scope_folder_n", spec.folderCount) else null
+        val summary = listOfNotNull(albumPart, folderPart).joinToString(" · ")
+        val template = stringValue(localeDir, tplKey)
+        return if (summary.isEmpty()) String.format(template, base) else String.format(template, base, summary)
     }
 
     @Test
@@ -53,8 +71,7 @@ class BucketScreenI18nTest {
     }
 
     /**
-     * #1797：同名来源要有类型标识——相册与文件夹的类型词两种语言都要有，且互不相同，
-     * 由 SourceCard 用标准图标与读屏描述区分。
+     * #1797：同名来源要有类型标识——相册与文件夹的类型词两种语言都要有，且互不相同。
      */
     @Test
     fun source_type_labels_are_localized_and_distinct() {
@@ -77,19 +94,31 @@ class BucketScreenI18nTest {
         assertEquals("未选择", stringValue("values-zh", "source_unselected"))
     }
 
-    /** #1797：文件夹卡的菜单按钮描述要本地化（组件默认是写死的中文，不许沿用）。 */
+    /** #1797 / #2067：文件夹行菜单与重授/时间区块/文件夹分组文案双语齐全。 */
     @Test
-    fun menu_copy_is_localized_and_wired_to_the_folder_menu() {
+    fun bucket_scope_section_and_folder_action_copy_are_localized() {
         assertEquals("More actions", stringValue("values", "source_more_actions"))
         assertEquals("更多操作", stringValue("values-zh", "source_more_actions"))
-        val source = File(
-            repoRoot(),
-            "apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/BucketScreen.kt",
-        ).readText()
-        assertTrue(
-            "文件夹菜单按钮要接本地化描述",
-            source.contains("menuContentDescription = stringResource(R.string.source_more_actions)"),
-        )
+        assertEquals("Backup time", stringValue("values", "scope_time_section"))
+        assertEquals("备份时间", stringValue("values-zh", "scope_time_section"))
+        assertEquals("Folders", stringValue("values", "scope_folders_section"))
+        assertEquals("文件夹", stringValue("values-zh", "scope_folders_section"))
+        assertEquals("Permission needed", stringValue("values", "folder_status_needs_permission", "strings_android_only.xml"))
+        assertEquals("需要重新允许", stringValue("values-zh", "folder_status_needs_permission", "strings_android_only.xml"))
+    }
+
+    /** #2067：生产函数 bucketActionSummarySpec 配合真实中英 strings.xml 渲染全部组合。 */
+    @Test
+    fun action_button_summary_renders_real_strings_in_en_and_zh() {
+        assertEquals("保存（已选 2 相册 · 1 文件夹）", renderActionSummary("values-zh", firstTime = false, albumCount = 2, folderCount = 1))
+        assertEquals("保存（已选 2 相册）", renderActionSummary("values-zh", firstTime = false, albumCount = 2, folderCount = 0))
+        assertEquals("开始备份（已选 1 文件夹）", renderActionSummary("values-zh", firstTime = true, albumCount = 0, folderCount = 1))
+        assertEquals("保存（未选来源）", renderActionSummary("values-zh", firstTime = false, albumCount = 0, folderCount = 0))
+
+        assertEquals("Save (2 albums · 1 folder)", renderActionSummary("values", firstTime = false, albumCount = 2, folderCount = 1))
+        assertEquals("Save (1 album)", renderActionSummary("values", firstTime = false, albumCount = 1, folderCount = 0))
+        assertEquals("Start backup (2 folders)", renderActionSummary("values", firstTime = true, albumCount = 0, folderCount = 2))
+        assertEquals("Start backup (none selected)", renderActionSummary("values", firstTime = true, albumCount = 0, folderCount = 0))
     }
 
     /** #1788：范围页相册提示的动作分流——系统还肯弹框（rationale=true）就申请；不再弹框（被锁）改「去设置」。 */

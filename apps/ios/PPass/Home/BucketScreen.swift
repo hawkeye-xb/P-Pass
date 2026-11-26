@@ -2,13 +2,12 @@ import SwiftUI
 import PPassCore
 import PPassMedia
 
-/// 统一备份范围：相册与文件夹卡片共用选中表现、同一时间档和同一个保存动作。
+/// 统一备份范围：顶部时间分段、相册双列网格与按需展示的紧凑文件夹分组共享同一个保存动作。
+/// 顶栏右侧提供克制的目录图标入口；从未添加过文件夹时不出现文件夹区块。
 /// 添加文件夹只登记授权并标成待保存；取消勾选保留授权，移除需单独确认且不删原素材。
 /// 首次（从未保存过）不预选任何来源；时间默认「从今天起」；新相册默认不勾。允许空集 = 一个都不备份。
 /// 相册未完整授权时只显示「保存过的相册」供取消，不给新增相册。
-/// 底部只有主按钮：首次「开始备份」，编辑「保存」。不显示合计张数与大小（iOS 没有公开的大小接口）。
-/// 与 Android 的差别只有：标题用系统大标题导航栏；相册是异步读的，所以多了加载中 / 读取失败两种状态。
-/// 未完整权限提示与来源卡片对齐 Android（actBg 权限卡、双列等高、菜单收动作、区分失败文案）。
+/// 底部主按钮实时展示已选摘要（如「保存（已选 2 相册 · 1 文件夹）」）。
 struct BucketScreen: View {
     let firstTime: Bool
     /// 选中的来源、保存时看到的全部来源、时间档是不是「全部」。
@@ -36,6 +35,18 @@ struct BucketScreen: View {
             .navigationBarTitleDisplayMode(.large)
             .safeAreaInset(edge: .bottom, spacing: 0) { if albums != nil, error == nil { footer } }
             .toolbar(firstTime ? .automatic : .hidden, for: .tabBar) // 选范围是一次完整任务，底部主按钮占位
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showingAddPicker = true
+                    } label: {
+                        Image(systemName: "folder.badge.plus")
+                    }
+                    .disabled(folderBusy || albums == nil)
+                    .accessibilityLabel(L.s("folder_sources_add"))
+                    .accessibilityIdentifier("folderSourceAdd")
+                }
+            }
             .task { await load() }
             // 从系统设置改完权限回来（sceneBecameActive 会重读权限档）：按新的一档重读相册。
             .onChange(of: app.access) { _ in Task { await load() } }
@@ -62,18 +73,22 @@ struct BucketScreen: View {
         if let error {
             PPStateMessage(text: error, symbol: "exclamationmark.triangle", actionTitle: L.s("try_again")) { Task { await load() } }
         } else if let albums {
+            let visible = Self.visibleAlbums(albums, checked: checked, photoAccess: app.access)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    timePicker
+                    timeSection
                     if Self.notice(for: app.access) == .noAccess { noAccess }
                     if albums.isEmpty, folders.isEmpty, Self.notice(for: app.access) != .noAccess {
                         Text(L.s("bucket_empty")).font(PPFont.sans(15, relativeTo: .subheadline)).foregroundStyle(PPColor.ink40)
                             .multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.top, 40)
                     }
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 10) {
-                        ForEach(Self.visibleAlbums(albums, checked: checked, photoAccess: app.access)) { album in card(album) }
-                        ForEach(folders) { folder in folderCard(folder) }
-                        addFolderCard
+                    if !visible.isEmpty {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 10) {
+                            ForEach(visible) { album in card(album) }
+                        }
+                    }
+                    if Self.showsFolderSection(folders: folders) {
+                        folderSection
                     }
                 }
                 .padding(.horizontal, 24).padding(.top, 6).padding(.bottom, 14)
@@ -101,6 +116,36 @@ struct BucketScreen: View {
     static func visibleAlbums(_ albums: [AlbumBucket], checked: Set<String>, photoAccess: MediaAccess) -> [AlbumBucket] {
         guard photoAccess != .full else { return albums }
         return albums.filter { checked.contains($0.id) }
+    }
+
+    /// 文件夹分组仅在添加过文件夹时按需显示。
+    static func showsFolderSection(folders: [FolderSourceInfo]) -> Bool {
+        !folders.isEmpty
+    }
+
+    static func selectedCounts(albums: [AlbumBucket], folders: [FolderSourceInfo], checked: Set<String>,
+                               photoAccess: MediaAccess) -> (albums: Int, folders: Int) {
+        let albumCount: Int
+        if photoAccess == .full {
+            let availableIds = Set(albums.map(\.id))
+            albumCount = checked.filter { !$0.hasPrefix("folder:") && availableIds.contains($0) }.count
+        } else {
+            albumCount = checked.filter { !$0.hasPrefix("folder:") }.count
+        }
+        let folderCount = folders.filter { checked.contains(FolderMediaSource.bucketId(sourceId: $0.id)) }.count
+        return (albumCount, folderCount)
+    }
+
+    static func actionButtonTitle(firstTime: Bool, albumCount: Int, folderCount: Int,
+                                  bundle: Bundle = .main, locale: Locale = .current) -> String {
+        let base = L.s(firstTime ? "bucket_start" : "bucket_save", bundle: bundle)
+        let albumPart = albumCount > 0 ? String(format: L.s("backup_scope_n", bundle: bundle), locale: locale, arguments: [albumCount]) : nil
+        let folderPart = folderCount > 0 ? String(format: L.s("backup_scope_folder_n", bundle: bundle), locale: locale, arguments: [folderCount]) : nil
+        let summary = [albumPart, folderPart].compactMap { $0 }.joined(separator: " · ")
+        if summary.isEmpty {
+            return String(format: L.s("bucket_action_empty", bundle: bundle), locale: locale, arguments: [base])
+        }
+        return String(format: L.s("bucket_action_with_summary", bundle: bundle), locale: locale, arguments: [base, summary])
     }
 
     /// 首次加载：没有存过的范围一律空——显式传 cameraAlbum 也不预选相机相册；
@@ -228,43 +273,83 @@ struct BucketScreen: View {
         .modifier(SourceCardChrome(selected: on))
     }
 
-    /// 文件夹与相册使用同一选中外观与同一张卡高度；重新授权 / 移除收进标题行右侧的菜单
-    /// （对齐 Android SourceCard 的 overflow menu）。
-    private func folderCard(_ source: FolderSourceInfo) -> some View {
+    /// 相册网格下方按需出现的紧凑文件夹分组，传达「立即管理（添加/重授/移除）vs 点保存生效」的心智区分。
+    private var folderSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(L.s("scope_folders_section"))
+                .font(PPFont.footnote)
+                .foregroundStyle(PPColor.ink60)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("folderSectionHeader")
+
+            VStack(spacing: 0) {
+                ForEach(Array(folders.enumerated()), id: \.element.id) { index, folder in
+                    if index > 0 { PPDivider() }
+                    folderRow(folder)
+                }
+            }
+            .background(PPColor.paper, in: RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous)
+                    .strokeBorder(PPColor.border, lineWidth: 1)
+            )
+        }
+        .padding(.top, 4)
+    }
+
+    private func folderRow(_ source: FolderSourceInfo) -> some View {
         let id = FolderMediaSource.bucketId(sourceId: source.id)
         let on = checked.contains(id)
-        return ZStack(alignment: .bottomTrailing) {
+        let needsAuth = !source.available
+        return HStack(alignment: .center, spacing: 10) {
             Button {
                 if on { checked.remove(id) } else { checked.insert(id) }
                 Haptics.selection()
             } label: {
-                VStack(alignment: .leading, spacing: 0) {
-                    PPColor.linen.aspectRatio(1.6, contentMode: .fit)
-                        .overlay { Image(systemName: "folder.fill").font(PPFont.iconPlaceholderFolder).foregroundStyle(PPColor.ink40) }
-                        .overlay(alignment: .topTrailing) { SelectBadge(selected: on).padding(8) }
-                        .overlay(alignment: .bottomLeading) { kindBadge(symbol: "folder", label: L.s("source_kind_folder")) }
-                    HStack(spacing: 6) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(source.displayName).font(PPFont.sans(14.5, .semibold, relativeTo: .subheadline))
-                                .foregroundStyle(PPColor.ink).lineLimit(1)
+                HStack(alignment: .center, spacing: 12) {
+                    SelectBadge(selected: on)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "folder")
+                                .font(PPFont.iconBadge)
+                                .foregroundStyle(needsAuth ? PPColor.act : PPColor.ink60)
+                                .accessibilityLabel(L.s("source_kind_folder"))
+                            Text(source.displayName)
+                                .font(PPFont.sans(15, .semibold, relativeTo: .subheadline))
+                                .foregroundStyle(PPColor.ink)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
                                 .accessibilityIdentifier("folderSourceName")
-                            Text(source.available
-                                 ? L.f("bucket_count", source.count)
-                                 : L.s("folder_sources_status_wait"))
-                                .font(PPFont.sans(12.5, relativeTo: .caption)).foregroundStyle(PPColor.ink40)
-                                .lineLimit(1)
                         }
-                        Spacer(minLength: 44) // 给右下角菜单留出触控区，标题不被压住
+                        Text(needsAuth ? L.s("folder_sources_status_wait") : L.f("bucket_count", source.count))
+                            .font(PPFont.footnote)
+                            .foregroundStyle(needsAuth ? PPColor.act : PPColor.ink40)
                     }
-                    .padding(.init(top: 9, leading: 12, bottom: 11, trailing: 12))
+                    Spacer(minLength: 0)
                 }
-                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityAddTraits(on ? [.isSelected] : [])
+            .accessibilityValue(L.s(on ? "source_selected" : "source_unselected"))
+
+            if needsAuth {
+                Button(L.s("folder_sources_reauth")) { reauthTarget = source }
+                    .font(PPFont.sans(13, .bold, relativeTo: .footnote))
+                    .foregroundStyle(PPColor.act)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 36)
+                    .background(PPColor.actBg, in: RoundedRectangle(cornerRadius: PPRadius.controlSm, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: PPRadius.controlSm, style: .continuous)
+                            .strokeBorder(PPColor.act.opacity(0.45), lineWidth: 1)
+                    )
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("folderSourceReauthDirect")
+            }
 
             Menu {
-                if !source.available {
+                if needsAuth {
                     Button(L.s("folder_sources_reauth")) { reauthTarget = source }
                         .accessibilityIdentifier("folderSourceReauth")
                 }
@@ -279,29 +364,11 @@ struct BucketScreen: View {
             }
             .accessibilityLabel(L.s("source_more_actions"))
             .accessibilityIdentifier("folderSourceMore")
-            .padding(.trailing, 4)
-            .padding(.bottom, 6)
         }
+        .padding(.leading, 14)
+        .padding(.trailing, 6)
+        .padding(.vertical, 10)
         .disabled(folderBusy)
-        .modifier(SourceCardChrome(selected: on))
-    }
-
-    /// 「添加文件夹」与来源卡同网格同尺寸：未选 linen 底 + 1pt border 描边，封面与底部信息区高度一致。
-    private var addFolderCard: some View {
-        Button { showingAddPicker = true } label: {
-            VStack(alignment: .leading, spacing: 0) {
-                PPColor.linen.aspectRatio(1.6, contentMode: .fit)
-                    .overlay { Image(systemName: "plus").font(PPFont.iconPlaceholderPlus).foregroundStyle(PPColor.ink40) }
-                Text(L.s("folder_sources_add")).font(PPFont.sans(14.5, .semibold, relativeTo: .subheadline))
-                    .foregroundStyle(PPColor.ink).lineLimit(1)
-                    .padding(.init(top: 9, leading: 12, bottom: 11, trailing: 12))
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .disabled(folderBusy)
-        .accessibilityIdentifier("folderSourceAdd")
-        .modifier(SourceCardChrome(selected: false))
     }
 
     private func addFolder(_ url: URL) async {
@@ -323,7 +390,7 @@ struct BucketScreen: View {
 
     private func remove(_ target: FolderSourceInfo) async {
         _ = await runFolder("folder-remove", failureKey: "folder_sources_remove_failed",
-                            operation: { try app.backend.engine.removeFolderSource(id: target.id) }, apply: { _ in
+                            operation: { try await app.backend.engine.removeFolderSource(id: target.id) }, apply: { _ in
             checked.remove(FolderMediaSource.bucketId(sourceId: target.id))
         })
     }
@@ -350,14 +417,21 @@ struct BucketScreen: View {
         return true
     }
 
-    /// 时间二选一（M月d日起的照片 / 含以前的照片）：系统分段控件，一行。
-    private var timePicker: some View {
-        Picker(L.s("backup_scope"), selection: $wantsAll) {
-            Text(Self.sinceOptionLabel(savedSince, now: Date())).tag(false)
-            Text(L.s("scope_time_all")).tag(true)
+    /// 时间二选一（M月d日起的照片 / 含以前的照片）：带极轻区块标签的系统分段控件。
+    private var timeSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(L.s("scope_time_section"))
+                .font(PPFont.footnote)
+                .foregroundStyle(PPColor.ink60)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("bucketTimeSection")
+            Picker(L.s("scope_time_section"), selection: $wantsAll) {
+                Text(Self.sinceOptionLabel(savedSince, now: Date())).tag(false)
+                Text(L.s("scope_time_all")).tag(true)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("bucketSince")
         }
-        .pickerStyle(.segmented)
-        .accessibilityIdentifier("bucketSince")
     }
 
     /// 「某天起的照片」那一档的选项文字，一律写日期（同 Android `scopeSinceOptionLabel`）：保存过某天 → 那一天；
@@ -372,9 +446,11 @@ struct BucketScreen: View {
         return L.f("scope_time_since_date", SettingsScreen.scopeDate(start, calendar: calendar, locale: locale))
     }
 
-    /// 底部唯一的主按钮：首次「开始备份」，编辑「保存」（Android 60 高 / 18 字）。paper 底 + 顶部分隔线：网格从下面滚过时仍可读。
+    /// 底部主按钮实时展示已选摘要（如「保存（已选 2 相册 · 1 文件夹）」）；paper 底 + 顶部分隔线。
     private var footer: some View {
-        PPButton(title: L.s(firstTime ? "bucket_start" : "bucket_save"), height: 60, fontSize: 18) {
+        let counts = Self.selectedCounts(albums: albums ?? [], folders: folders, checked: checked, photoAccess: app.access)
+        let title = Self.actionButtonTitle(firstTime: firstTime, albumCount: counts.albums, folderCount: counts.folders)
+        return PPButton(title: title, height: 60, fontSize: 18) {
             let knownSources = Set((albums ?? []).map(\.id)).union(folders.map { FolderMediaSource.bucketId(sourceId: $0.id) })
             onDone(checked, knownSources, wantsAll)
         }
@@ -403,7 +479,7 @@ struct BucketScreen: View {
                 let selectedAlbums = Self.initialSelectionWithUnavailable(saved: saved, availableAlbums: Set(list.map(\.id)),
                                                                           cameraAlbum: list.first(where: \.isCameraAlbum)?.id)
                 let selectedFolders = ScopePolicy.initialFolderSelection(saved: saved, known: known, available: folderIds)
-                checked = selectedAlbums.union(selectedFolders)
+                checked = checked.union(selectedAlbums).union(selectedFolders)
             }
             // 时间档只在首次进入时初始化；授权刷新不覆盖用户尚未保存的选择。
             if !hasLoaded {

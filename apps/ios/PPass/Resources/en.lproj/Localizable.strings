@@ -105,6 +105,10 @@
 "bucket_unnamed" = "Unnamed";
 "bucket_start" = "Start backup";
 "bucket_save" = "Save";
+"bucket_action_with_summary" = "%1$@ (%2$@)";
+"bucket_action_empty" = "%1$@ (none selected)";
+"scope_time_section" = "Backup time";
+"scope_folders_section" = "Folders";
 "scope_time_since_date" = "From %1$@ onward";
 "scope_time_all" = "Include older photos";
 "scope_value_since" = " · %1$@+";

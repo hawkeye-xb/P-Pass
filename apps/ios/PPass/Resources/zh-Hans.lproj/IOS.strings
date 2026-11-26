@@ -82,7 +82,7 @@
 
 /* 统一备份范围页里的文件夹来源与授权动作。 */
 "folder_sources_add" = "添加文件夹";
-"folder_sources_status_wait" = "等待重新授权";
+"folder_sources_status_wait" = "需要重新允许";
 "folder_sources_reauth" = "重新授权";
 "folder_sources_remove" = "移除";
 "folder_sources_remove_confirm_title" = "移除「%@」？";
