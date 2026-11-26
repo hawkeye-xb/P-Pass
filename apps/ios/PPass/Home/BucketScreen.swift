@@ -42,7 +42,7 @@ struct BucketScreen: View {
                     } label: {
                         Image(systemName: "folder.badge.plus")
                     }
-                    .disabled(folderBusy)
+                    .disabled(folderBusy || albums == nil)
                     .accessibilityLabel(L.s("folder_sources_add"))
                     .accessibilityIdentifier("folderSourceAdd")
                 }
@@ -125,10 +125,15 @@ struct BucketScreen: View {
 
     static func selectedCounts(albums: [AlbumBucket], folders: [FolderSourceInfo], checked: Set<String>,
                                photoAccess: MediaAccess) -> (albums: Int, folders: Int) {
-        let visibleAlbumCount = visibleAlbums(albums, checked: checked, photoAccess: photoAccess)
-            .filter { checked.contains($0.id) }.count
+        let albumCount: Int
+        if photoAccess == .full {
+            let availableIds = Set(albums.map(\.id))
+            albumCount = checked.filter { !$0.hasPrefix("folder:") && availableIds.contains($0) }.count
+        } else {
+            albumCount = checked.filter { !$0.hasPrefix("folder:") }.count
+        }
         let folderCount = folders.filter { checked.contains(FolderMediaSource.bucketId(sourceId: $0.id)) }.count
-        return (visibleAlbumCount, folderCount)
+        return (albumCount, folderCount)
     }
 
     static func actionButtonTitle(firstTime: Bool, albumCount: Int, folderCount: Int,
@@ -474,7 +479,7 @@ struct BucketScreen: View {
                 let selectedAlbums = Self.initialSelectionWithUnavailable(saved: saved, availableAlbums: Set(list.map(\.id)),
                                                                           cameraAlbum: list.first(where: \.isCameraAlbum)?.id)
                 let selectedFolders = ScopePolicy.initialFolderSelection(saved: saved, known: known, available: folderIds)
-                checked = selectedAlbums.union(selectedFolders)
+                checked = checked.union(selectedAlbums).union(selectedFolders)
             }
             // 时间档只在首次进入时初始化；授权刷新不覆盖用户尚未保存的选择。
             if !hasLoaded {

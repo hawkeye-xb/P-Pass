@@ -81,8 +81,12 @@ final class BucketAccessNoticeTests: XCTestCase {
         XCTAssertEqual(partialCounts.folders, 1)
 
         let noneCounts = BucketScreen.selectedCounts(albums: [], folders: [f1], checked: ["a", "folder:f1"], photoAccess: .none)
-        XCTAssertEqual(noneCounts.albums, 0)
+        XCTAssertEqual(noneCounts.albums, 1, "无相册权限时已保存但不可见的相册仍保留在 checked 里随 onDone 提交，摘要必须一致")
         XCTAssertEqual(noneCounts.folders, 1)
+
+        let noneEmptyCounts = BucketScreen.selectedCounts(albums: [], folders: [], checked: [], photoAccess: .none)
+        XCTAssertEqual(noneEmptyCounts.albums, 0)
+        XCTAssertEqual(noneEmptyCounts.folders, 0)
     }
 
     /// #2067：底部主按钮摘要在中英文、单复数、首次「开始备份」与编辑「保存」各组合下保持清晰自然。

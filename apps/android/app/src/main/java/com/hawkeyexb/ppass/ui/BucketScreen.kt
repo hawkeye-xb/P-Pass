@@ -53,9 +53,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -270,9 +272,9 @@ private fun BucketFolderRow(
         },
         supportingContent = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (folder.needsPermission) {
+                if (bucketFolderShowsDirectReauthorize(folder.needsPermission)) {
                     Text(
-                        text = stringResource(R.string.folder_status_needs_permission),
+                        text = stringResource(bucketFolderStatusRes(folder.needsPermission)),
                         style = MaterialTheme.typography.labelMedium,
                         color = PPColor.Act,
                     )
@@ -383,26 +385,57 @@ internal fun bucketScreenEmptyNoticeVisible(
 internal fun bucketScreenShowsFoldersSection(folderBuckets: List<FolderBucketUi>): Boolean =
     folderBuckets.isNotEmpty()
 
-internal fun visibleSelectedAlbumCount(
+internal fun bucketFolderShowsDirectReauthorize(needsPermission: Boolean): Boolean = needsPermission
+
+@StringRes
+internal fun bucketFolderStatusRes(needsPermission: Boolean): Int =
+    if (needsPermission) R.string.folder_status_needs_permission else R.string.folder_status_ok
+
+/**
+ * 底部摘要的已选相册数必须与 `onDone(checked, ...)` 实际提交的相册选择一致：
+ * - 完整权限（FULL）下可见相册就是全量现存相册，只统计现存已选；
+ * - 未完整权限（PARTIAL / NONE）下，不可见的已保存相册仍留在 `checked` 并在保存时保留，
+ *   因此统计 `checked.size`（与首页 `unknownExistingFallsBackToTheSavedCount` 同口径）。
+ */
+internal fun bucketSummaryAlbumCount(
     buckets: List<MediaScanner.Bucket>,
     checked: Set<Long>,
     access: MediaAccess,
-): Int = visibleAlbumBuckets(buckets, checked, access).count { it.id in checked }
+): Int = if (bucketScreenOffersAlbumChoices(access)) {
+    buckets.count { it.id in checked }
+} else {
+    checked.size
+}
 
 internal fun selectedFolderCount(
     folderBuckets: List<FolderBucketUi>,
     checkedFolders: Set<String>,
 ): Int = folderBuckets.count { it.key in checkedFolders }
 
-internal fun formatBucketActionLabel(
-    baseLabel: String,
-    albumPart: String?,
-    folderPart: String?,
-    formatWithSummary: (String, String) -> String,
-    formatEmpty: (String) -> String,
-): String {
-    val summary = listOfNotNull(albumPart, folderPart).joinToString(" · ")
-    return if (summary.isEmpty()) formatEmpty(baseLabel) else formatWithSummary(baseLabel, summary)
+internal data class BucketActionSummary(
+    @StringRes val baseRes: Int,
+    val albumCount: Int,
+    val folderCount: Int,
+    @StringRes val templateRes: Int,
+)
+
+internal fun bucketActionSummarySpec(
+    firstTime: Boolean,
+    albumCount: Int,
+    folderCount: Int,
+): BucketActionSummary {
+    val baseRes = if (firstTime) R.string.bucket_start else R.string.bucket_save
+    val templateRes = if (albumCount == 0 && folderCount == 0) {
+        R.string.bucket_action_empty
+    } else {
+        R.string.bucket_action_with_summary
+    }
+    return BucketActionSummary(
+        baseRes = baseRes,
+        albumCount = albumCount,
+        folderCount = folderCount,
+        templateRes = templateRes,
+    )
 }
 
 /**
@@ -625,23 +658,25 @@ fun BucketScreen(
                             ) {
                                 Column {
                                     folderBuckets.forEachIndexed { index, folder ->
-                                        if (index > 0) {
-                                            HorizontalDivider(color = PPColor.Divider)
+                                        key(folder.key) {
+                                            if (index > 0) {
+                                                HorizontalDivider(color = PPColor.Divider)
+                                            }
+                                            BucketFolderRow(
+                                                folder = folder,
+                                                selected = folder.key in checkedFolders,
+                                                enabled = !saving,
+                                                onToggle = { isChecked ->
+                                                    checkedFolders = if (isChecked) {
+                                                        checkedFolders + folder.key
+                                                    } else {
+                                                        checkedFolders - folder.key
+                                                    }
+                                                },
+                                                onReauthorize = { onReauthorizeFolder(folder.key) },
+                                                onRequestRemove = { removing = folder },
+                                            )
                                         }
-                                        BucketFolderRow(
-                                            folder = folder,
-                                            selected = folder.key in checkedFolders,
-                                            enabled = !saving,
-                                            onToggle = { isChecked ->
-                                                checkedFolders = if (isChecked) {
-                                                    checkedFolders + folder.key
-                                                } else {
-                                                    checkedFolders - folder.key
-                                                }
-                                            },
-                                            onReauthorize = { onReauthorizeFolder(folder.key) },
-                                            onRequestRemove = { removing = folder },
-                                        )
                                     }
                                 }
                             }
@@ -651,24 +686,29 @@ fun BucketScreen(
             }
 
             Spacer(Modifier.height(14.dp))
-            val selectedAlbumsCount = visibleSelectedAlbumCount(buckets, checked, albumAccess)
+            val selectedAlbumsCount = bucketSummaryAlbumCount(buckets, checked, albumAccess)
             val selectedFoldersCount = selectedFolderCount(folderBuckets, checkedFolders)
-            val baseAction = stringResource(if (firstTime) R.string.bucket_start else R.string.bucket_save)
-            val albumPart = if (selectedAlbumsCount > 0) {
-                pluralStringResource(R.plurals.backup_scope_n, selectedAlbumsCount, selectedAlbumsCount)
+            val actionSpec = bucketActionSummarySpec(
+                firstTime = firstTime,
+                albumCount = selectedAlbumsCount,
+                folderCount = selectedFoldersCount,
+            )
+            val baseAction = stringResource(actionSpec.baseRes)
+            val albumPart = if (actionSpec.albumCount > 0) {
+                pluralStringResource(R.plurals.backup_scope_n, actionSpec.albumCount, actionSpec.albumCount)
             } else {
                 null
             }
-            val folderPart = if (selectedFoldersCount > 0) {
-                pluralStringResource(R.plurals.backup_scope_folder_n, selectedFoldersCount, selectedFoldersCount)
+            val folderPart = if (actionSpec.folderCount > 0) {
+                pluralStringResource(R.plurals.backup_scope_folder_n, actionSpec.folderCount, actionSpec.folderCount)
             } else {
                 null
             }
             val summary = listOfNotNull(albumPart, folderPart).joinToString(" · ")
             val actionText = if (summary.isEmpty()) {
-                stringResource(R.string.bucket_action_empty, baseAction)
+                stringResource(actionSpec.templateRes, baseAction)
             } else {
-                stringResource(R.string.bucket_action_with_summary, baseAction, summary)
+                stringResource(actionSpec.templateRes, baseAction, summary)
             }
             Button(
                 onClick = { onDone(checked, checkedFolders, time) },

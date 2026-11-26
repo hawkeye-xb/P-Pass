@@ -8,10 +8,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * #1886 / #2067：
- * - 照片页继续使用可换行 `FlowRow` + `PhotoFilterChip`（`heightIn(min = 36.dp)` + `zIndex(1f)`）；
- * - 备份范围页顶部时间范围改用极轻区块标签（`scope_time_section`）+ 原生 M3 `SingleChoiceSegmentedButtonRow`，
- *   与照片页筛选条彻底区分，并通过 `IntrinsicSize.Min` + `fillMaxHeight()` + 2 行换行在大字号下自适应防裁切。
+ * #1886 / #1882：照片页筛选条 `FlowRow` + `PhotoFilterChip`（`heightIn(min = 36.dp)` + `zIndex(1f)`）的布局契约。
+ * 备份范围页顶部原生分段控件（`SingleChoiceSegmentedButtonRow`）在 1.5× 大字号下的真实测量与无截断/无重叠验证见
+ * `androidTest/java/.../ui/BucketScreenComposeTest.kt`。
  */
 class ScopeTimeChipLayoutTest {
 
@@ -21,28 +20,6 @@ class ScopeTimeChipLayoutTest {
             dir = dir.parentFile ?: error("apps/android not found")
         }
         return File(dir, "apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/$rel").readText()
-    }
-
-    /** 范围页已改用原生二选一分段控件 + 区块标签，彻底脱离 PhotoFilterChip / FlowRow。 */
-    @Test
-    fun bucket_screen_uses_native_segmented_control_with_section_label_and_adaptive_height() {
-        val bucket = source("BucketScreen.kt")
-        assertTrue("必须加极轻时间区块标签", bucket.contains("R.string.scope_time_section"))
-        assertTrue("时间范围改用原生 SingleChoiceSegmentedButtonRow", bucket.contains("SingleChoiceSegmentedButtonRow("))
-        assertFalse("范围页不再使用照片页的 PhotoFilterChip", bucket.contains("PhotoFilterChip"))
-        assertFalse("范围页不再使用 FlowRow 摆时间胶囊", bucket.contains("FlowRow("))
-
-        val rowHeader = bucket.substringAfter("SingleChoiceSegmentedButtonRow(").substringBefore("{")
-        assertTrue("分段控件行必须铺满宽", rowHeader.contains(".fillMaxWidth()"))
-        assertTrue("分段控件行必须同步两段最小固有高度以兼容大字号换行", rowHeader.contains(".height(IntrinsicSize.Min)"))
-        assertTrue("分段控件必须抬到滚动列表之上防触控框遮挡", rowHeader.contains(".zIndex(1f)"))
-        assertTrue("承载网格的 Box 必须 clipToBounds()", bucket.contains("Box(Modifier.weight(1f).clipToBounds())"))
-
-        val segBody = segmentedRowLambdaBody(bucket)
-        assertTrue("第一段必须是 SINCE_TODAY", segBody.contains("ScopeTime.SINCE_TODAY"))
-        assertTrue("第二段必须是 ALL", segBody.contains("ScopeTime.ALL"))
-        assertTrue("分段必须撑满行高且保证 48dp 最小触控高度", segBody.contains(".fillMaxHeight()") && segBody.contains("heightIn(min = 48.dp)"))
-        assertTrue("大字号下标签必须允许换行防截断", segBody.contains("maxLines = 2") && segBody.contains("softWrap = true"))
     }
 
     /** 反证：把照片页胶囊高度改回固定 height(36.dp) 本条即红。 */
@@ -73,7 +50,7 @@ class ScopeTimeChipLayoutTest {
 
     /**
      * #1882：筛选条必须压在下方的滚动网格之上，否则网格向上滚动时，顶边被裁剩 1px 的
-     * 可点卡片会把自己的虚拟触控框外扩 24dp，遮住上面的控件。
+     * 可点卡片会把自己的虚拟触控框外扩 24dp，遮住上面的 Chip。
      */
     @Test
     fun scrolled_card_touch_bounds_would_clip_chip_to_32dp_without_stacking() {
@@ -104,24 +81,6 @@ class ScopeTimeChipLayoutTest {
             flowRowHeader(photos).contains(".zIndex(1f)"),
         )
         assertTrue("胶囊仍要保留最小高度", photos.contains("heightIn(min = 36.dp)"))
-    }
-
-    private fun segmentedRowLambdaBody(source: String): String {
-        val call = source.indexOf("SingleChoiceSegmentedButtonRow(")
-        require(call >= 0) { "源码里找不到 SingleChoiceSegmentedButtonRow(" }
-        val open = source.indexOf('{', call)
-        require(open >= 0) { "SingleChoiceSegmentedButtonRow 没有 lambda" }
-        var depth = 0
-        for (i in open until source.length) {
-            when (source[i]) {
-                '{' -> depth++
-                '}' -> {
-                    depth--
-                    if (depth == 0) return source.substring(open + 1, i)
-                }
-            }
-        }
-        error("SingleChoiceSegmentedButtonRow 的 lambda 没有闭合")
     }
 
     private fun flowRowHeader(source: String): String {
