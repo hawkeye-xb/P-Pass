@@ -10,7 +10,7 @@ time.
 
 **Roadmap & status: [docs/ROADMAP.md](docs/ROADMAP.md)**
 
-Follow the project: [Bluesky](https://bsky.app/profile/p-pass.hawkeye-xb.com) · [YouTube](https://www.youtube.com/@p-pass-photos)
+Follow the project: [Website](https://p-pass.hawkeye-xb.com/) · [Bluesky](https://bsky.app/profile/p-pass.hawkeye-xb.com) · [YouTube](https://www.youtube.com/@p-pass-photos)
 
 ## Get started in 10 minutes (no technical knowledge needed)
 

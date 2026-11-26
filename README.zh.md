@@ -7,6 +7,8 @@
 
 **里程碑与状态看板：[docs/ROADMAP.md](docs/ROADMAP.md)**
 
+官网：[p-pass.hawkeye-xb.com](https://p-pass.hawkeye-xb.com/)
+
 ## 10 分钟上手（不需要任何技术知识）
 
 > **写给谁**：你不是开发者，下面的工程细节一概不用看——你只想让手机
