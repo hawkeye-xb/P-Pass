@@ -31,6 +31,7 @@ ADR，验收人拍板后再拆卡实现。代码注释里出现的 ADR-003、ADR
 | 2026-11-21 | [研发工作流升级 V3：结果真值门禁、核心黑名单与串行合入重验](2026-11-21-v3-outcome-driven-collab-flow.md) | 已采纳 |
 | 2026-11-25 | [macOS runner 全仓统一升级为 xcode-27](2026-11-25-macos-runner-xcode-27.md) | 已采纳 |
 | 2026-11-26 | [发版闸与 CHANGELOG 以「已 Publish 的正式 Release」为基准](2026-11-26-release-gate-published-formal.md) | 已采纳 |
+| 2026-11-26 | [桌面端「设置 → 关于」外链按最小权限白名单放行](2026-11-26-desktop-about-opener-allowlist.md) | 已采纳 |
 
 ## 写法
 
