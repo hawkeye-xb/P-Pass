@@ -82,7 +82,9 @@ jobs:
       # 这一步红 ⇒ changes job 红 ⇒ 下游按 `!= 'false'` 照常全跑（fail-closed）。
       - name: 判据自检（含变异反证）
         shell: bash
-        run: tools/test-ci-needs-full-lane.sh
+        run: |
+          python3 -B -I tools/test-ci-impact.py
+          tools/test-ci-needs-full-lane.sh
       - id: decide
         shell: bash
         run: |
@@ -151,9 +153,8 @@ jobs:
   desktop-windows:
     name: desktop (windows-latest)
     needs: changes
-    # #1468：PR 上不跑 Windows（跳过汇报 skipped，对必需检查算通过，名字不变），
-    # 合入 main 后的 push 全量与 Release 调用照跑。
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.changes.outputs.run_heavy != 'false' }}
+    # #2089 四端 PR 对称门禁：PR 与 main push / Release 均按 changes 影响范围执行。
+    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: windows-latest
     # Windows 冷构建（tauri 依赖树 + MSVC 链接）比 Linux 慢得多，30min 不够；
     # 显式给到 45。cargo test 没有单测级超时，真挂死（DAE-06 #176 那种 300s

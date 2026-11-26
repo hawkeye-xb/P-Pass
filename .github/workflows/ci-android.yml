@@ -52,18 +52,7 @@ jobs:
       - id: c
         uses: ./.github/actions/changes
         with:
-          # 原 workflow 级 paths 原样搬来（PR 与 push 两份合并取并集）。
-          paths: |
-            .github/workflows/**
-            .github/actions/changes/**
-            apps/android/**
-            assets/i18n/**
-            # #1124：Kotlin 直接编译 libtransport.so 的 uniffi 绑定（控制面与 iOS 共用），Rust 侧改了导出要在这里编一遍。
-            crates/transport/**
-            crates/proto/**
-            crates/pair-pake/**
-            tools/build-android-iroh-blobs-bridge.sh
-            tools/ci-paths.sh
+          lane: android
 
   android:
     name: android (proto drift + assemble)

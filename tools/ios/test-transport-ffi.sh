@@ -245,7 +245,9 @@ SUSPENDER_PID=$!
 
 UDID=$("$ROOT/tools/ios/sim.sh" udid)
 STATE=$(xcrun simctl list devices -j | jq -r --arg u "$UDID" '.devices[][] | select(.udid == $u) | .state')
-[ "$STATE" = "Booted" ] || SIM_SHUTDOWN="$UDID"
+if [ "$STATE" != "Booted" ] && [ "${CI:-}" != "true" ]; then
+  SIM_SHUTDOWN="$UDID"
+fi
 echo "模拟器：${UDID}（运行前状态 ${STATE}）"
 
 cd "$PKG"

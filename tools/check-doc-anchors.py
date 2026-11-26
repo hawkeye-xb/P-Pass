@@ -74,6 +74,7 @@ KNOWN_EXTENSIONS = (
     '.ps1',
     '.lock',
     '.sql',
+    '.just',
 )
 
 

@@ -31,7 +31,7 @@ UDID=$("$ROOT/tools/ios/sim.sh" udid)
 . "$ROOT/tools/ios/sim-lock.sh"
 sim_lock_acquire
 STATE=$(xcrun simctl list devices -j | jq -r --arg u "$UDID" '.devices[][] | select(.udid == $u) | .state')
-if [ "$STATE" != "Booted" ]; then
+if [ "$STATE" != "Booted" ] && [ "${CI:-}" != "true" ]; then
   trap 'xcrun simctl shutdown "$UDID" >/dev/null 2>&1 || true; sim_lock_release' EXIT
 else
   trap 'sim_lock_release' EXIT

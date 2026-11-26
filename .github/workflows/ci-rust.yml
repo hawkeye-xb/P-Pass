@@ -112,7 +112,9 @@ jobs:
       # 这一步红 ⇒ changes job 红 ⇒ 下游按 `!= 'false'` 照常全跑（fail-closed）。
       - name: 判据自检（含变异反证）
         shell: bash
-        run: tools/test-ci-needs-full-lane.sh
+        run: |
+          python3 -B -I tools/test-ci-impact.py
+          tools/test-ci-needs-full-lane.sh
       - id: decide
         shell: bash
         run: |
@@ -416,9 +418,8 @@ jobs:
     # `!cancelled()` 是状态函数，它让本 job 在 changes 失败时**仍然执行**
     # （否则 needs 的隐式 success() 会把它跳掉，又回到 fail-open）。
     needs: changes
-    # #1468：PR 上不跑 Windows（跳过汇报 skipped，对必需检查算通过，名字不变），
-    # 合入 main 后的 push 全量与 Release 调用照跑。
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.changes.outputs.run_heavy != 'false' }}
+    # #2089 四端 PR 对称门禁：PR 与 main push / Release 均按 changes 影响范围执行。
+    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: windows-latest
     # 冷缓存那次要建 vcpkg 静态 libheif（约 20min）+ 全量冷构建，给足余量；
     # 热缓存下应远低于此。cargo test 没有单测级超时，DAE-06 (#176) 那种 300s
@@ -569,9 +570,8 @@ jobs:
     name: clippy (windows)
     # CI-11 (#255)：**只有明确收到 'false' 才跳过**（fail-closed，理由同上）。
     needs: changes
-    # #1468：PR 上不跑 Windows（跳过汇报 skipped，对必需检查算通过，名字不变），
-    # 合入 main 后的 push 全量与 Release 调用照跑。
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.changes.outputs.run_heavy != 'false' }}
+    # #2089 四端 PR 对称门禁：PR 与 main push / Release 均按 changes 影响范围执行。
+    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: windows-latest
     # 冷缓存要建 vcpkg 静态 libheif（约 20min），给足余量；热缓存下远低于此。
     timeout-minutes: 45

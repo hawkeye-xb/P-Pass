@@ -67,6 +67,7 @@ gate 1 "  只有验收行也不行（看不见的核心要的是方案与测试�
 gate 1 "  引用已采纳方案但没带测试 → 红" "core/x.rs" $'closes #1\n方案：'"$ADR"
 gate 1 "  带测试但没引用方案 → 红" "core/x.rs tools/test-x.sh" "closes #1"
 gate 0 "反证：引用已采纳方案 + 带测试 → 绿" "core/x.rs tools/test-x.sh" $'closes #1\n方案：'"$ADR"
+gate 0 "正例：引用已采纳方案 + test-*.py 测试 → 绿" "core/x.rs tools/test-x.py" $'closes #1\n方案：'"$ADR"
 gate 1 "  引用的是草稿方案 → 红" "core/x.rs tools/test-x.sh" $'closes #1\n方案：docs/decisions/2026-11-02-draft.md'
 # PR 自己带进来、写着「已采纳」但还没进 origin/main 的方案：工作区里有这份文件，只读 origin/main 才判得红
 printf '# 方案\n\n- 状态：已采纳\n' >"${TMP}/repo/docs/decisions/2026-11-03-new.md"
@@ -180,11 +181,21 @@ rm -f "${TMP}/repo/crates/daemon/tests/v3/exam_1927.py" "${TMP}/repo/exam_foo.sh
 # 正例：合法资源读取、跨端常量同步（flow_health.rs）、非 UTF-8 字节容错、基线存量修改零误报
 printf 'val xml = File("src/main/res/values/strings.xml").readText()\n' >"${TMP}/repo/apps/android/app/src/test/java/com/hawkeyexb/ppass/RealStringsTest.kt"
 printf 'const cfg = readFileSync("assets/i18n/en.json", "utf8");\n' >"${TMP}/repo/apps/desktop/src/realJson.test.ts"
+printf 'from pathlib import Path\nDATA = Path("assets/i18n/en.json").read_text()\n' >"${TMP}/repo/tools/test-real.py"
+printf 'from pathlib import Path\nSRC = Path("crates/platform/src/lib.%s").read_text()\n' "$EXT_RS" >"${TMP}/repo/tools/test-fake.py"
 printf 'let s1 = std::fs::read_to_string(root.join("apps/android/FlowContract.%s")).unwrap();\nlet s2 = std::fs::read_to_string(root.join("apps/ios/FlowTypes.%s")).unwrap();\n' "$EXT_KT" "$EXT_SWIFT" >"${TMP}/repo/crates/daemon/tests/flow_health.rs"
 python3 -B -I -c 'import pathlib; pathlib.Path(r"'"${TMP}"'/repo/apps/ios/PPassTests/BinaryCommentTests.swift").write_bytes(b"// \xff\xfe non-utf8\nlet x = 1\n")'
 gate 0 "反证：物理 git rm 删除旧 exam_1927.py（工作区已不存在）→ 合法放行" "crates/daemon/tests/v3/exam_1927.py" "closes #1"
 gate 0 "反证：正式测试目录 crates/daemon/tests/reparse_test.rs → 绿" "crates/daemon/tests/reparse_test.rs" "closes #1"
 gate 0 "正例：Kotlin 读取 strings.xml 与 TS 读取 en.json → 合法放行" "apps/android/app/src/test/java/com/hawkeyexb/ppass/RealStringsTest.kt apps/desktop/src/realJson.test.ts" "closes #1"
+gate 0 "正例：tools/test-real.py 读取 JSON 资源 → 合法放行" "tools/test-real.py" "closes #1"
+gate 1 "反假考卷：tools/test-fake.py 偷读业务源码 → 判红拦截" "tools/test-fake.py" "closes #1"
+cp "$G" "${TMP}/gate.oldtestre"
+sed 's/|((^|\/)test-\[\^\/\]\*\\\.(sh|py)\$)//' "${TMP}/gate.oldtestre" >"$G"
+gate 0 "反证：去掉 test-*.py TEST_RE 后，tools/test-fake.py 假测试漏放变绿" "tools/test-fake.py" "closes #1"
+gate 1 "反证：去掉 test-*.py TEST_RE 后，core/x.rs + tools/test-x.py 被当成无测试红掉" "core/x.rs tools/test-x.py" $'closes #1\n方案：'"$ADR"
+cp "${TMP}/gate.oldtestre" "$G"
+rm -f "${TMP}/repo/tools/test-real.py" "${TMP}/repo/tools/test-fake.py"
 gate 0 "正例：crates/daemon/tests/flow_health.rs 跨端常量同步读取 FlowContract/FlowTypes → 合法放行" "crates/daemon/tests/flow_health.rs" "closes #1"
 gate 0 "正例：含非 UTF-8 字节的合法测试不崩溃 → 绿" "apps/ios/PPassTests/BinaryCommentTests.swift" "closes #1"
 
