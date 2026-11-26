@@ -187,6 +187,59 @@ async fn status_devices_and_revoke_roundtrip() {
     let devices = resp.result.unwrap();
     assert_eq!(devices["devices"][0]["name"], "妈妈的手机");
 
+    // #2079：已配对设备禁止直接调 `device.revoke`（必须先走 `device.disconnect`）。
+    let resp = c
+        .call(
+            "device.revoke",
+            serde_json::json!({ "node_id": "aa".repeat(32) }),
+        )
+        .await;
+    assert!(!resp.ok, "已配对设备直接调 device.revoke 必须被拒");
+    assert_eq!(
+        resp.error.as_ref().map(|e| e.reason()),
+        Some(&proto::Reason::BadRequest)
+    );
+    assert!(
+        db.get_device(&[0xAA; 32])
+            .await
+            .unwrap()
+            .unwrap()
+            .pairing
+            .is_some(),
+        "被拒后配对记录必须完好保留"
+    );
+
+    let resp = c
+        .call(
+            "device.disconnect",
+            serde_json::json!({ "node_id": "aa".repeat(32) }),
+        )
+        .await;
+    assert_eq!(resp.result.unwrap()["disconnected"], true);
+    let gone = db.get_device(&[0xAA; 32]).await.unwrap().unwrap();
+    assert!(gone.pairing.is_none(), "配对记录必须已物理删除");
+    assert_eq!(
+        gone.profile.departed_by,
+        Some(storage::DepartedBy::OwnerDisconnect)
+    );
+    // AUDIT-04 card decision #4: revoking authorization is a user decision
+    // and must land in audit_decision, referencing the disconnected device.
+    let decisions = db.list_decisions(10).await.unwrap();
+    let revoke_decision = decisions
+        .iter()
+        .find(|d| d.entry.decision_kind == "revoke_authorization")
+        .expect("device.disconnect must write an audit_decision row");
+    assert_eq!(
+        revoke_decision.entry.causal_object_ref.as_deref(),
+        Some("aa".repeat(32).as_str())
+    );
+
+    // 断开后留在「已断开」分组，此时才能再调 `device.revoke` 移出主列表。
+    let resp = c.call("devices.list", serde_json::Value::Null).await;
+    let listed = resp.result.unwrap();
+    assert_eq!(listed["devices"][0]["removal"], "disconnected");
+    assert_eq!(listed["devices"][0]["paired"], false);
+
     let resp = c
         .call(
             "device.revoke",
@@ -194,23 +247,19 @@ async fn status_devices_and_revoke_roundtrip() {
         )
         .await;
     assert_eq!(resp.result.unwrap()["revoked"], true);
-    let gone = db.get_device(&[0xAA; 32]).await.unwrap().unwrap();
-    assert!(gone.pairing.is_none(), "配对记录必须已物理删除");
-    assert_eq!(gone.profile.departed_by, Some(storage::DepartedBy::Owner));
-    // AUDIT-04 card decision #4: revoking authorization is a user decision
-    // and must land in audit_decision, referencing the revoked device.
-    let decisions = db.list_decisions(10).await.unwrap();
-    let revoke_decision = decisions
-        .iter()
-        .find(|d| d.entry.decision_kind == "revoke_authorization")
-        .expect("device.revoke must write an audit_decision row");
+    let removed = db.get_device(&[0xAA; 32]).await.unwrap().unwrap();
     assert_eq!(
-        revoke_decision.entry.causal_object_ref.as_deref(),
-        Some("aa".repeat(32).as_str())
+        removed.profile.departed_by,
+        Some(storage::DepartedBy::Owner)
     );
+    let resp = c.call("devices.list", serde_json::Value::Null).await;
+    assert!(resp.result.unwrap()["devices"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }
 
-/// #1055: 业主移除设备时 `departed_at` 与审计时间取注入的时钟。
+/// #1055 / #2079: 业主断开 / 移除设备时 `departed_at` 与审计时间取注入的时钟。
 #[tokio::test(flavor = "multi_thread")]
 async fn device_revoke_stamps_time_from_the_injected_clock() {
     const FAKE_NOW: i64 = 1_999_000_000_000;
@@ -221,11 +270,11 @@ async fn device_revoke_stamps_time_from_the_injected_clock() {
     let mut c = IpcClient::connect(&socket, &token).await;
     let resp = c
         .call(
-            "device.revoke",
+            "device.disconnect",
             serde_json::json!({ "node_id": "ab".repeat(32) }),
         )
         .await;
-    assert_eq!(resp.result.unwrap()["revoked"], true);
+    assert_eq!(resp.result.unwrap()["disconnected"], true);
     let d = db.get_device(&[0xAB; 32]).await.unwrap().unwrap();
     assert_eq!(d.profile.departed_at, Some(FAKE_NOW));
     let decisions = db.list_decisions(10).await.unwrap();
@@ -234,6 +283,17 @@ async fn device_revoke_stamps_time_from_the_injected_clock() {
         .find(|d| d.entry.decision_kind == "revoke_authorization")
         .unwrap();
     assert_eq!(dec.entry.occurred_at, FAKE_NOW);
+
+    let resp = c
+        .call(
+            "device.revoke",
+            serde_json::json!({ "node_id": "ab".repeat(32) }),
+        )
+        .await;
+    assert_eq!(resp.result.unwrap()["revoked"], true);
+    let d2 = db.get_device(&[0xAB; 32]).await.unwrap().unwrap();
+    assert_eq!(d2.profile.departed_by, Some(storage::DepartedBy::Owner));
+    assert_eq!(d2.profile.departed_at, Some(FAKE_NOW));
 }
 
 // ── NAME-01: device.rename（ID 与显示名分离，decisions ②）──────────
@@ -1345,7 +1405,46 @@ async fn devices_list_keeps_self_disconnected_and_hides_owner_removed() {
 
     let mut c = IpcClient::connect(&socket, &token).await;
 
-    // 业主移除走 IPC——顺便钉死它记的来源是 owner。
+    // #2079：业主先走 IPC `device.disconnect` 断开——留在主列表（「已断开」分组），
+    // `departed_by` 记为 `owner_disconnect`；再调 `device.revoke` 才归档到 `owner`
+    // 并从主列表消失。
+    let resp = c
+        .call(
+            "device.disconnect",
+            serde_json::json!({ "node_id": "cc".repeat(32) }),
+        )
+        .await;
+    assert_eq!(resp.result.unwrap()["disconnected"], true);
+    assert_eq!(
+        db.get_device(&[0xCC; 32])
+            .await
+            .unwrap()
+            .unwrap()
+            .profile
+            .departed_by,
+        Some(storage::DepartedBy::OwnerDisconnect),
+        "业主经 IPC 断开必须记成 owner_disconnect"
+    );
+
+    let after_disc = c.call("devices.list", serde_json::Value::Null).await;
+    let after_disc = after_disc.result.unwrap();
+    let names_after_disc: Vec<&str> = after_disc["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names_after_disc,
+        vec!["在用的", "自己断开的", "业主移除的"],
+        "业主断开后仍留在主列表已断开分组里"
+    );
+    let owner_disc = &after_disc["devices"][2];
+    assert_eq!(owner_disc["paired"], false);
+    assert_eq!(owner_disc["departed_by"], "owner_disconnect");
+    assert_eq!(owner_disc["removal"], "disconnected");
+    assert_eq!(owner_disc["presence"], "offline");
+
     let resp = c
         .call(
             "device.revoke",

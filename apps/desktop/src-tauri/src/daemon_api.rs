@@ -153,6 +153,14 @@ pub(crate) async fn daemon_device_watermarks<R: tauri::Runtime>(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn daemon_device_disconnect<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    node_id: String,
+) -> Result<Value, String> {
+    forward(app, "device.disconnect", json!({ "node_id": node_id })).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub(crate) async fn daemon_device_revoke<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     node_id: String,
@@ -260,6 +268,7 @@ mod tests {
             ),
             ("daemon_devices_list", json!({ "include_departed": true })),
             ("daemon_device_watermarks", json!({})),
+            ("daemon_device_disconnect", json!({ "node_id": "n" })),
             ("daemon_device_revoke", json!({ "node_id": "n" })),
             (
                 "daemon_device_rename",
@@ -361,6 +370,7 @@ mod tests {
                 super::daemon_pairing_confirm,
                 super::daemon_devices_list,
                 super::daemon_device_watermarks,
+                super::daemon_device_disconnect,
                 super::daemon_device_revoke,
                 super::daemon_device_rename,
                 super::daemon_device_folder,

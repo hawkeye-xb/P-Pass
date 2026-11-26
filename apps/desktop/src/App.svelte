@@ -744,6 +744,21 @@
     }
   }
 
+  async function disconnectDevice(nodeId, name) {
+    const yes = await confirmDialog(t("ui.disconnect_confirm_body", { name }), {
+      title: t("ui.disconnect_confirm_title"),
+      kind: "warning",
+    });
+    if (!yes) return;
+    try {
+      await call("device.disconnect", { node_id: nodeId });
+      flashMessage(t("ui.device_disconnected", { name }), "warning");
+      await refresh();
+    } catch (e) {
+      flashError(e, "ui.disconnect_failed");
+    }
+  }
+
   // ── NAME-01: 设备改名（decisions ② ID 与显示名分离）──────────────
   // 点设备名 → 变输入框；回车/失焦保存（空名/未改动不提交）；Esc 取消。
   let renameTarget = $state(null); // { nodeId, name }
@@ -2095,14 +2110,23 @@
                         title={t("ui.device_open_folder")}
                         onclick={() => openDeviceFolder(d.node_id)}
                       ><FolderOpenIcon size={16} /></Button>
-                      <!-- #1132 D10：整列按钮都叫「移除」，读屏无法分辨移除哪台
-                           ——可访问名带上设备名（可见文案不变）。 -->
-                      <Button
-                        variant="link"
-                        class="h-auto min-h-0 rounded-sm border-0 border-none px-[4px] py-[8px] text-[14px] font-semibold text-act no-underline hover:bg-act-bg hover:underline hover:underline-offset-[3px]"
-                        aria-label={`${t("ui.remove")} ${displayName(d)}`}
-                        onclick={() => revoke(d.node_id, displayName(d))}
-                      >{t("ui.remove")}</Button>
+                      <!-- #1132 D10 / #2079：已配对行只提供「断开」，已断开行才提供「移除」，
+                           可访问名均带上设备名方便读屏分辨。 -->
+                      {#if group.key === "paired"}
+                        <Button
+                          variant="link"
+                          class="h-auto min-h-0 rounded-sm border-0 border-none px-[4px] py-[8px] text-[14px] font-semibold text-act no-underline hover:bg-act-bg hover:underline hover:underline-offset-[3px]"
+                          aria-label={`${t("ui.disconnect")} ${displayName(d)}`}
+                          onclick={() => disconnectDevice(d.node_id, displayName(d))}
+                        >{t("ui.disconnect")}</Button>
+                      {:else}
+                        <Button
+                          variant="link"
+                          class="h-auto min-h-0 rounded-sm border-0 border-none px-[4px] py-[8px] text-[14px] font-semibold text-act no-underline hover:bg-act-bg hover:underline hover:underline-offset-[3px]"
+                          aria-label={`${t("ui.remove")} ${displayName(d)}`}
+                          onclick={() => revoke(d.node_id, displayName(d))}
+                        >{t("ui.remove")}</Button>
+                      {/if}
                     </li>
                     {/each}
                   </ul>

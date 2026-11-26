@@ -2116,6 +2116,7 @@ pub fn run() {
             daemon_api::daemon_pairing_confirm,
             daemon_api::daemon_devices_list,
             daemon_api::daemon_device_watermarks,
+            daemon_api::daemon_device_disconnect,
             daemon_api::daemon_device_revoke,
             daemon_api::daemon_device_rename,
             daemon_api::daemon_device_folder,

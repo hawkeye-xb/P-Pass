@@ -570,7 +570,7 @@ fn every_reason_has_a_send_point_test() {
         (
             Reason::Cancelled,
             "flow_revoke.rs",
-            "device_revoke_cancels_the_in_flight_fetch_before_it_can_finish",
+            "device_disconnect_cancels_the_in_flight_fetch_before_it_can_finish",
             "DeliveryError::Cancelled",
         ),
     ];

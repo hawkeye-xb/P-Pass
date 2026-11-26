@@ -48,6 +48,8 @@ pub enum DepartedBy {
     Owner,
     /// #1109：这台电脑换了身份，全部配对作废，手机需要重新扫码。
     Identity,
+    /// #2079：业主在桌面点了「断开」（先断连移入已断开，后续再决定是否移除）。
+    OwnerDisconnect,
 }
 
 impl DepartedBy {
@@ -56,6 +58,7 @@ impl DepartedBy {
             DepartedBy::Device => "device",
             DepartedBy::Owner => "owner",
             DepartedBy::Identity => "identity",
+            DepartedBy::OwnerDisconnect => "owner_disconnect",
         }
     }
 
@@ -64,6 +67,7 @@ impl DepartedBy {
             Some("device") => Some(DepartedBy::Device),
             Some("owner") => Some(DepartedBy::Owner),
             Some("identity") => Some(DepartedBy::Identity),
+            Some("owner_disconnect") => Some(DepartedBy::OwnerDisconnect),
             _ => None,
         }
     }
@@ -825,5 +829,184 @@ mod tests {
         assert_eq!(w[0].last_backup_at, Some(500));
         db.set_watermark(&a.id, 8, 600).await.unwrap();
         assert_eq!(db.get_watermark(&a.id).await.unwrap(), Some(8));
+    }
+
+    #[tokio::test]
+    async fn owner_disconnect_roundtrips_and_cascades_transport_state() {
+        let db = Db::open_in_memory().await.unwrap();
+        let p = pair(&db, 3, "p3").await;
+        db.set_watermark(&p.id, 9, 100).await.unwrap();
+        seed_lease(&db, &p.id).await;
+
+        let removed = db
+            .remove_pairing(&[3u8; 32], None, DepartedBy::OwnerDisconnect, 222)
+            .await
+            .unwrap();
+        assert_eq!(removed, Some(p));
+        let row = db.get_device(&[3u8; 32]).await.unwrap().unwrap();
+        assert_eq!(row.pairing, None);
+        assert_eq!(row.profile.departed_at, Some(222));
+        assert_eq!(row.profile.departed_by, Some(DepartedBy::OwnerDisconnect));
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM backup_watermark").await, 0);
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM flow_delivery").await, 0);
+    }
+
+    /// #2079：pre-0015 真实库带 device_profile / pairing / backup_watermark / flow_delivery / asset
+    /// 数据经 `Db::open` 升级到 0015 后零丢数，外键与级联删除保持有效，且允许写入 `'owner_disconnect'`。
+    /// 放在 `device_repo.rs` 内测以遵守 B.3（原始 `pairing` SQL 不出本文件）。
+    #[tokio::test]
+    async fn migration_0015_expands_departed_by_check_and_preserves_existing_rows_and_fks() {
+        use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+        use sqlx::Row as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.sqlite");
+        let opts = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .foreign_keys(true);
+        let pre_pool = SqlitePoolOptions::new().connect_with(opts).await.unwrap();
+        let pre_migrations: Vec<sqlx::migrate::Migration> = crate::db::MIGRATOR
+            .iter()
+            .filter(|m| m.version < 15)
+            .cloned()
+            .collect();
+        assert_eq!(pre_migrations.len(), 14);
+        sqlx::migrate::Migrator {
+            migrations: std::borrow::Cow::Owned(pre_migrations),
+            ..sqlx::migrate::Migrator::DEFAULT
+        }
+        .run(&pre_pool)
+        .await
+        .unwrap();
+
+        let node_a = vec![0xA1u8; 32];
+        let node_b = vec![0xB2u8; 32];
+        let node_c = vec![0xC3u8; 32];
+        sqlx::query(
+            "INSERT INTO device_profile (node_id, name, first_seen_at, last_seen_at, departed_at, departed_by)
+             VALUES (?, '在用手机', 100, 200, NULL, NULL),
+                    (?, '已自断手机', 110, 150, 160, 'device'),
+                    (?, '已移除手机', 120, 130, 140, 'owner')",
+        )
+        .bind(&node_a)
+        .bind(&node_b)
+        .bind(&node_c)
+        .execute(&pre_pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO pairing (id, node_id, role, paired_at) VALUES ('pair-a', ?, 'member', 100)")
+            .bind(&node_a)
+            .execute(&pre_pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO backup_watermark (pairing_id, last_gen, updated_at) VALUES ('pair-a', 77, 190)")
+            .execute(&pre_pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO flow_delivery (pairing_id, queue_sequence, lease_token, content_hash,
+               file_name, media_type, provider, state, source)
+             VALUES ('pair-a', 9, 'lease-9', ?, 'IMG_9.jpg', 'image/jpeg', 'prov', 'active', 'picked')",
+        )
+        .bind(vec![0x55u8; 32])
+        .execute(&pre_pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO asset (hash, rel_path, media_type, bytes, taken_at, added_at, src_device)
+             VALUES (?, 'originals/a/2026/11/IMG_9.jpg', 'image/jpeg', 1234, 150, 180, ?)",
+        )
+        .bind(vec![0x66u8; 32])
+        .bind(&node_a)
+        .execute(&pre_pool)
+        .await
+        .unwrap();
+        pre_pool.close().await;
+
+        let db = Db::open(&path).await.unwrap();
+        let fk_enabled: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(fk_enabled, 1, "迁移后连接必须保持 foreign_keys=ON");
+        let fk_violations = sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert!(
+            fk_violations.is_empty(),
+            "外键检查不能有违例: count={}",
+            fk_violations.len()
+        );
+
+        let devices = db.list_devices().await.unwrap();
+        assert_eq!(devices.len(), 3);
+        let a = db.get_device(&node_a).await.unwrap().unwrap();
+        assert_eq!(a.profile.name, "在用手机");
+        assert_eq!(a.pairing.as_ref().map(|p| p.id.as_str()), Some("pair-a"));
+        assert_eq!(db.get_watermark("pair-a").await.unwrap(), Some(77));
+        let flow_source: String = sqlx::query_scalar(
+            "SELECT source FROM flow_delivery WHERE pairing_id = 'pair-a' AND queue_sequence = 9",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(flow_source, "picked");
+        let asset_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM asset WHERE src_device = ?")
+                .bind(&node_a)
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(asset_count, 1);
+
+        // CHECK 约束仍拒绝非法值，外键仍拒绝孤儿 pairing。
+        assert!(
+            sqlx::query("INSERT INTO device_profile (node_id, name, first_seen_at, departed_by) VALUES (?, 'bad', 1, 'bogus')")
+                .bind(vec![0xEEu8; 32])
+                .execute(db.pool())
+                .await
+                .is_err()
+        );
+        assert!(sqlx::query(
+            "INSERT INTO pairing (id, node_id, role, paired_at) VALUES ('orphan', ?, 'member', 1)"
+        )
+        .bind(vec![0xEFu8; 32])
+        .execute(db.pool())
+        .await
+        .is_err());
+
+        // 允许写入 owner_disconnect，且删除 pairing 仍级联清掉水位与交付租约。
+        let removed = db
+            .remove_pairing(&node_a, None, DepartedBy::OwnerDisconnect, 500)
+            .await
+            .unwrap();
+        assert!(removed.is_some());
+        let a_after = db.get_device(&node_a).await.unwrap().unwrap();
+        assert!(a_after.pairing.is_none());
+        assert_eq!(
+            a_after.profile.departed_by,
+            Some(DepartedBy::OwnerDisconnect)
+        );
+        assert_eq!(a_after.profile.departed_at, Some(500));
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM backup_watermark").await, 0);
+        assert_eq!(count(&db, "SELECT COUNT(*) FROM flow_delivery").await, 0);
+
+        // 既有 b / c 与 asset 完好无损。
+        let b = db.get_device(&node_b).await.unwrap().unwrap();
+        assert_eq!(b.profile.departed_by, Some(DepartedBy::Device));
+        let c = db.get_device(&node_c).await.unwrap().unwrap();
+        assert_eq!(c.profile.departed_by, Some(DepartedBy::Owner));
+        let asset_row = sqlx::query("SELECT rel_path FROM asset WHERE src_device = ?")
+            .bind(&node_a)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            asset_row.get::<String, _>("rel_path"),
+            "originals/a/2026/11/IMG_9.jpg"
+        );
     }
 }

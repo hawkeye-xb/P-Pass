@@ -72,6 +72,7 @@ msg_keys! {
     UI_NO_DEVICES => "ui.no_devices",
     /// #1402 卡1：0 台在用但有已断开的，空状态说清是几台已断开。
     UI_NO_DEVICES_DISCONNECTED => "ui.no_devices_disconnected",
+    UI_DISCONNECT => "ui.disconnect",
     UI_REMOVE => "ui.remove",
     UI_SETTINGS => "ui.settings",
     UI_OPEN_LIBRARY => "ui.open_library",
@@ -88,6 +89,10 @@ msg_keys! {
     UI_PAIR_ALLOWED => "ui.pair_allowed",
     UI_PAIR_DENIED => "ui.pair_denied",
     UI_CONFIRM_FAILED => "ui.confirm_failed",
+    UI_DISCONNECT_CONFIRM_TITLE => "ui.disconnect_confirm_title",
+    UI_DISCONNECT_CONFIRM_BODY => "ui.disconnect_confirm_body",
+    UI_DEVICE_DISCONNECTED => "ui.device_disconnected",
+    UI_DISCONNECT_FAILED => "ui.disconnect_failed",
     UI_REVOKE_CONFIRM_TITLE => "ui.revoke_confirm_title",
     UI_REVOKE_CONFIRM_BODY => "ui.revoke_confirm_body",
     UI_REVOKED => "ui.revoked",
@@ -272,6 +277,7 @@ msg_keys! {
     UI_AUDIT_REMOVED_EXTERNAL => "ui.audit_removed_external",
     UI_AUDIT_RENAMED_FROM_TO => "ui.audit_renamed_from_to",
     UI_AUDIT_RENAMED => "ui.audit_renamed",
+    UI_AUDIT_DISCONNECTED => "ui.audit_disconnected",
     UI_AUDIT_REVOKED => "ui.audit_revoked",
     UI_AUDIT_UNPAIRED => "ui.audit_unpaired",
     UI_AUDIT_MERGED => "ui.audit_merged",
@@ -530,6 +536,7 @@ mod tests {
             UI_QR_FALLBACK,
             UI_NO_DEVICES,
             UI_NO_DEVICES_DISCONNECTED,
+            UI_DISCONNECT,
             UI_REMOVE,
             UI_SETTINGS,
             UI_OPEN_LIBRARY,
@@ -546,6 +553,10 @@ mod tests {
             UI_PAIR_ALLOWED,
             UI_PAIR_DENIED,
             UI_CONFIRM_FAILED,
+            UI_DISCONNECT_CONFIRM_TITLE,
+            UI_DISCONNECT_CONFIRM_BODY,
+            UI_DEVICE_DISCONNECTED,
+            UI_DISCONNECT_FAILED,
             UI_REVOKE_CONFIRM_TITLE,
             UI_REVOKE_CONFIRM_BODY,
             UI_REVOKED,
@@ -678,6 +689,7 @@ mod tests {
             UI_AUDIT_REMOVED_EXTERNAL,
             UI_AUDIT_RENAMED_FROM_TO,
             UI_AUDIT_RENAMED,
+            UI_AUDIT_DISCONNECTED,
             UI_AUDIT_REVOKED,
             UI_AUDIT_UNPAIRED,
             UI_AUDIT_MERGED,
@@ -884,7 +896,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 377);
+        assert_eq!(ALL.len(), 383);
     }
 
     #[test]

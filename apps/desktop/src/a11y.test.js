@@ -531,17 +531,30 @@ describe("#1132 逐项断言", () => {
     expect((img.getAttribute("alt") || "").length).toBeGreaterThan(0);
   });
 
-  // D10：三行「移除」完全同名的根因。
-  it("D10 移除按钮名称带设备名", async () => {
-    daemon({ devices: [device("a", "客厅的手机"), device("b", "书房的平板")] });
+  // D10 / #2079：每行「断开」/「移除」按钮的可访问名都要带上设备名，读屏才能分辨。
+  it("D10 断开与移除按钮名称带设备名", async () => {
+    daemon({
+      devices: [
+        device("a", "客厅的手机"),
+        device("b", "书房的平板"),
+        device("c", "旧手机", {
+          removal: "disconnected",
+          row_state: "disconnected",
+          presence: "offline",
+          connection: "offline",
+        }),
+      ],
+    });
     await open("#/devices");
     await settle();
-    const removes = screen.getAllByRole("button", { name: /^移除/ });
-    expect(removes.length).toBe(2);
-    const names = removes.map((b) => b.getAttribute("aria-label"));
-    expect(names).toContain("移除 客厅的手机");
-    expect(names).toContain("移除 书房的平板");
+    const disconnects = screen.getAllByRole("button", { name: /^断开 / });
+    expect(disconnects.length).toBe(2);
+    const names = disconnects.map((b) => b.getAttribute("aria-label"));
+    expect(names).toContain("断开 客厅的手机");
+    expect(names).toContain("断开 书房的平板");
     expect(new Set(names).size).toBe(2);
+    const removes = screen.getAllByRole("button", { name: /^移除 / });
+    expect(removes.map((b) => b.getAttribute("aria-label"))).toEqual(["移除 旧手机"]);
   });
 
   // D9 / #1924：200% 缩放与窄窗重排（WCAG 1.4.10）——设备行 flex-wrap 下，

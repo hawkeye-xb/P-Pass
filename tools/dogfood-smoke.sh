@@ -131,8 +131,9 @@ DISK=$(find "$LIB/originals" -type f | wc -l | tr -d ' ')
 echo "磁盘文件数: ${DISK}（46 = 50 去重后）"
 if [ "$DISK" != "46" ]; then echo "磁盘文件数 $DISK ≠ 46" >&2; exit 1; fi
 
-echo "── 6. IPC 吊销 → 门卫验证"
+echo "── 6. IPC 断开与移除 → 门卫验证"
 DEV=$(ipc devices.list | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['devices'][0]['node_id'])")
+ipc device.disconnect "{\"node_id\": \"$DEV\"}"
 ipc device.revoke "{\"node_id\": \"$DEV\"}"
 "$TC" revoke-check --node "$NODE"
 

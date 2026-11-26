@@ -219,11 +219,11 @@ async fn revoke_actively_closes_an_open_subscription() {
     }
 }
 
-// ── REV-01 #3: device.revoke 走真实 IPC JSON 链路 ───────────────────
+// ── REV-01 #3: device.disconnect 走真实 IPC JSON 链路 ───────────────
 //
 // 上面那条 `revoke_actively_closes_an_open_subscription` 直接调
 // `subscriptions.close()`，测的是 router.rs 的登记/断连机制本身，跳过
-// 了 `device.revoke`（IPC JSON）→ ipc.rs 查表 → close 这条真实接线——
+// 了 `device.disconnect`（IPC JSON）→ ipc.rs 查表 → close 这条真实接线——
 // 这段最容易在改字段名/参数解析时悄悄断掉却没有测试兜底。这条测试走
 // 完整 IPC socket，Router 与 IpcServer 共用同一份 `SubscriptionRegistry`
 // （main.rs 生产环境的真实接线方式）。
@@ -271,7 +271,7 @@ fn hex32(bytes: &[u8; 32]) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn device_revoke_over_ipc_closes_the_quic_subscription() {
+async fn device_disconnect_over_ipc_closes_the_quic_subscription() {
     let f = setup().await;
     let mut stream = subscribe(&f).await;
 
@@ -291,7 +291,7 @@ async fn device_revoke_over_ipc_closes_the_quic_subscription() {
     ipc.set_subscriptions(f.subscriptions.clone());
     let ipc = Arc::new(ipc);
 
-    let socket = ipc_socket_name("revoke");
+    let socket = ipc_socket_name("disconnect");
     let token = [0x5A; 32];
     let token_hex = hex32(&token);
     tokio::spawn({
@@ -318,17 +318,17 @@ async fn device_revoke_over_ipc_closes_the_quic_subscription() {
     let mut c = IpcClient::connect(&socket, &token_hex).await;
     let resp = c
         .call(
-            "device.revoke",
+            "device.disconnect",
             serde_json::json!({ "node_id": hex32(&f.client_tp.node_id().0) }),
         )
         .await;
-    assert_eq!(resp.result.unwrap()["revoked"], true);
+    assert_eq!(resp.result.unwrap()["disconnected"], true);
 
     let end = tokio::time::timeout(std::time::Duration::from_secs(3), stream.recv_frame()).await;
     match end {
         Ok(Ok(None)) => {}
         Ok(Err(_)) => {}
-        Ok(Ok(Some(_))) => panic!("device.revoke（真实 IPC 链路）之后不该再收到正常事件帧"),
-        Err(_) => panic!("device.revoke（真实 IPC 链路）之后连接必须在有限时间内关闭"),
+        Ok(Ok(Some(_))) => panic!("device.disconnect（真实 IPC 链路）之后不该再收到正常事件帧"),
+        Err(_) => panic!("device.disconnect（真实 IPC 链路）之后连接必须在有限时间内关闭"),
     }
 }

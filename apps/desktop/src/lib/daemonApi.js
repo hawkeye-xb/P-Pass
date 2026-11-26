@@ -14,6 +14,7 @@ export const DAEMON_COMMANDS = Object.freeze({
   "pairing.confirm": "daemon_pairing_confirm",
   "devices.list": "daemon_devices_list",
   "device.watermarks": "daemon_device_watermarks",
+  "device.disconnect": "daemon_device_disconnect",
   "device.revoke": "daemon_device_revoke",
   "device.rename": "daemon_device_rename",
   "device.folder": "daemon_device_folder",

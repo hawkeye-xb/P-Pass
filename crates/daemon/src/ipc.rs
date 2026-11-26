@@ -21,7 +21,7 @@
 //! dropped, one diag event.
 //!
 //! Methods (契约): `status` `pairing.start` `pairing.confirm`
-//! `devices.list` `device.revoke` `device.watermarks`
+//! `devices.list` `device.disconnect` `device.revoke` `device.watermarks`
 //! `logs.export` `activity.list` (T-090) — plus DAE-01
 //! `daemon.step_down` (newest-wins takeover, added 2026-08-04) and
 //! NAME-01 `device.rename` (display-name only, ID 不变, added 2026-08-12).
@@ -2067,16 +2067,16 @@ impl IpcServer {
                 }
                 Err(_) => internal(id),
             },
-            "device.revoke" => {
+            "device.disconnect" => {
                 let Some(node_hex) = req.params.get("node_id").and_then(|v| v.as_str()) else {
                     return Resp::err(id, RespError::new(Reason::BadRequest));
                 };
                 let Some(node_id) = parse_hex32(node_hex) else {
                     return Resp::err(id, RespError::new(Reason::BadRequest));
                 };
-                // DEV-03：业主主动移除——这正是业主的意图，之后它不再出现在
-                // 「家人与设备」主列表里。#1117：删的是配对记录（唯一入口
-                // `crate::unpair`），设备档案与审计保留。
+                // #2079：桌面端先「断开」——立即终止配对授权、取消在途传输并关闭连接，
+                // 设备档案标为 `DepartedBy::OwnerDisconnect` 移入「已断开」分组留档。
+                // 删配对记录仍走唯一入口 `crate::unpair`。
                 let Ok(peer) = <[u8; 32]>::try_from(node_id.as_slice()).map(transport::NodeId)
                 else {
                     return Resp::err(id, RespError::new(Reason::BadRequest));
@@ -2092,27 +2092,27 @@ impl IpcServer {
                     holders,
                     peer,
                     None,
-                    storage::DepartedBy::Owner,
+                    storage::DepartedBy::OwnerDisconnect,
                     (self.now)(),
                 )
                 .await
                 {
                     Ok(Some(_)) => {
                         warn_if_audit_failed(
-                            "device.revoked",
+                            "device.disconnected",
                             self.db
                                 .append_audit(&storage::AuditEntry::local(
                                     (self.now)(),
                                     None, // 本机 owner 经 IPC 操作
-                                    "device.revoked",
+                                    "device.disconnected",
                                     None,
                                     Some(serde_json::json!({ "nodeId": node_hex }).to_string()),
                                 ))
                                 .await,
                         );
                         // AUDIT-04 card decision #4: 撤销授权是用户决定，
-                        // 必须落 audit_decision（causal_object_ref = 被撤销
-                        // 设备），不能只靠上面兼容层的 audit_operation 行。
+                        // 必须落 audit_decision（causal_object_ref = 被断开设备），
+                        // 不能只靠上面兼容层的 audit_operation 行。
                         warn_if_audit_failed(
                             "revoke_authorization",
                             self.db
@@ -2129,7 +2129,6 @@ impl IpcServer {
                                 })
                                 .await,
                         );
-                        // IPC-02: 设备移除——桌面设备行即时消失。
                         events::emit(
                             &self.events,
                             events::DEVICE_CHANGED,
@@ -2138,44 +2137,85 @@ impl IpcServer {
                         events::emit(
                             &self.events,
                             events::ACTIVITY_APPENDED,
-                            serde_json::json!({ "action": "device.revoked" }),
+                            serde_json::json!({ "action": "device.disconnected" }),
                         );
+                        Resp::ok(id, serde_json::json!({ "disconnected": true }))
+                    }
+                    // 没有配对记录（从未配对或已断开/已移除）时幂等返回 false，
+                    // 不覆盖既有的 departed_by / departed_at。
+                    Ok(None) => Resp::ok(id, serde_json::json!({ "disconnected": false })),
+                    Err(_) => internal(id),
+                }
+            }
+            "device.revoke" => {
+                let Some(node_hex) = req.params.get("node_id").and_then(|v| v.as_str()) else {
+                    return Resp::err(id, RespError::new(Reason::BadRequest));
+                };
+                let Some(node_id) = parse_hex32(node_hex) else {
+                    return Resp::err(id, RespError::new(Reason::BadRequest));
+                };
+                // #2079：收紧 `device.revoke` 只受理已断开设备（从主列表移除归档，
+                // 档案与审计保留）。已配对设备必须先走 `device.disconnect`，直接在
+                // 已配对设备上调 `device.revoke` 一律以 BadRequest 拒绝。
+                match self.db.get_device(&node_id).await {
+                    Ok(None) => Resp::ok(id, serde_json::json!({ "revoked": false })),
+                    Ok(Some(row)) if row.pairing.is_some() => {
+                        Resp::err(id, RespError::new(Reason::BadRequest))
+                    }
+                    Ok(Some(row))
+                        if row.profile.departed_by == Some(storage::DepartedBy::Owner) =>
+                    {
                         Resp::ok(id, serde_json::json!({ "revoked": true }))
                     }
-                    // #1402 卡3：手机自己断开后（只剩档案、没有配对记录），业主在
-                    // 电脑上点「移除」曾是空操作，行一直停在「已断开」。业主的这次
-                    // 操作本身就是要移除——把档案上的离开原因改成 Owner，行归到
-                    // 「已移除」。没有档案（marked = 0）时什么都没改，照实回 false。
-                    // 已经由 Owner 移除过的档案不重标：保留第一次的离开时间，也不
-                    // 重复发 device.changed。
-                    Ok(None) => match self.db.get_device(&node_id).await {
-                        Ok(Some(row))
-                            if row.profile.departed_by == Some(storage::DepartedBy::Owner) =>
-                        {
-                            Resp::ok(id, serde_json::json!({ "revoked": true }))
-                        }
-                        Ok(_) => match self
-                            .db
-                            .mark_departed(
-                                std::slice::from_ref(&node_id),
-                                storage::DepartedBy::Owner,
-                                (self.now)(),
-                            )
-                            .await
-                        {
-                            Ok(marked) => {
-                                let removed = marked > 0;
-                                if removed {
-                                    events::emit(
-                                        &self.events,
-                                        events::DEVICE_CHANGED,
-                                        serde_json::json!({ "node_id": node_hex }),
-                                    );
+                    Ok(Some(_)) => match self
+                        .db
+                        .mark_departed(
+                            std::slice::from_ref(&node_id),
+                            storage::DepartedBy::Owner,
+                            (self.now)(),
+                        )
+                        .await
+                    {
+                        Ok(marked) => {
+                            if marked > 0 {
+                                warn_if_audit_failed(
+                                    "device.revoked",
+                                    self.db
+                                        .append_audit(&storage::AuditEntry::local(
+                                            (self.now)(),
+                                            None, // 本机 owner 经 IPC 操作
+                                            "device.revoked",
+                                            None,
+                                            Some(
+                                                serde_json::json!({ "nodeId": node_hex })
+                                                    .to_string(),
+                                            ),
+                                        ))
+                                        .await,
+                                );
+                                // IPC-02: 设备移除——桌面设备行即时从「已断开」消失。
+                                events::emit(
+                                    &self.events,
+                                    events::DEVICE_CHANGED,
+                                    serde_json::json!({ "node_id": node_hex }),
+                                );
+                                events::emit(
+                                    &self.events,
+                                    events::ACTIVITY_APPENDED,
+                                    serde_json::json!({ "action": "device.revoked" }),
+                                );
+                                Resp::ok(id, serde_json::json!({ "revoked": true }))
+                            } else {
+                                // 若期间并发重新配对，仍按已配对设备拒绝。
+                                match self.db.get_device(&node_id).await {
+                                    Ok(Some(r)) if r.pairing.is_some() => {
+                                        Resp::err(id, RespError::new(Reason::BadRequest))
+                                    }
+                                    Ok(_) => Resp::ok(id, serde_json::json!({ "revoked": false })),
+                                    Err(_) => internal(id),
                                 }
-                                Resp::ok(id, serde_json::json!({ "revoked": removed }))
                             }
-                            Err(_) => internal(id),
-                        },
+                        }
                         Err(_) => internal(id),
                     },
                     Err(_) => internal(id),
@@ -3034,6 +3074,133 @@ mod tests {
         assert_eq!(again.result.unwrap()["revoked"], true);
         let unchanged = db.get_device(&node).await.unwrap().unwrap();
         assert_eq!(unchanged.profile.departed_at, Some(4242));
+    }
+
+    /// #2079：已配对设备禁止直接 `device.revoke`（必须返回 BadRequest 且保留配对）；
+    /// 先调 `device.disconnect` 才删除配对记录并落为 `OwnerDisconnect`（`Removal::Disconnected`），
+    /// 二次 `device.disconnect` 幂等返回 `disconnected: false` 不覆盖 `departed_by` / `departed_at`；
+    /// 已断开后再调 `device.revoke` 才会落为 `Owner`（`Removal::Removed`）。
+    /// 反证：若 `device.revoke` 放行已配对设备或 `device.disconnect` 二次覆盖 `departed_at`，红。
+    #[tokio::test]
+    async fn device_disconnect_and_revoke_two_step_and_reject_active_revoke() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open_in_memory().await.unwrap();
+        let node = [0xBCu8; 32];
+        db.accept_pairing(
+            &node,
+            "两步断开测试机",
+            &storage::Pairing {
+                id: "pairing-bc".into(),
+                node_id: node.to_vec(),
+                role: storage::Role::Member,
+                paired_at: 10,
+            },
+        )
+        .await
+        .unwrap();
+
+        let server = test_server(&db, dir.path());
+
+        // 1) 已配对设备直接调用 device.revoke 必须以 BadRequest 拒绝，且配对不被删。
+        let direct_revoke = server
+            .dispatch(
+                Req {
+                    id: "direct-revoke".into(),
+                    method: "device.revoke".into(),
+                    params: serde_json::json!({ "node_id": hex(&node) }),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await;
+        assert!(
+            !direct_revoke.ok,
+            "已配对设备直接 revoke 必须被拒：{direct_revoke:?}"
+        );
+        assert_eq!(
+            direct_revoke.error.as_ref().map(|e| e.reason()),
+            Some(&Reason::BadRequest)
+        );
+        let still_paired = db.get_device(&node).await.unwrap().unwrap();
+        assert!(still_paired.pairing.is_some());
+        assert_eq!(
+            crate::device_projection::Removal::of(&still_paired),
+            crate::device_projection::Removal::None
+        );
+
+        // 2) 调用 device.disconnect 立即终止配对授权并落入 Disconnected。
+        let disc = server
+            .dispatch(
+                Req {
+                    id: "disconnect".into(),
+                    method: "device.disconnect".into(),
+                    params: serde_json::json!({ "node_id": hex(&node) }),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await;
+        assert!(disc.ok, "disconnect 失败：{disc:?}");
+        assert_eq!(disc.result.unwrap()["disconnected"], true);
+
+        let after_disc = db.get_device(&node).await.unwrap().unwrap();
+        assert!(after_disc.pairing.is_none());
+        assert_eq!(
+            after_disc.profile.departed_by,
+            Some(storage::DepartedBy::OwnerDisconnect)
+        );
+        assert_eq!(
+            crate::device_projection::Removal::of(&after_disc),
+            crate::device_projection::Removal::Disconnected
+        );
+
+        // 3) 对已断开设备重复调用 device.disconnect 幂等返回 false，且不改 departed_by / departed_at。
+        db.mark_departed(&[node.to_vec()], storage::DepartedBy::OwnerDisconnect, 5151)
+            .await
+            .unwrap();
+        let disc_again = server
+            .dispatch(
+                Req {
+                    id: "disconnect-again".into(),
+                    method: "device.disconnect".into(),
+                    params: serde_json::json!({ "node_id": hex(&node) }),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await;
+        assert!(disc_again.ok, "二次 disconnect 失败：{disc_again:?}");
+        assert_eq!(disc_again.result.unwrap()["disconnected"], false);
+        let unchanged = db.get_device(&node).await.unwrap().unwrap();
+        assert_eq!(
+            unchanged.profile.departed_by,
+            Some(storage::DepartedBy::OwnerDisconnect)
+        );
+        assert_eq!(unchanged.profile.departed_at, Some(5151));
+
+        // 4) 已断开状态下调用 device.revoke 成功标为 Owner / Removed。
+        let revoke = server
+            .dispatch(
+                Req {
+                    id: "revoke-after-disc".into(),
+                    method: "device.revoke".into(),
+                    params: serde_json::json!({ "node_id": hex(&node) }),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await;
+        assert!(revoke.ok, "断开后 revoke 失败：{revoke:?}");
+        assert_eq!(revoke.result.unwrap()["revoked"], true);
+        let removed = db.get_device(&node).await.unwrap().unwrap();
+        assert_eq!(
+            removed.profile.departed_by,
+            Some(storage::DepartedBy::Owner)
+        );
+        assert_eq!(
+            crate::device_projection::Removal::of(&removed),
+            crate::device_projection::Removal::Removed
+        );
     }
 
     /// #1826：常驻会话的 `config.set_library` 与 `library.relocate` 拿到的是**这条连接的

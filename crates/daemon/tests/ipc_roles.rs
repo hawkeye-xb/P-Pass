@@ -27,6 +27,7 @@ fn a_daemon_client_may_only_hand_over_and_export_logs() {
         "pairing.start",
         "pairing.confirm",
         "pairing.pending",
+        "device.disconnect",
         "device.revoke",
         "device.rename",
         "devices.list",
@@ -778,6 +779,7 @@ fn writes_are_refused_while_relocating() {
         "library.relocate",
         "pairing.start",
         "pairing.confirm",
+        "device.disconnect",
         "device.revoke",
         "daemon.stop",
     ] {

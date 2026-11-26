@@ -14,8 +14,8 @@ use storage::{DepartedBy, DeviceRow};
 pub enum Removal {
     /// 有配对记录，在用。
     None,
-    /// 没有配对记录，但不是业主的意图：手机自己断开，或电脑换了身份（需要
-    /// 重新扫码）。留在主列表标「已断开」。
+    /// 没有配对记录，但不是业主最终移除：手机自己断开、业主在桌面先断开，或电脑换了身份
+    /// （需要重新扫码）。留在主列表标「已断开」。
     Disconnected,
     /// 业主移除：单独列出。
     Removed,
@@ -27,7 +27,9 @@ impl Removal {
             return Removal::None;
         }
         match d.profile.departed_by {
-            Some(DepartedBy::Device | DepartedBy::Identity) => Removal::Disconnected,
+            Some(DepartedBy::Device | DepartedBy::Identity | DepartedBy::OwnerDisconnect) => {
+                Removal::Disconnected
+            }
             // 业主移除；没有离开原因的档案（理论上不存在：档案只在配对时建）
             // 保守按业主移除处理，不凭空冒出一台。
             Some(DepartedBy::Owner) | None => Removal::Removed,
@@ -148,6 +150,10 @@ mod tests {
         );
         assert_eq!(
             Removal::of(&dev(false, Some(DepartedBy::Identity))),
+            Removal::Disconnected
+        );
+        assert_eq!(
+            Removal::of(&dev(false, Some(DepartedBy::OwnerDisconnect))),
             Removal::Disconnected
         );
         assert_eq!(
