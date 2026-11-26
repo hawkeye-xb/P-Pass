@@ -128,11 +128,17 @@ has_key() {
 record_key() {
   local key="$1"
   [ -n "${STATE_FILE}" ] || return 0
-  mkdir -p "$(dirname "${STATE_FILE}")"
+  if ! mkdir -p "$(dirname "${STATE_FILE}")"; then
+    printf '✗ 创建状态文件目录失败：%s\n' "${STATE_FILE}" >&2
+    return 1
+  fi
   if [ -f "${STATE_FILE}" ] && grep -Fxq -- "${key}" "${STATE_FILE}"; then
     return 0
   fi
-  printf '%s\n' "${key}" >>"${STATE_FILE}"
+  if ! printf '%s\n' "${key}" >>"${STATE_FILE}"; then
+    printf '✗ 写入状态文件失败：%s\n' "${STATE_FILE}" >&2
+    return 1
+  fi
 }
 
 add_tracked_pr() {
@@ -201,7 +207,7 @@ while true; do
   open_tsv=""
 
   if [ "${EXPLICIT_MODE}" -eq 0 ]; then
-    if ! list_json="$("${GH_BIN}" pr list -R "${REPO}" --state open --limit 100 --json number,title,headRefOid,state 2>&1)"; then
+    if ! list_json="$("${GH_BIN}" pr list -R "${REPO}" --state open --limit 1000 --json number,title,headRefOid,state 2>&1)"; then
       consec_gh_err=$((consec_gh_err + 1))
       if [ "${poll_num}" -eq 1 ] || [ "${consec_gh_err}" -ge 3 ]; then
         printf '✗ 读取 %s 的 open PR 列表失败：\n%s\n' "${REPO}" "${list_json}" >&2
@@ -221,12 +227,17 @@ while true; do
     fi
     consec_gh_err=0
 
+    open_count=0
     while IFS=$'\t' read -r num _st _sha _title; do
       [ -n "${num}" ] || continue
+      open_count=$((open_count + 1))
       add_tracked_pr "${num}"
     done <<EOF_OPEN
 ${open_tsv}
 EOF_OPEN
+    if [ "${open_count}" -ge 1000 ]; then
+      printf '⚠ %s 的 open PR 数量达到上限 1000，仅跟踪前 1000 个\n' "${REPO}" >&2
+    fi
 
     if [ -z "${TRACKED_PRS}" ]; then
       printf '✅ 当前仓库（%s）无任何 open PR，已清零\n' "${REPO}"
@@ -284,59 +295,76 @@ EOF_VROW
       break
     elif [ "${status_rc}" -eq 3 ]; then
       still_open_count=$((still_open_count + 1))
-    elif [ "${status_rc}" -eq 0 ]; then
-      ev_status="clear"
-      ev_label="CLEAR"
-      if [ "${gh_state}" = "MERGED" ]; then
-        ev_status="merged"
-        ev_label="MERGED"
-      else
-        case "${status_out}" in
-          *已合入* | *MERGED*)
-            ev_status="merged"
-            ev_label="MERGED"
-            ;;
-        esac
+    elif [ "${status_rc}" -eq 0 ] || [ "${status_rc}" -eq 1 ]; then
+      if ! post_json="$("${GH_BIN}" pr view "${pr}" -R "${REPO}" --json number,title,state,headRefOid 2>&1)"; then
+        printf '✗ 复核 %s#%s 详情失败：\n%s\n' "${REPO}" "${pr}" "${post_json}" >&2
+        poll_read_err=1
+        break
       fi
-      key="${pr}:${sha}:${ev_status}"
-      if has_key "${key}"; then
-        if [ "${ev_status}" != "merged" ] && [ "${gh_state}" = "OPEN" ]; then
+      if ! post_row="$(printf '%s' "${post_json}" | parse_pr_view_tsv 2>&1)"; then
+        printf '✗ 解析 %s#%s 复核 JSON 失败：\n%s\n' "${REPO}" "${pr}" "${post_row}" >&2
+        poll_read_err=1
+        break
+      fi
+      IFS=$'\t' read -r _pn post_state post_sha post_title <<EOF_POST
+${post_row}
+EOF_POST
+      [ -n "${post_sha}" ] || post_sha="unknown"
+      if [ "${post_sha}" != "${sha}" ]; then
+        still_open_count=$((still_open_count + 1))
+        continue
+      fi
+      gh_state="${post_state}"
+      title="${post_title}"
+
+      if [ "${status_rc}" -eq 0 ]; then
+        if [ "${gh_state}" = "CLOSED" ]; then
           still_open_count=$((still_open_count + 1))
+          continue
+        fi
+        ev_status="clear"
+        ev_label="CLEAR"
+        if [ "${gh_state}" = "MERGED" ]; then
+          ev_status="merged"
+          ev_label="MERGED"
+        fi
+        key="${pr}:${sha}:${ev_status}"
+        if has_key "${key}"; then
+          if [ "${ev_status}" != "merged" ] && [ "${gh_state}" = "OPEN" ]; then
+            still_open_count=$((still_open_count + 1))
+          fi
+        else
+          ready_keys="${ready_keys}${key}"$'\n'
+          summary="✅ PR #${pr} [${ev_label}] ${title} (sha=${sha}, key=${key})"
+          if [ -n "${status_out}" ]; then
+            summary="${summary}"$'\n'"${status_out}"
+          fi
+          ready_summaries="${ready_summaries}${summary}"$'\n'
         fi
       else
-        ready_keys="${ready_keys}${key}"$'\n'
-        summary="✅ PR #${pr} [${ev_label}] ${title} (sha=${sha}, key=${key})"
-        if [ -n "${status_out}" ]; then
-          summary="${summary}"$'\n'"${status_out}"
-        fi
-        ready_summaries="${ready_summaries}${summary}"$'\n'
-      fi
-    elif [ "${status_rc}" -eq 1 ]; then
-      ev_status="failed"
-      ev_label="FAILED"
-      if [ "${gh_state}" = "CLOSED" ]; then
-        ev_status="closed"
-        ev_label="CLOSED"
-      else
-        case "${status_out}" in
-          *已关闭*)
-            ev_status="closed"
-            ev_label="CLOSED"
-            ;;
-        esac
-      fi
-      key="${pr}:${sha}:${ev_status}"
-      if has_key "${key}"; then
-        if [ "${ev_status}" != "closed" ] && [ "${gh_state}" = "OPEN" ]; then
+        if [ "${gh_state}" = "MERGED" ]; then
           still_open_count=$((still_open_count + 1))
+          continue
         fi
-      else
-        block_keys="${block_keys}${key}"$'\n'
-        summary="✗ PR #${pr} [${ev_label}] ${title} (sha=${sha}, key=${key})"
-        if [ -n "${status_out}" ]; then
-          summary="${summary}"$'\n'"${status_out}"
+        ev_status="failed"
+        ev_label="FAILED"
+        if [ "${gh_state}" = "CLOSED" ]; then
+          ev_status="closed"
+          ev_label="CLOSED"
         fi
-        block_summaries="${block_summaries}${summary}"$'\n'
+        key="${pr}:${sha}:${ev_status}"
+        if has_key "${key}"; then
+          if [ "${ev_status}" != "closed" ] && [ "${gh_state}" = "OPEN" ]; then
+            still_open_count=$((still_open_count + 1))
+          fi
+        else
+          block_keys="${block_keys}${key}"$'\n'
+          summary="✗ PR #${pr} [${ev_label}] ${title} (sha=${sha}, key=${key})"
+          if [ -n "${status_out}" ]; then
+            summary="${summary}"$'\n'"${status_out}"
+          fi
+          block_summaries="${block_summaries}${summary}"$'\n'
+        fi
       fi
     else
       printf '✗ pr-status 返回未预期退出码 %s（PR #%s）：\n%s\n' "${status_rc}" "${pr}" "${status_out}" >&2
@@ -354,7 +382,9 @@ EOF_TRACKED
   if [ -n "${block_keys}" ] || [ -n "${ready_keys}" ]; then
     while IFS= read -r k; do
       [ -n "${k}" ] || continue
-      record_key "${k}"
+      if ! record_key "${k}"; then
+        exit 2
+      fi
     done <<EOF_KEYS
 ${block_keys}${ready_keys}
 EOF_KEYS

@@ -311,5 +311,88 @@ run_watch "${SCRIPT}" --unknown-flag
 run_watch "${SCRIPT}" not-a-number
 [ "${rc}" -eq 2 ] && ok "场景5c：非数字 PR 号退出 2" || bad "场景5c：非数字 PR 号应退出 2，实得 ${rc}"
 
+# ── 6. 标题/评审正文含「已合入/已关闭」字样时，只信结构化 state，不误判终态 ──
+reset_case
+cat >"${FAKE}/scenario.json" <<'JSON'
+{
+  "polls": [
+    {
+      "open": [{"number": 601, "title": "fix: 处理 已合入 与 MERGED 展示", "headRefOid": "sha601", "state": "OPEN"}],
+      "status": {
+        "601": {"rc": 0, "out": "PR #601 fix: 处理 已合入 与 MERGED 展示\n✅ 全清"}
+      }
+    }
+  ]
+}
+JSON
+run_watch "${SCRIPT}" --state-file "${FAKE}/state6a.txt"
+[ "${rc}" -eq 0 ] && has "[CLEAR]" && not_has "[MERGED]" && ok "场景6a：标题含「已合入」但 state=OPEN 时判为 CLEAR 而非 MERGED" || bad "场景6a：误判了终态，rc=${rc}：${out}"
+grep -Fxq "601:sha601:clear" "${FAKE}/state6a.txt" && ok "场景6a：state-file 记为 clear" || bad "场景6a：state-file 未记为 clear"
+
+reset_case
+cat >"${FAKE}/scenario.json" <<'JSON'
+{
+  "polls": [
+    {
+      "open": [{"number": 602, "title": "fix: 已合入 与 已关闭 文案修复", "headRefOid": "sha602", "state": "OPEN"}],
+      "status": {
+        "602": {"rc": 1, "out": "PR #602 fix: 已合入 与 已关闭 文案修复\nPRRT_1  foo.sh:10  @reviewer\n    不要从标题推断 已合入 / 已关闭\n合不进去：1 条评审线程没解决"}
+      }
+    }
+  ]
+}
+JSON
+run_watch "${SCRIPT}" --state-file "${FAKE}/state6b.txt"
+[ "${rc}" -eq 1 ] && has "[FAILED]" && not_has "[CLOSED]" && not_has "[MERGED]" && ok "场景6b：标题/评审正文含「已合入/已关闭」但 state=OPEN 且 exit 1 时判为 FAILED" || bad "场景6b：误判了终态，rc=${rc}：${out}"
+grep -Fxq "602:sha602:failed" "${FAKE}/state6b.txt" && ok "场景6b：state-file 记为 failed" || bad "场景6b：state-file 未记为 failed"
+
+# ── 7. 并发 push 竞态：状态查询期间 headRefOid 变化时不写旧 SHA 去重键 ──────
+reset_case
+cat >"${FAKE}/scenario.json" <<'JSON'
+{
+  "polls": [
+    {
+      "open": [{"number": 701, "title": "feat: race check", "headRefOid": "sha701_old", "state": "OPEN"}],
+      "views": {
+        "701": {"number": 701, "title": "feat: race check", "headRefOid": "sha701_new", "state": "OPEN"}
+      },
+      "status": {
+        "701": {"rc": 1, "out": "PR #701 feat: race check\n合不进去：旧提交检查失败"}
+      }
+    },
+    {
+      "open": [],
+      "views": {
+        "701": {"number": 701, "title": "feat: race check", "headRefOid": "sha701_new", "state": "MERGED"}
+      },
+      "status": {
+        "701": {"rc": 0, "out": "PR #701 feat: race check\n✅ 已合入"}
+      }
+    }
+  ]
+}
+JSON
+run_watch "${SCRIPT}" --state-file "${FAKE}/state7.txt"
+[ "${rc}" -eq 0 ] && has "PR #701" && has "[MERGED]" && ok "场景7：查询期间发生新 push 时跳过脏读并等下一轮复核" || bad "场景7：并发 push 处理失败，rc=${rc}：${out}"
+! grep -q "sha701_old" "${FAKE}/state7.txt" && grep -Fxq "701:sha701_new:merged" "${FAKE}/state7.txt" && ok "场景7：未写入旧 SHA，最终正确记入 sha701_new" || bad "场景7：state-file 记录异常：$(cat "${FAKE}/state7.txt")"
+
+# ── 8. state-file 写入失败时显式报错并退出 2（不静默吞错）──────────────────
+reset_case
+touch "${FAKE}/not_a_dir"
+cat >"${FAKE}/scenario.json" <<'JSON'
+{
+  "polls": [
+    {
+      "open": [{"number": 801, "title": "feat: write fail", "headRefOid": "sha801", "state": "OPEN"}],
+      "status": {
+        "801": {"rc": 1, "out": "PR #801 feat: write fail\n合不进去：1 个检查没过"}
+      }
+    }
+  ]
+}
+JSON
+run_watch "${SCRIPT}" --state-file "${FAKE}/not_a_dir/state8.txt"
+[ "${rc}" -eq 2 ] && has "状态文件" && ok "场景8：state-file 写入失败时显式报错并退出 2" || bad "场景8：state-file 写入失败未传播，rc=${rc}：${out}"
+
 printf '\n通过 %d，失败 %d\n' "${PASS}" "${FAIL}"
 [ "${FAIL}" -eq 0 ]
