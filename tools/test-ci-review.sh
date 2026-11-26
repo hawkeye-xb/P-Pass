@@ -153,7 +153,8 @@ CI 7 >/dev/null 2>&1 && has "state=failure" "$FAKE/statuses" &&
 
 reset suggest
 CI 7 >/dev/null 2>&1 && has "state=success" "$FAKE/statuses" &&
-  ok "仅建议/风格 → success 不挡合入" || bad "建议项误挡合入"
+  has "0 阻断：若无真 bug 或安全缺陷" "$FAKE/comments" &&
+  ok "仅建议/风格 → success 且评论附带 0 阻断止损提示" || bad "建议项误挡合入或缺少止损提示"
 
 reset infra
 CI 7 >/dev/null 2>&1 && tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && [ "$(calls)" = 2 ] &&

@@ -112,10 +112,73 @@ adopted_in_body() { (cd "$REPO" && adopted_adrs "$(cat "$BODY_F")"); }
 
 # 反假考卷门禁：彻底拒绝在 PR 改动里新增/保留任何 exam_* 一次性考卷，或新增读取业务源码字符串充当断言的假测试（物理删除存量旧文件合法放行）。
 check_no_exam_files() {
-  python3 -B -I - "$HEAD_DIR" "$FILES_F" "$TEST_RE" <<'PY' || exit 1
-import os, pathlib, re, sys
+  local spec
+  spec="$(fake_src_read_spec)"
+  python3 -B -I - "$HEAD_DIR" "$FILES_F" "$TEST_RE" "$spec" "$REPO" <<'PY' || exit 1
+from collections import Counter
+import json, os, pathlib, re, subprocess, sys
+
 head_dir, files_f, test_re = pathlib.Path(sys.argv[1]), sys.argv[2], re.compile(sys.argv[3])
-fake_src_re = re.compile(r"""(\.(?:rs|kt|swift|svelte)\b[^\n]{0,120}read_text|open\([^)\n]*\.(?:rs|kt|swift|svelte)["'])""")
+spec = json.loads(sys.argv[4])
+repo_dir = pathlib.Path(sys.argv[5])
+ext_re = re.compile(spec["ext"])
+py_read_re = re.compile(spec["py_read_text"])
+call_head_re = re.compile(spec["call_head"])
+path_ctor_re = re.compile(spec["path_ctor_head"])
+path_read_re = re.compile(spec["path_read_meth"])
+allowlist = spec.get("cross_end_allowlist", {})
+
+def strip_comments(text: str) -> str:
+    return "".join(
+        "\n" if (s := ln.lstrip()).startswith(("//", "# ")) or s in ("#", "#\n") else ln
+        for ln in text.splitlines(True)
+    )
+
+def paren_span(text: str, open_idx: int, limit: int = 400):
+    depth, end, i = 0, min(len(text), open_idx + limit), open_idx
+    while i < end:
+        c = text[i]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i, text[open_idx:i + 1]
+        i += 1
+    return None
+
+def find_fake_reads(text: str, rel_path: str) -> list[str]:
+    clean = strip_comments(text)
+    hits = [re.sub(r"\s+", " ", m.group(0)).strip() for m in py_read_re.finditer(clean)]
+    for m in call_head_re.finditer(clean):
+        paren = clean.find("(", m.start())
+        if paren == -1:
+            continue
+        sp = paren_span(clean, paren)
+        if sp and ext_re.search(sp[1]):
+            hits.append(re.sub(r"\s+", " ", clean[m.start():sp[0] + 1]).strip())
+    for m in path_ctor_re.finditer(clean):
+        sp = paren_span(clean, m.end() - 1)
+        if not sp or not ext_re.search(sp[1]):
+            continue
+        tail = clean[sp[0] + 1:sp[0] + 220]
+        nxt = path_ctor_re.search(tail)
+        if nxt:
+            tail = tail[:nxt.start()]
+        if path_read_re.search(tail):
+            hits.append(re.sub(r"\s+", " ", clean[m.start():sp[0] + 1]).strip())
+    allowed_targets = allowlist.get(rel_path, ())
+    if allowed_targets:
+        hits = [h for h in hits if not any(t in h for t in allowed_targets)]
+    return hits
+
+def base_text_of(rel_path: str) -> str:
+    if not (repo_dir / ".git").exists():
+        return ""
+    env = {**os.environ, "MSYS_NO_PATHCONV": "1"}
+    r = subprocess.run(["git", "-C", str(repo_dir), "show", f"origin/main:{rel_path}"], capture_output=True, text=True, errors="ignore", env=env)
+    return r.stdout if r.returncode == 0 else ""
+
 bad_exams, bad_fakes = [], []
 for raw in pathlib.Path(files_f).read_text(encoding="utf-8", errors="ignore").splitlines():
     f = raw.strip()
@@ -126,9 +189,15 @@ for raw in pathlib.Path(files_f).read_text(encoding="utf-8", errors="ignore").sp
         continue
     if re.search(r"(^|/)exam_[^/]*$", f):
         bad_exams.append(f)
-    elif test_re.search(f) and f.endswith(".py") and target.is_file():
+    elif test_re.search(f) and target.is_file():
         txt = target.read_text(encoding="utf-8", errors="ignore")
-        if fake_src_re.search(txt):
+        head_hits = find_fake_reads(txt, f)
+        if head_hits:
+            base_txt = base_text_of(f)
+            if base_txt:
+                diff_hits = Counter(head_hits) - Counter(find_fake_reads(base_txt, f))
+                if not diff_hits:
+                    continue
             bad_fakes.append(f)
 if bad_exams or bad_fakes:
     if bad_exams:

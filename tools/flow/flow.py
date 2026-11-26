@@ -2,12 +2,41 @@
 """P-Pass V3 统一研发协作引擎：doctor / triage / start / done / dispatch / stuck / owner-stuck / pick-gates / probe-slots / review。"""
 from __future__ import annotations
 import base64, hashlib, json, os, queue, re, shlex, shutil, signal, subprocess, sys, tempfile, threading, time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 FLOW_DIR = Path(__file__).resolve().parent
 TEST_RE = re.compile(r"(\.(test|spec)\.[^/]*$)|((^|/)(PPassTests|Tests|tests|test|__tests__|androidTest|sharedTest)/)|((^|/)test-[^/]*\.(sh|py)$)")
-FAKE_SRC_READ_RE = re.compile(r"""(\.(?:rs|kt|swift|svelte)\b[^\n]{0,120}read_text|open\([^)\n]*\.(?:rs|kt|swift|svelte)["'])""")
+
+
+def _load_fake_src_spec() -> dict:
+    """从 decision-lib.sh 读取与 acceptance-gate.sh 共用的假测试检测规则。"""
+    lib = FLOW_DIR / "decision-lib.sh"
+    m = re.search(r"<<'FAKE_SRC_SPEC'\n(.*?)\nFAKE_SRC_SPEC", lib.read_text(encoding="utf-8"), re.S)
+    if not m:
+        raise RuntimeError(f"missing FAKE_SRC_SPEC in {lib}")
+    return json.loads(m.group(1))
+
+
+FAKE_SRC_SPEC = _load_fake_src_spec()
+_EXT_RE = re.compile(FAKE_SRC_SPEC["ext"])
+_PY_READ_TEXT_RE = re.compile(FAKE_SRC_SPEC["py_read_text"])
+_CALL_HEAD_RE = re.compile(FAKE_SRC_SPEC["call_head"])
+_PATH_CTOR_RE = re.compile(FAKE_SRC_SPEC["path_ctor_head"])
+_PATH_READ_RE = re.compile(FAKE_SRC_SPEC["path_read_meth"])
+CROSS_END_SYNC_ALLOWLIST: dict[str, list[str]] = FAKE_SRC_SPEC.get("cross_end_allowlist", {})
+FAKE_SRC_READ_RE = re.compile(
+    "|".join(
+        [
+            FAKE_SRC_SPEC["py_read_text"],
+            r"\b(?:open|(?:fs\s*\.\s*promises\s*\.\s*)?readFile(?:Sync)?|Files\.(?:readString|readAllLines)|(?:(?:std::)?fs::)?read_to_string|include_str!)\s*\([^;{}]{0,220}" + FAKE_SRC_SPEC["ext"],
+            r"\b(?:NS)?(?:String|Data)(?:\.init)?\s*\(\s*contentsOf(?:File)?\s*:[^;{}]{0,220}" + FAKE_SRC_SPEC["ext"],
+            r"\.contents\s*\(\s*atPath\s*:[^;{}]{0,220}" + FAKE_SRC_SPEC["ext"],
+            r"\b(?:java\.io\.)?File\s*\([^;{}]{0,220}" + FAKE_SRC_SPEC["ext"] + r"[^;{}]{0,160}\.(?:readText|readBytes|readLines)\b",
+        ]
+    )
+)
 NONE_VAL_RE = re.compile(r"^(无|没有|不涉及|none|无。)$", re.I)
 _GIT_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_PREFIX")
 
@@ -36,7 +65,7 @@ def run_p(cmd: list[str], cwd: str, timeout: int = 600, extra_env: dict | None =
     p = subprocess.Popen(
         cmd, cwd=cwd, env=env,
         stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="ignore", start_new_session=True,
     )
     try:
         out, err = p.communicate(input=stdin_text, timeout=timeout)
@@ -353,14 +382,80 @@ def cmd_start(argv: list[str], cwd: str) -> int:
     return 0
 
 
+def _strip_line_comments(text: str) -> str:
+    return "".join(
+        "\n" if (s := ln.lstrip()).startswith(("//", "# ")) or s in ("#", "#\n") else ln
+        for ln in text.splitlines(True)
+    )
+
+
+def _paren_span(text: str, open_idx: int, limit: int = 400) -> tuple[int, str] | None:
+    depth, end, i = 0, min(len(text), open_idx + limit), open_idx
+    while i < end:
+        c = text[i]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i, text[open_idx:i + 1]
+        i += 1
+    return None
+
+
+def find_fake_source_reads(text: str, rel_path: str = "") -> list[str]:
+    """检测测试文件中读取 .rs/.kt/.swift/.svelte 业务源码字符串的写法（与 acceptance-gate.sh 共用规则）。"""
+    clean = _strip_line_comments(text)
+    hits = [re.sub(r"\s+", " ", m.group(0)).strip() for m in _PY_READ_TEXT_RE.finditer(clean)]
+    for m in _CALL_HEAD_RE.finditer(clean):
+        paren = clean.find("(", m.start())
+        if paren == -1:
+            continue
+        sp = _paren_span(clean, paren)
+        if sp and _EXT_RE.search(sp[1]):
+            hits.append(re.sub(r"\s+", " ", clean[m.start():sp[0] + 1]).strip())
+    for m in _PATH_CTOR_RE.finditer(clean):
+        sp = _paren_span(clean, m.end() - 1)
+        if not sp or not _EXT_RE.search(sp[1]):
+            continue
+        tail = clean[sp[0] + 1:sp[0] + 220]
+        nxt = _PATH_CTOR_RE.search(tail)
+        if nxt:
+            tail = tail[:nxt.start()]
+        if _PATH_READ_RE.search(tail):
+            hits.append(re.sub(r"\s+", " ", clean[m.start():sp[0] + 1]).strip())
+    allowed_targets = CROSS_END_SYNC_ALLOWLIST.get(rel_path, ())
+    if allowed_targets:
+        hits = [h for h in hits if not any(t in h for t in allowed_targets)]
+    return hits
+
+
+def find_new_fake_source_reads(head_text: str, base_text: str, rel_path: str = "") -> list[str]:
+    head_hits = find_fake_source_reads(head_text, rel_path)
+    if not head_hits or not base_text:
+        return head_hits
+    remaining = Counter(head_hits) - Counter(find_fake_source_reads(base_text, rel_path))
+    return list(remaining.elements())
+
+
+def _base_file_text(main_root: str, base_sha: str, rel_path: str) -> str:
+    if not base_sha or not (os.path.exists(os.path.join(main_root, ".git"))):
+        return ""
+    r = run_p(["git", "show", f"{base_sha}:{rel_path}"], main_root, 15, extra_env={"MSYS_NO_PATHCONV": "1"})
+    return r.stdout if r.returncode == 0 else ""
+
+
 def verify_real_tests_and_counterproof(wt: str, main_root: str, base_sha: str, files: list[str], mode: str) -> tuple[bool, str]:
     exam_hits = [f for f in files if re.search(r"(^|/)exam_[^/]*$", f) and os.path.exists(os.path.join(wt, f))]
     if exam_hits:
         return False, f"FAKE_TEST_BLOCKED: 严禁新增一次性考卷文件 {exam_hits}"
     test_files = [f for f in files if TEST_RE.search(f) and os.path.isfile(os.path.join(wt, f))]
     for tf in test_files:
-        if FAKE_SRC_READ_RE.search(Path(wt, tf).read_text(encoding="utf-8", errors="ignore")):
-            return False, f"FAKE_TEST_BLOCKED: 测试 {tf} 读取业务源码字符串充当断言"
+        head_txt = Path(wt, tf).read_text(encoding="utf-8", errors="ignore")
+        if find_fake_source_reads(head_txt, tf):
+            base_txt = _base_file_text(main_root, base_sha, tf)
+            if find_new_fake_source_reads(head_txt, base_txt, tf):
+                return False, f"FAKE_TEST_BLOCKED: 测试 {tf} 读取业务源码字符串充当断言"
     if mode != "fix" or os.environ.get("PPASS_SKIP_COUNTERPROOF") == "1":
         return True, "ok"
     if not test_files:
@@ -606,6 +701,20 @@ def cmd_owner_stuck(argv: list[str], cwd: str, is_worker: bool = False) -> int:
     return 0
 
 
+STOP_LOSS_REMINDER = "> 0 阻断：若无真 bug 或安全缺陷，请勿为非阻断建议重推打断在跑 CI；回复理由并关闭讨论线程即可。"
+
+
+def format_review_comment(sha: str, verdict: str, reason: str, block_n: int, sug_n: int, sty_n: int, agent_out: str, diff_id: str, ag_verdict: str) -> str:
+    clean_out = re.sub(r"<!--\s*ppass-review[^>]*-->", "", re.sub(r"(?m)^\s*VERDICT:\s*(?:PASS|FAIL)\s*$", "", agent_out)).replace("<!-- ppass-review", "<!- ppass-review")
+    sugg_hdr = ""
+    if sug_n + sty_n:
+        sugg_hdr = f"建议 {sug_n} 条、风格 {sty_n} 条：不挡合入。\n\n"
+        if verdict == "PASS":
+            sugg_hdr += f"{STOP_LOSS_REMINDER}\n\n"
+    hdr = f"**独立评审：{'通过' if verdict == 'PASS' else '未通过'}**（头提交 `{sha[:10]}`，全量审阅）\n\n" + (f"{reason}\n\n" if reason else "") + (f"阻断 {block_n} 条：修掉后推新提交重评。\n\n" if block_n else "") + sugg_hdr
+    return f"{hdr}{clean_out.strip()}\n\n<!-- ppass-review sha={sha} diff={diff_id} agent={ag_verdict} -->\n"
+
+
 def cmd_review(argv: list[str], cwd: str) -> int:
     """独立只读全量 diff 评审（彻底废除 incremental 增量盲区：每次推送只要整体 diff 变了一律全量评审）。"""
     pr, model, i = "", os.environ.get("PPASS_REVIEW_MODEL", ""), 0
@@ -727,9 +836,10 @@ def cmd_review(argv: list[str], cwd: str) -> int:
         if mode_r == "reuse":
             desc = f"{'owner 复核放行' if overridden else desc}（复用 {reuse_sha[:10]} 的结论）"
         else:
-            clean_out = re.sub(r"<!--\s*ppass-review[^>]*-->", "", re.sub(r"(?m)^\s*VERDICT:\s*(?:PASS|FAIL)\s*$", "", (work / "agent.out").read_text(encoding="utf-8"))).replace("<!-- ppass-review", "<!- ppass-review")
-            hdr = f"**独立评审：{'通过' if verdict == 'PASS' else '未通过'}**（头提交 `{sha[:10]}`，全量审阅）\n\n" + (f"{reason}\n\n" if reason else "") + (f"阻断 {block_n} 条：修掉后推新提交重评。\n\n" if block_n else "") + (f"建议 {sug_n} 条、风格 {sty_n} 条：不挡合入。\n\n" if sug_n + sty_n else "")
-            (work / "comment.md").write_text(f"{hdr}{clean_out.strip()}\n\n<!-- ppass-review sha={sha} diff={diff_id} agent={ag_verdict} -->\n", encoding="utf-8")
+            (work / "comment.md").write_text(
+                format_review_comment(sha, verdict, reason, block_n, sug_n, sty_n, (work / "agent.out").read_text(encoding="utf-8"), diff_id, ag_verdict),
+                encoding="utf-8",
+            )
             if run_p(["gh", "pr", "comment", pr, "-R", repo, "--body-file", str(c_file := work / "comment.md")], top, 20).returncode != 0:
                 return die("贴评审评论失败")
         if run_p(["gh", "api", "-X", "POST", f"repos/{repo}/statuses/{sha}", "-f", f"state={state}", "-f", "context=review/agent", "-f", f"description={desc}"], top, 20).returncode != 0:
