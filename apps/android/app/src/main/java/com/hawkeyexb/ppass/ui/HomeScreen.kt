@@ -715,13 +715,14 @@ internal fun HomeScreen(
     }
 }
 
-internal fun appVersionLine(): String {
-    val buildStamp = BuildConfig.BUILD_STAMP
-    return if (buildStamp.isBlank()) {
-        "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
-    } else {
-        "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) $buildStamp"
-    }
+internal fun appVersionLine(
+    versionName: String = BuildConfig.VERSION_NAME,
+    versionCode: Int = BuildConfig.VERSION_CODE,
+    buildStamp: String = BuildConfig.BUILD_STAMP,
+): String = if (buildStamp.isBlank()) {
+    "$versionName ($versionCode)"
+} else {
+    "$versionName ($versionCode) $buildStamp"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

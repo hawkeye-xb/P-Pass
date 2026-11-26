@@ -65,13 +65,27 @@ enum AboutLinks {
 
 struct AboutScreen: View {
     @Environment(\.openURL) private var openURL
+    let bundle: Bundle
+    let preferredLanguages: [String]?
+    let versionLine: String
+
+    init(
+        bundle: Bundle = .main,
+        preferredLanguages: [String]? = nil,
+        versionLine: String = AppVersion.current.displayLine
+    ) {
+        self.bundle = bundle
+        self.preferredLanguages = preferredLanguages
+        self.versionLine = versionLine
+    }
 
     private var links: [AboutLinkItem] {
-        AboutLinks.items(
-            preferredLanguages: Bundle.main.preferredLocalizations.isEmpty
+        let langs = preferredLanguages ?? (
+            bundle.preferredLocalizations.isEmpty
                 ? Locale.preferredLanguages
-                : Bundle.main.preferredLocalizations
+                : bundle.preferredLocalizations
         )
+        return AboutLinks.items(preferredLanguages: langs, bundle: bundle)
     }
 
     var body: some View {
@@ -91,15 +105,18 @@ struct AboutScreen: View {
                     Text(verbatim: "P-Pass")
                         .font(PPFont.title3)
                         .foregroundStyle(PPColor.ink)
-                    Text(AppVersion.current.displayLine)
+                        .accessibilityIdentifier("aboutAppName")
+                    Text(versionLine)
                         .font(PPFont.sans(PPUI.TextSize.rowValue, relativeTo: .subheadline))
                         .foregroundStyle(PPColor.ink40)
                         .multilineTextAlignment(.center)
-                    Text(L.s("about_tagline"))
+                        .accessibilityIdentifier("aboutVersion")
+                    Text(L.s("about_tagline", bundle: bundle))
                         .font(PPFont.body)
                         .foregroundStyle(PPColor.ink60)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("aboutTagline")
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
@@ -126,7 +143,7 @@ struct AboutScreen: View {
                                     .accessibilityHidden(true)
                             }
                         } label: {
-                            Text(L.s(item.labelKey))
+                            Text(L.s(item.labelKey, bundle: bundle))
                                 .font(PPFont.sans(PPUI.TextSize.rowLabel))
                                 .foregroundStyle(PPColor.ink)
                         }
@@ -143,7 +160,7 @@ struct AboutScreen: View {
         .ppList()
         .ppCardSpacing()
         .ppNavBar()
-        .navigationTitle(L.s("about_label"))
+        .navigationTitle(L.s("about_label", bundle: bundle))
         .navigationBarTitleDisplayMode(.inline)
     }
 }

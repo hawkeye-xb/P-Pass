@@ -141,11 +141,19 @@ msg_keys! {
     UI_SHELL_RESTART_NEEDED => "ui.shell_restart_needed",
     UI_RESTART_APP_NOW => "ui.restart_app_now",
     UI_VERSION_MISMATCH => "ui.version_mismatch",
-    // ── Settings「关于」：壳与内核版本分开列（#1044 B13）──────────────
+    // ── Settings「关于」：壳与内核版本分开列（#1044 B13）+ 外链入口（#2065）──
     UI_ABOUT => "ui.about",
     UI_ABOUT_SHELL_VERSION => "ui.about_shell_version",
     UI_ABOUT_SERVICE_VERSION => "ui.about_service_version",
     UI_ABOUT_VERSIONS_DIFFER => "ui.about_versions_differ",
+    UI_ABOUT_WEBSITE => "ui.about_website",
+    UI_ABOUT_FAQ => "ui.about_faq",
+    UI_ABOUT_FEEDBACK_EMAIL => "ui.about_feedback_email",
+    UI_ABOUT_FEEDBACK_DISCUSSIONS => "ui.about_feedback_discussions",
+    UI_ABOUT_SOURCE_CODE => "ui.about_source_code",
+    UI_ABOUT_SOURCE_LICENSE => "ui.about_source_license",
+    UI_ABOUT_PRIVACY => "ui.about_privacy",
+    UI_ABOUT_OPEN_FAILED => "ui.about_open_failed",
     // ── Desktop daemon restart after shell update (DAE-04) ───────────
     UI_RESTART_SERVICE => "ui.restart_service",
     UI_RESTART_SERVICE_BTN => "ui.restart_service_btn",
@@ -865,10 +873,18 @@ mod tests {
             UI_ERR_RELOCATE_SOURCE_MISSING,
             UI_CHANGE_TARGET_NOT_EMPTY,
             UI_ERR_STOP_WHILE_RELOCATING,
+            UI_ABOUT_WEBSITE,
+            UI_ABOUT_FAQ,
+            UI_ABOUT_FEEDBACK_EMAIL,
+            UI_ABOUT_FEEDBACK_DISCUSSIONS,
+            UI_ABOUT_SOURCE_CODE,
+            UI_ABOUT_SOURCE_LICENSE,
+            UI_ABOUT_PRIVACY,
+            UI_ABOUT_OPEN_FAILED,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 369);
+        assert_eq!(ALL.len(), 377);
     }
 
     #[test]
