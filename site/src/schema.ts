@@ -55,26 +55,48 @@ export function faqPage(lang: Lang): JsonLd {
   };
 }
 
-/**
- * HowTo for pages that walk through a setup in order. The steps live next to
- * the prose they describe (see src/i18n/guide.ts), so screen copy and markup
- * stay in sync. Google retired HowTo rich results in 2023: this is here for
- * machine readers, not for a visual treatment.
- */
-export function howTo(input: {
-  name: string;
-  steps: readonly { name: string; text: string }[];
-}): JsonLd {
+export function organization(): JsonLd {
   return {
     '@context': 'https://schema.org',
-    '@type': 'HowTo',
-    name: input.name,
-    step: input.steps.map((step, index) => ({
-      '@type': 'HowToStep',
-      position: index + 1,
-      name: step.name,
-      text: step.text,
-    })),
+    '@type': 'Organization',
+    name: 'P-Pass',
+    url: `${SITE_URL}/`,
+    logo: `${SITE_URL}/icons/icon-carbon.svg`,
+    sameAs: [GITHUB_URL, BLUESKY_URL, YOUTUBE_URL],
+  };
+}
+
+export function blogPosting(input: {
+  lang: Lang;
+  title: string;
+  description: string;
+  date: Date;
+  path: string;
+}): JsonLd {
+  const url = `${SITE_URL}${input.path}`;
+  const org = {
+    '@type': 'Organization',
+    name: 'P-Pass',
+    url: `${SITE_URL}/`,
+  };
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'BlogPosting',
+    headline: input.title,
+    description: input.description,
+    datePublished: input.date.toISOString(),
+    inLanguage: input.lang === 'zh' ? 'zh-CN' : 'en',
+    mainEntityOfPage: { '@type': 'WebPage', '@id': url },
+    url,
+    author: org,
+    publisher: {
+      ...org,
+      logo: {
+        '@type': 'ImageObject',
+        url: `${SITE_URL}/icons/icon-carbon.svg`,
+      },
+    },
+    image: `${SITE_URL}/og-cover.png`,
   };
 }
 

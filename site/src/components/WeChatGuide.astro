@@ -29,7 +29,7 @@ const { lang } = Astro.props;
     <path d="M10 56 C 20 30, 34 16, 54 10" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
     <path d="M42 8 L 55 10 L 49 22" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
   </svg>
-  <h2 id="wechat-guide-title">{t(lang, 'wechat.title')}</h2>
+  <p id="wechat-guide-title" class="wechat-title">{t(lang, 'wechat.title')}</p>
   <p data-os="ios">{t(lang, 'wechat.ios')}</p>
   <p data-os="android">{t(lang, 'wechat.android')}</p>
   <form method="dialog">
@@ -78,9 +78,11 @@ const { lang } = Astro.props;
     width: 4.5rem;
     height: 4.5rem;
   }
-  .wechat-guide h2 {
+  .wechat-guide .wechat-title {
     margin: 0 0 0.75rem;
     font-size: 1.25rem;
+    font-weight: 700;
+    line-height: 1.3;
   }
   .wechat-guide p {
     margin: 0 0 1.5rem;

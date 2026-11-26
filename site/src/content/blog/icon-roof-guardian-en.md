@@ -15,7 +15,7 @@ It took nine rounds of iteration, with drafts lettered A through P, and at the e
 
 The product is called P-Pass, and the name reads as an emoticon: the two Ps look like a pair of eyes. The first design took that literally. It was a cat face with green pupils: two round eyes, with the hyphen in P-P doubling as the nose.
 
-![Round one: cat eyes with green pupils](/icons/drafts/a.svg)
+<img src="/icons/drafts/a.svg" alt="Round one: cat eyes with green pupils" width="128" height="128" />
 
 The pupils use the only green in our palette, `safe #2E6B4F`. In the product, that green means exactly one thing: "stored safely." Green cat eyes say "everything is backed up." That idea survived from the first round to the final icon.
 
@@ -29,7 +29,7 @@ Partway through, our product lead had a new idea. Since the right half is a mirr
 
 The concept was accepted on the first pass. The first way of drawing it died fast. Our product lead, who had proposed the idea, rejected the dotted-line version the same day it went up, saying the dots looked "a bit gross."
 
-![Dotted-line version: rejected](/icons/drafts/l.svg)
+<img src="/icons/drafts/l.svg" alt="Dotted-line version: rejected" width="128" height="128" />
 
 After that, the "dashed" half was drawn three more ways: short dashes, a lighter ink tone, and finally a carbon-fiber diagonal weave. Looking back, we should have reviewed the concept and the rendering separately. "Solid left, dashed right, lightning in the center" lasted from the day it was proposed to the final design. The only thing rejected was one rendering, the dotted line.
 
@@ -37,11 +37,11 @@ After that, the "dashed" half was drawn three more ways: short dashes, a lighter
 
 Once the roof guardian version existed, the problem was **spacing**. In the first cut (J0), the gap between the eyes and the mouth was only 12 units. The face looked cramped, with the eyes and mouth almost touching, as if someone were pinching it.
 
-![First cut: 12 units of clearance](/icons/drafts/j0.svg)
+<img src="/icons/drafts/j0.svg" alt="First cut: 12 units of clearance" width="128" height="128" />
 
 The revision (J) changed the spacing rule so that whitespace follows the same rhythm as the strokes: the clearance from the outer edge of the eye ring to the mouth line grew to exactly one stroke width (72). With the mouth line at 75% of the face height and the eye centers at 47%, the cramped look went away and the face looked steadier.
 
-![Revision: 72 units of clearance](/icons/drafts/j.svg)
+<img src="/icons/drafts/j.svg" alt="Revision: 72 units of clearance" width="128" height="128" />
 
 That spacing rule went into the design spec: **clearance between features ≥ one stroke width**. You can check it with a ruler. Measure from the outer edge of the eye ring to the mouth line, and you know right away whether it's at least 72.
 
@@ -51,7 +51,7 @@ The later tone version (O) tried a different approach: the whole right half swit
 
 That produced the carbon weave version (P). The strokes in the right half are filled with 45° diagonal stripes alternating between ink and transparent, 36 wide with 32 gaps. The lightning bolt still splits color at its midpoint, and the half on the dashed side is striped too.
 
-![Carbon weave version](/icons/drafts/p.svg)
+<img src="/icons/drafts/p.svg" alt="Carbon weave version" width="128" height="128" />
 
 At large sizes the texture reads clearly, but below 40px the stripes blur into a half gray. The design notes say only one thing about this: at that size it visually falls back to the look of the O tone version, which is acceptable.
 

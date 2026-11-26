@@ -41,8 +41,6 @@
 
 - Home (English): https://p-pass.hawkeye-xb.com/
 - 首页（中文）: https://p-pass.hawkeye-xb.com/zh/
-- Back up phone photos to your own computer, without NAS or Docker (Chinese):
-  https://p-pass.hawkeye-xb.com/zh/backup-without-nas/
 - FAQ: https://p-pass.hawkeye-xb.com/faq/
 - 常见问题: https://p-pass.hawkeye-xb.com/zh/faq/
 - Privacy: https://p-pass.hawkeye-xb.com/privacy/
