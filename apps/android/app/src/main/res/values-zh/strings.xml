@@ -8,6 +8,7 @@
     <string name="welcome_step1">1 · 在电脑上安装并打开 P-Pass</string>
     <string name="welcome_step2">2 · 扫码或输入配对码，连接电脑</string>
     <string name="welcome_step3">3 · 选择要备份的相册和文件夹</string>
+    <string name="welcome_desktop_link">还没装电脑端？获取下载链接</string>
 
     <!-- M2 全页面状态稿：暗底顶部窄标题栏，X 关闭代替「取消」按钮。 -->
     <string name="scan_header_title">扫码连接</string>

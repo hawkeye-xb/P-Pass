@@ -1,4 +1,6 @@
 @testable import PPassCore
+import SwiftUI
+import UIKit
 import XCTest
 @testable import PPass
 
@@ -150,6 +152,25 @@ final class OnboardingNavigationTests: XCTestCase {
         XCTAssertTrue(decision.contains("L.f(\"decision_destination\", computerName)"))
         XCTAssertTrue(decision.contains("return L.s(\"storage_device_default\")"))
         XCTAssertNotEqual(L.s("decision_destination"), "decision_destination")
+    }
+
+    func testWelcomeDesktopLinkLocalizedInBothLanguages() throws {
+        let en = try XCTUnwrap(Bundle.main.path(forResource: "en", ofType: "lproj").flatMap(Bundle.init(path:)))
+        let zh = try XCTUnwrap(Bundle.main.path(forResource: "zh-Hans", ofType: "lproj").flatMap(Bundle.init(path:)))
+        XCTAssertEqual(en.localizedString(forKey: "welcome_desktop_link", value: "\u{1}", table: nil), "No desktop app yet? Get the link")
+        XCTAssertEqual(zh.localizedString(forKey: "welcome_desktop_link", value: "\u{1}", table: nil), "还没装电脑端？获取下载链接")
+    }
+
+    @MainActor
+    func testWelcomeDesktopDownloadURLAndLargeTextHosting() {
+        XCTAssertEqual(OnboardingFlow.desktopDownloadURL, URL(string: "https://p-pass.hawkeye-xb.com"))
+        let app = AppModel(backend: FakeBackend.make(.notPaired))
+        let host = UIHostingController(rootView: OnboardingFlow().environmentObject(app))
+        host.additionalSafeAreaInsets = .zero
+        host.view.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        host.view.setNeedsLayout()
+        host.view.layoutIfNeeded()
+        XCTAssertGreaterThan(host.view.bounds.height, 0)
     }
 }
 

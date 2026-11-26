@@ -41,11 +41,13 @@ struct OnboardingFlow: View {
         }
     }
 
+    static let desktopDownloadURL = URL(string: "https://p-pass.hawkeye-xb.com")!
+
     /// 手动输入页「返回」去哪（Android `leaveManual`）。
     static func manualBackTarget(fromScan: Bool) -> Step { fromScan ? .scan : .welcome }
 
     /// 同 Android WelcomeScreen：顶部字标「P-PASS」，标题衬线 36 压在下半屏，三步是三行 ink-40 小字（不成卡），
-    /// 主按钮 64 高 / 19 字，下面「手动输入」14 粗体 ink-60。无插图。
+    /// 主按钮 64 高 / 19 字，下面「手动输入」和「获取下载链接」14 粗体 ink-60。无插图。
     private var welcome: some View {
         GeometryReader { geo in
             ScrollView {
@@ -65,7 +67,17 @@ struct OnboardingFlow: View {
                     PPButton(title: L.s("welcome_scan"), height: 64, fontSize: 19) { step = .scan }.padding(.top, 40)
                     Button(L.s("scan_manual_link")) { step = .manual(fromScan: false) }
                         .font(PPFont.sans(14, .bold, relativeTo: .subheadline)).foregroundStyle(PPColor.ink60)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, minHeight: 44).padding(.top, 8)
+                    ShareLink(item: Self.desktopDownloadURL) {
+                        Text(L.s("welcome_desktop_link"))
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(PPFont.sans(14, .bold, relativeTo: .subheadline)).foregroundStyle(PPColor.ink60)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .accessibilityIdentifier("welcomeDesktopLink")
                 }
                 .padding(32)
                 .frame(maxWidth: .infinity, minHeight: geo.size.height, alignment: .leading)

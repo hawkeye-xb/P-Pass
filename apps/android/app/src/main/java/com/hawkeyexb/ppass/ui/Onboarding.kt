@@ -20,11 +20,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -52,7 +54,11 @@ internal fun PrimaryButton(text: String, onClick: () -> Unit, enabled: Boolean =
 
 /** Screen 1: one promise, one big button. */
 @Composable
-fun WelcomeScreen(onScan: () -> Unit, onManual: () -> Unit) {
+fun WelcomeScreen(
+    onScan: () -> Unit,
+    onManual: () -> Unit,
+    onShareDesktopLink: () -> Unit = {},
+) {
     PPScreen {
         androidx.compose.material3.ProvideTextStyle(
             androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
@@ -109,6 +115,16 @@ fun WelcomeScreen(onScan: () -> Unit, onManual: () -> Unit) {
                         modifier = Modifier.fillMaxWidth()
                             .clickable(onClick = onManual)
                             .padding(26.dp, 16.dp, 26.dp, 8.dp),
+                    )
+                    Text(
+                        stringResource(R.string.welcome_desktop_link),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = PPColor.Ink60,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                            .clickable(role = Role.Button, onClick = onShareDesktopLink)
+                            .padding(26.dp, 8.dp, 26.dp, 8.dp),
                     )
                 }
             }
