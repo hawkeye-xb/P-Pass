@@ -126,10 +126,18 @@
     return m ? m[1] : "overview";
   };
   let page = $state(pageFromHash());
+  let focusedDeviceId = $state(null);
+  let highlightedDeviceId = $state(null);
+  let highlightDeviceTimer = null;
   function go(id) {
     if (relocLock) return;
     page = id;
     location.hash = `#/${id}`;
+  }
+  function goToDevice(nodeId) {
+    if (relocLock) return;
+    focusedDeviceId = nodeId;
+    go("devices");
   }
   function onHashChange() {
     page = pageFromHash();
@@ -586,6 +594,24 @@
     ).length,
   );
 
+  $effect(() => {
+    if (page !== "devices" || !focusedDeviceId) return;
+    const id = focusedDeviceId;
+    if (deviceGroups.length === 0) return;
+    const target = Array.from(contentEl?.querySelectorAll("[data-device-id]") ?? []).find(
+      (el) => el.getAttribute("data-device-id") === id,
+    );
+    if (!target) return;
+    target.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    target.focus({ preventScroll: true });
+    highlightedDeviceId = id;
+    focusedDeviceId = null;
+    clearTimeout(highlightDeviceTimer);
+    highlightDeviceTimer = setTimeout(() => {
+      if (highlightedDeviceId === id) highlightedDeviceId = null;
+    }, 2500);
+  });
+
   // auto = 快到期时的自动换码（计次、失败不弹提示：码到期后自会盖住，给刷新按钮）。
   async function startPairing({ auto = false } = {}) {
     showPairModal = true; // T4: 二维码是弹窗模块，不是常驻卡片
@@ -984,6 +1010,7 @@
   onDestroy(() => {
     clearInterval(timer);
     clearTimeout(selfHealRetry);
+    clearTimeout(highlightDeviceTimer);
     unlisten?.();
     unlistenTray?.();
     unlistenStopped?.();
@@ -1997,7 +2024,7 @@
                         <button
                           type="button"
                           class="-mx-[10px] flex w-[calc(100%+20px)] cursor-pointer items-center gap-[12px] rounded-sm border-0 bg-transparent px-[10px] py-[12px] text-left font-sans transition-colors outline-none hover:bg-linen focus-visible:ring-3 focus-visible:ring-ring"
-                          onclick={() => go("devices")}
+                          onclick={() => goToDevice(d.node_id)}
                         >
                           <!-- T-091: 右侧接 device.watermarks 真数据。T-092: 行点变四色——哨兵 act > 连接态。 -->
                           <span class="h-[9px] w-[9px] flex-none rounded-full {DOT_BG[row.dot]}"></span>
@@ -2096,7 +2123,12 @@
                     <!-- #1132 D9：固定宽度的列在窄窗 / 200% 缩放下会把按钮裁出
                          可视区、名称与 ID 重叠——允许换行（flex-wrap），装不下
                          的列落到下一行，任何宽度都不裁切（1.4.10 重排）。 -->
-                    <li class="flex flex-wrap items-center gap-x-[14px] gap-y-[6px] border-b border-divider px-[22px] py-[18px] last:border-b-0">
+                    <li
+                      data-device-id={d.node_id}
+                      tabindex="-1"
+                      data-highlighted={highlightedDeviceId === d.node_id ? "true" : undefined}
+                      class="flex flex-wrap items-center gap-x-[14px] gap-y-[6px] border-b border-divider px-[22px] py-[18px] outline-none transition-colors last:border-b-0 {highlightedDeviceId === d.node_id ? 'bg-linen ring-2 ring-inset ring-ink/30' : ''}"
+                    >
                       <!-- T-091: 哨兵行 ACT 色 + 「需要看看」；T-092: 连接态点色
                            （direct=safe 绿，relay=wait 琥珀）——语义色仅此四种 -->
                       <span class="h-[9px] w-[9px] flex-none rounded-full {DOT_BG[row.dot]}"></span>

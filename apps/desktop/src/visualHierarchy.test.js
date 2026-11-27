@@ -565,4 +565,56 @@ describe("#2083 + #2084 桌面端视觉权重、降噪、可点性与向导焦�
     expect(tokensOf(winStep2Heading).has("focus-visible:ring-3")).toBe(true);
     expect(tokensOf(winStep2Heading).has("focus-visible:ring-ring")).toBe(true);
   });
+
+  it("#2092 总览点击指定设备行跳到设备页后精准滚动、聚焦并短暂高亮对应行", async () => {
+    const dev1 = makeDevice("a", "书房手机", { last_activity_at: NOW - 30_000 });
+    const dev2 = makeDevice("b", "客厅手机", { last_activity_at: NOW - 60_000 });
+    const dev3 = makeDevice("c", "卧室手机", { last_activity_at: NOW - 90_000 });
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    const origRO = globalThis.ResizeObserver;
+    const scrollIntoViewMock = vi.fn();
+    let roCallback = null;
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+    globalThis.ResizeObserver = class {
+      constructor(cb) {
+        roCallback = cb;
+      }
+      observe() {}
+      disconnect() {}
+    };
+
+    try {
+      setupDaemon({ devices: [dev1, dev2, dev3] });
+      await openApp("#/overview");
+      roCallback?.([{ contentRect: { width: 900, height: 860 } }]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const backupCard = screen.getByTestId("overview-backup-card");
+      const dev2Btn = Array.from(backupCard.querySelectorAll("button")).find((btn) =>
+        btn.textContent?.includes("客厅手机"),
+      );
+      expect(dev2Btn).toBeTruthy();
+
+      await fireEvent.click(dev2Btn);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(screen.getByTestId("page-devices")).toBeTruthy();
+      const targetRow = document.querySelector(`[data-device-id="${dev2.node_id}"]`);
+      expect(targetRow).toBeTruthy();
+      expect(targetRow.getAttribute("tabindex")).toBe("-1");
+      expect(document.activeElement).toBe(targetRow);
+      expect(targetRow.getAttribute("data-highlighted")).toBe("true");
+      expect(tokensOf(targetRow).has("bg-linen")).toBe(true);
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+
+      const otherRow = document.querySelector(`[data-device-id="${dev1.node_id}"]`);
+      expect(otherRow.getAttribute("data-highlighted")).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(2500);
+      expect(targetRow.getAttribute("data-highlighted")).toBeNull();
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+      globalThis.ResizeObserver = origRO;
+    }
+  });
 });
