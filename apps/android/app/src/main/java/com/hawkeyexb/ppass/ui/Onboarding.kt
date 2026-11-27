@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -26,8 +27,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -36,6 +39,27 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.hawkeyexb.ppass.R
 import androidx.compose.ui.unit.sp
+
+internal data class WelcomeLinkAppearance(
+    val color: Color,
+    val fontWeight: FontWeight,
+    val topGapDp: Int,
+    val minTouchHeightDp: Int,
+)
+
+internal fun welcomeManualLinkAppearance(): WelcomeLinkAppearance = WelcomeLinkAppearance(
+    color = PPColor.Ink60,
+    fontWeight = FontWeight.Bold,
+    topGapDp = 6,
+    minTouchHeightDp = 48,
+)
+
+internal fun welcomeDesktopLinkAppearance(): WelcomeLinkAppearance = WelcomeLinkAppearance(
+    color = PPColor.Ink40,
+    fontWeight = FontWeight.Normal,
+    topGapDp = 28,
+    minTouchHeightDp = 48,
+)
 
 @Composable
 internal fun PrimaryButton(text: String, onClick: () -> Unit, enabled: Boolean = true) {
@@ -59,11 +83,13 @@ fun WelcomeScreen(
     onManual: () -> Unit,
     onShareDesktopLink: () -> Unit = {},
 ) {
+    val manualStyle = welcomeManualLinkAppearance()
+    val desktopStyle = welcomeDesktopLinkAppearance()
     PPScreen {
         androidx.compose.material3.ProvideTextStyle(
             androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
         ) {
-        // #1964：系统最大字号下正文会高于屏幕——整屏可纵向滚动；内容矮时用 SpaceBetween 把字标顶到上、主体压在下（对位 iOS）。
+        // #1964：系统最大字号下正文会高于屏幕——整屏可纵向滚动；内容矮时用 SpaceBetween 把字标顶到上、主操作组压在中间、页脚退路推至最底（对位 iOS）。
         // 不能在可滚动的 Column 里用 weight 占位：滚动的无限高度约束会直接崩；heightIn(min = maxHeight) + SpaceBetween 是同一效果的合法写法。
         BoxWithConstraints(Modifier.fillMaxSize()) {
             Column(
@@ -78,7 +104,7 @@ fun WelcomeScreen(
                     fontSize = 14.sp, fontWeight = FontWeight.Bold,
                     letterSpacing = 2.5.sp, color = PPColor.Ink60,
                 )
-                Column(Modifier.fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth().padding(top = 32.dp)) {
                     Text(
                         stringResource(R.string.welcome_headline),
                         fontSize = 36.sp, lineHeight = 44.sp,
@@ -108,25 +134,36 @@ fun WelcomeScreen(
                     PrimaryButton(stringResource(R.string.welcome_scan), onScan)
                     // #421：扫不了码的人（不给摄像头 / 摄像头坏了）在这一屏就有退路，
                     // 与扫码页底部同一行文字链接、同一句文案。
+                    // #2093：与主按钮紧贴为同一配对操作组，保持 Ink60 与 ≥48dp 最小触摸高度。
                     Text(
                         stringResource(R.string.scan_manual_link),
-                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink60,
+                        fontSize = 14.sp,
+                        fontWeight = manualStyle.fontWeight,
+                        color = manualStyle.color,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()
+                            .padding(top = manualStyle.topGapDp.dp)
+                            .heightIn(min = manualStyle.minTouchHeightDp.dp)
+                            .semantics { role = Role.Button }
                             .clickable(onClick = onManual)
-                            .padding(26.dp, 16.dp, 26.dp, 8.dp),
-                    )
-                    Text(
-                        stringResource(R.string.welcome_desktop_link),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = PPColor.Ink60,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
-                            .clickable(role = Role.Button, onClick = onShareDesktopLink)
-                            .padding(26.dp, 8.dp, 26.dp, 8.dp),
+                            .padding(horizontal = 26.dp, vertical = 10.dp)
+                            .wrapContentHeight(Alignment.CenterVertically),
                     )
                 }
+                // #2093：页脚兜底退路，由 SpaceBetween 推至页面最底部，大字号滚动时保底留出 ≥28dp 间距。
+                Text(
+                    stringResource(R.string.welcome_desktop_link),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = desktopStyle.fontWeight,
+                    color = desktopStyle.color,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                        .padding(top = desktopStyle.topGapDp.dp)
+                        .heightIn(min = desktopStyle.minTouchHeightDp.dp)
+                        .clickable(role = Role.Button, onClick = onShareDesktopLink)
+                        .padding(horizontal = 26.dp, vertical = 10.dp)
+                        .wrapContentHeight(Alignment.CenterVertically),
+                )
             }
         }
         }
