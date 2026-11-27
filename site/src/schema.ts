@@ -9,8 +9,7 @@
  * cannot back up.
  */
 import { BLUESKY_URL, GITHUB_URL, RELEASES_URL, SITE_DESCRIPTION, SITE_URL, YOUTUBE_URL } from './consts';
-import { FAQ, FAQ_TITLE } from './i18n/faq';
-import type { FaqBlock } from './i18n/faq';
+import { FAQ, FAQ_TITLE, faqAnswerText } from './i18n/faq';
 import type { Lang } from './i18n/ui';
 
 export interface JsonLd {
@@ -35,11 +34,6 @@ export function softwareApplication(lang: Lang): JsonLd {
   };
 }
 
-/** Answer text for one FAQ item: paragraphs and lists flattened, as schema.org expects a string. */
-function answerText(blocks: FaqBlock[]): string {
-  return blocks.map((block) => (typeof block === 'string' ? block : block.list.join(' '))).join(' ');
-}
-
 export function faqPage(lang: Lang): JsonLd {
   return {
     '@context': 'https://schema.org',
@@ -49,7 +43,7 @@ export function faqPage(lang: Lang): JsonLd {
       group.items.map((item) => ({
         '@type': 'Question',
         name: item.q,
-        acceptedAnswer: { '@type': 'Answer', text: answerText(item.a) },
+        acceptedAnswer: { '@type': 'Answer', text: faqAnswerText(item.a) },
       })),
     ),
   };
@@ -66,13 +60,15 @@ export function organization(): JsonLd {
   };
 }
 
-export function blogPosting(input: {
+export interface ArticleInput {
   lang: Lang;
   title: string;
   description: string;
   date: Date;
   path: string;
-}): JsonLd {
+}
+
+function postingSchema(type: 'BlogPosting' | 'Article', input: ArticleInput): JsonLd {
   const url = `${SITE_URL}${input.path}`;
   const org = {
     '@type': 'Organization',
@@ -81,7 +77,7 @@ export function blogPosting(input: {
   };
   return {
     '@context': 'https://schema.org',
-    '@type': 'BlogPosting',
+    '@type': type,
     headline: input.title,
     description: input.description,
     datePublished: input.date.toISOString(),
@@ -98,6 +94,14 @@ export function blogPosting(input: {
     },
     image: `${SITE_URL}/og-cover.png`,
   };
+}
+
+export function blogPosting(input: ArticleInput): JsonLd {
+  return postingSchema('BlogPosting', input);
+}
+
+export function article(input: ArticleInput): JsonLd {
+  return postingSchema('Article', input);
 }
 
 export function breadcrumb(trail: { name: string; path: string }[]): JsonLd {

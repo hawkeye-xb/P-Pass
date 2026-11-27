@@ -1,0 +1,68 @@
+---
+import Base from '../layouts/Base.astro';
+import { render, type CollectionEntry } from 'astro:content';
+import { SITE_DESCRIPTION } from '../consts';
+import { t, type Lang } from '../i18n/ui';
+import { article, breadcrumb } from '../schema';
+
+interface Props {
+  lang: Lang;
+  guide: CollectionEntry<'guides'>;
+  mirror?: string;
+}
+
+const { lang, guide, mirror } = Astro.props;
+const { title, description, date, tags } = guide.data;
+const { Content } = await render(guide);
+
+const homePath = lang === 'zh' ? '/zh/' : '/';
+const listPath = lang === 'zh' ? '/zh/guides/' : '/guides/';
+
+const jsonLd = [
+  breadcrumb([
+    { name: 'P-Pass', path: homePath },
+    { name: t(lang, 'nav.guides'), path: listPath },
+    { name: title, path: Astro.url.pathname },
+  ]),
+  article({
+    lang,
+    title,
+    description: description ?? SITE_DESCRIPTION[lang],
+    date,
+    path: Astro.url.pathname,
+  }),
+];
+---
+
+<Base lang={lang} title={`${title} — P-Pass`} description={description} mirror={mirror} jsonLd={jsonLd}>
+  <article class="guide">
+    <header>
+      <p class="meta">
+        <time datetime={date.toISOString()}>{date.toISOString().slice(0, 10)}</time>
+        {tags.length > 0 && <span class="tags"> · {tags.join(' / ')}</span>}
+      </p>
+      <h1>{title}</h1>
+    </header>
+    <div class="prose">
+      <Content />
+    </div>
+    <footer class="guide-foot">
+      <a href={listPath}>{t(lang, 'guide.back')}</a>
+    </footer>
+  </article>
+</Base>
+
+<style>
+  .guide {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 3.5rem 1.25rem 4rem;
+  }
+  .meta {
+    color: var(--text-meta);
+    font-size: 0.85rem;
+    margin: 0 0 0.75rem;
+  }
+  h1 { font-size: 2.1rem; margin: 0 0 1.75rem; }
+  .guide-foot { margin-top: 3rem; }
+</style>

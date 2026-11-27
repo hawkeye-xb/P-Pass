@@ -1,0 +1,106 @@
+---
+import Base from '../layouts/Base.astro';
+import { getCollection } from 'astro:content';
+import { t, type Lang } from '../i18n/ui';
+import { breadcrumb } from '../schema';
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+const mirror = lang === 'zh' ? '/guides/' : '/zh/guides/';
+const homePath = lang === 'zh' ? '/zh/' : '/';
+const listPath = lang === 'zh' ? '/zh/guides/' : '/guides/';
+
+const guides = (
+  await getCollection('guides', ({ data }) => {
+    return (import.meta.env.PROD ? data.draft !== true : true) && data.lang === lang;
+  })
+).sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf());
+
+const jsonLd = breadcrumb([
+  { name: 'P-Pass', path: homePath },
+  { name: t(lang, 'nav.guides'), path: listPath },
+]);
+---
+
+<Base
+  lang={lang}
+  title={`${t(lang, 'guides.h1')} — P-Pass`}
+  description={t(lang, 'guides.description')}
+  mirror={mirror}
+  jsonLd={jsonLd}
+>
+  <section class="guides">
+    <h1>{t(lang, 'guides.h1')}</h1>
+    <p class="sub">{t(lang, 'guides.sub')}</p>
+
+    {
+      guides.length === 0 ? (
+        <p class="empty">{t(lang, 'guides.empty')}</p>
+      ) : (
+        <ul class="guide-list">
+          {guides.map((guide) => {
+            const href =
+              lang === 'en'
+                ? `/guides/${guide.id.replace(/-en$/, '')}/`
+                : `/zh/guides/${guide.id}/`;
+            return (
+              <li>
+                <a href={href}>
+                  <time datetime={guide.data.date.toISOString()}>
+                    {guide.data.date.toISOString().slice(0, 10)}
+                  </time>
+                  <span class="guide-title">{guide.data.title}</span>
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      )
+    }
+  </section>
+</Base>
+
+<style>
+  .guides {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 3.5rem 1.25rem 4rem;
+  }
+  h1 { font-size: 2.2rem; margin: 0 0 0.5rem; }
+  .sub { color: var(--text-secondary); margin: 0 0 2.5rem; }
+  .empty { color: var(--text-meta); }
+  .guide-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .guide-list li {
+    border-bottom: 1px solid var(--hairline);
+  }
+  .guide-list a {
+    display: flex;
+    align-items: baseline;
+    gap: 1.25rem;
+    padding: 1rem 0;
+    text-decoration: none;
+  }
+  .guide-list time {
+    color: var(--text-meta);
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .guide-title {
+    font-family: var(--font-serif);
+    font-size: 1.2rem;
+  }
+  .guide-list a:hover .guide-title { text-decoration: underline; }
+  @media (max-width: 640px) {
+    .guide-list a { flex-direction: column; gap: 0.2rem; }
+  }
+</style>

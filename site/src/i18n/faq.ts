@@ -56,6 +56,11 @@ export interface FaqLink {
 /** A block is a paragraph, or a list when the answer really is a list. */
 export type FaqBlock = string | { list: string[] };
 
+/** Flatten FAQ answer blocks into plain text for JSON-LD and llms.txt. */
+export function faqAnswerText(blocks: FaqBlock[]): string {
+  return blocks.map((block) => (typeof block === 'string' ? block : block.list.join(' '))).join(' ');
+}
+
 export interface FaqItem {
   /** Anchor id, kebab-case English, stable — see the note above. */
   id: string;
