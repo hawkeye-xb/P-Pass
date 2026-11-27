@@ -1,0 +1,23 @@
+---
+import { getCollection } from 'astro:content';
+import GuideArticle from '../../../components/GuideArticle.astro';
+
+export async function getStaticPaths() {
+  const visible = (data: { draft?: boolean; lang: string }) =>
+    import.meta.env.PROD ? data.draft !== true : true;
+  const guides = await getCollection('guides', ({ data }) => visible(data) && data.lang === 'zh');
+  const enIds = new Set(
+    (await getCollection('guides', ({ data }) => visible(data) && data.lang === 'en')).map((g) =>
+      g.id.replace(/-en$/, ''),
+    ),
+  );
+  return guides.map((guide) => ({
+    params: { slug: guide.id },
+    props: { guide, mirror: enIds.has(guide.id) ? `/guides/${guide.id}/` : undefined },
+  }));
+}
+
+const { guide, mirror } = Astro.props;
+---
+
+<GuideArticle lang="zh" guide={guide} mirror={mirror} />

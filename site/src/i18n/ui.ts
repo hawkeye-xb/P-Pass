@@ -9,6 +9,7 @@ export type Lang = (typeof LANGS)[number];
 
 export const ui = {
   en: {
+    'nav.guides': 'Guides',
     'nav.blog': 'Blog',
     'nav.faq': 'FAQ',
     'nav.lang': '中文',
@@ -61,8 +62,16 @@ export const ui = {
     'blog.empty': 'No posts yet.',
     'blog.description': "P-Pass blog: design trade-offs and engineering notes on family photo backup, including background backup and transfer reliability.",
     'post.back': '← Back to the blog',
+    'guides.h1': 'Guides',
+    'guides.sub':
+      'Step-by-step guides for backing up photos and videos from iPhone and Android to your computer at home.',
+    'guides.empty': 'No guides yet.',
+    'guides.description':
+      'P-Pass user guides: step-by-step setup, folder backup, permissions, and troubleshooting for iPhone, Android, Mac, and Windows.',
+    'guide.back': '← Back to guides',
   },
   zh: {
+    'nav.guides': '指南',
     'nav.blog': '博客',
     'nav.faq': '常见问题',
     'nav.lang': 'English',
@@ -114,6 +123,11 @@ export const ui = {
     'blog.empty': '暂无文章。',
     'blog.description': 'P-Pass 博客：家庭照片备份的设计取舍，以及后台备份、传输可靠性等开发记录。',
     'post.back': '← 返回博客',
+    'guides.h1': '使用指南',
+    'guides.sub': '把 iPhone 和安卓手机里的照片、视频可靠备份到家里电脑的分步操作说明。',
+    'guides.empty': '暂无指南。',
+    'guides.description': 'P-Pass 使用指南：iPhone、Android、Mac 与 Windows 的安装配对、文件夹备份、权限设置与常见操作说明。',
+    'guide.back': '← 返回使用指南',
   },
 } as const;
 
