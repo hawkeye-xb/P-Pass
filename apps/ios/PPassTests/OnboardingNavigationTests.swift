@@ -181,14 +181,15 @@ final class OnboardingNavigationTests: XCTestCase {
         viewportHeight: CGFloat = 852,
         onScan: @escaping () -> Void = {},
         onManual: @escaping () -> Void = {}
-    ) throws -> (window: UIWindow, host: UIHostingController<AnyView>, scrollView: UIScrollView, frames: WelcomeMeasuredFrames) {
+    ) throws -> (window: UIWindow, host: UIHostingController<AnyView>, scrollView: UIScrollView, frames: WelcomeMeasuredFrames, screen: WelcomeScreen) {
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first,
             "宿主 App 必须提供可用的 UIWindowScene"
         )
         var measured = WelcomeMeasuredFrames()
+        let screen = WelcomeScreen(bundle: bundle, onScan: onScan, onManual: onManual)
         let view = AnyView(
-            WelcomeScreen(bundle: bundle, onScan: onScan, onManual: onManual)
+            screen
                 .environment(\.sizeCategory, sizeCategory)
                 .onPreferenceChange(WelcomeFramePreferenceKey.self) { measured = $0 }
         )
@@ -203,7 +204,7 @@ final class OnboardingNavigationTests: XCTestCase {
         host.view.layoutIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.25))
         let sv = try XCTUnwrap(firstScrollView(in: host.view), "WelcomeScreen 必须基于 ScrollView 渲染")
-        return (window, host, sv, measured)
+        return (window, host, sv, measured, screen)
     }
 
     private func firstScrollView(in root: UIView) -> UIScrollView? {
@@ -212,6 +213,69 @@ final class OnboardingNavigationTests: XCTestCase {
             if let found = firstScrollView(in: sub) { return found }
         }
         return nil
+    }
+
+    private struct WelcomeControls {
+        var scanButton: PPButton?
+        var manualAction: (@MainActor () -> Void)?
+        var manualLabelFound = false
+        var shareURLs: [URL] = []
+        var shareLabelFound = false
+    }
+
+    private func inspectWelcomeControls(in root: Any, expectedManual: String, expectedDesktop: String) -> WelcomeControls {
+        var found = WelcomeControls()
+        func containsText(_ value: Any, _ target: String) -> Bool {
+            if let s = value as? String, s == target { return true }
+            if let key = value as? LocalizedStringKey {
+                let m = Mirror(reflecting: key)
+                if let k = m.children.first(where: { $0.label == "key" })?.value as? String, k == target { return true }
+            }
+            for child in Mirror(reflecting: value).children {
+                if containsText(child.value, target) { return true }
+            }
+            return false
+        }
+        func walk(_ value: Any) {
+            if let pp = value as? PPButton {
+                found.scanButton = pp
+                return
+            }
+            let typeName = String(describing: type(of: value))
+            let mirror = Mirror(reflecting: value)
+            if typeName.hasPrefix("Button<") {
+                if containsText(value, expectedManual),
+                   let actionObj = mirror.children.first(where: { $0.label == "action" })?.value {
+                    let closureVal = Mirror(reflecting: actionObj).children.first(where: { $0.label == "closure" })?.value
+                    if let fn = closureVal as? (@MainActor () -> Void) {
+                        found.manualAction = fn
+                        found.manualLabelFound = true
+                    } else if let fn = closureVal as? (() -> Void) {
+                        found.manualAction = { fn() }
+                        found.manualLabelFound = true
+                    }
+                }
+                return
+            }
+            if typeName.hasPrefix("ShareLink<") {
+                if containsText(value, expectedDesktop) {
+                    found.shareLabelFound = true
+                }
+                if let items = mirror.children.first(where: { $0.label == "items" })?.value {
+                    for itemChild in Mirror(reflecting: items).children {
+                        if let url = itemChild.value as? URL {
+                            found.shareURLs.append(url)
+                        }
+                    }
+                }
+                return
+            }
+            for child in mirror.children {
+                walk(child.value)
+            }
+        }
+        walk(root)
+        return found
     }
 
     @MainActor
@@ -229,11 +293,32 @@ final class OnboardingNavigationTests: XCTestCase {
         let zhBundle = try XCTUnwrap(Bundle.main.path(forResource: "zh-Hans", ofType: "lproj").flatMap(Bundle.init(path:)))
 
         for (lang, bundle) in [("en", enBundle), ("zh-Hans", zhBundle)] {
-            let (win, _, baseScroll, baseFrames) = try hostWelcomeScreen(
+            var scanTaps = 0
+            var manualTaps = 0
+            let (win, _, baseScroll, baseFrames, screen) = try hostWelcomeScreen(
                 bundle: bundle,
-                sizeCategory: .large
+                sizeCategory: .large,
+                onScan: { scanTaps += 1 },
+                onManual: { manualTaps += 1 }
             )
             defer { win.isHidden = true }
+
+            let scanTitle = L.s("welcome_scan", bundle: bundle)
+            let manualTitle = L.s("scan_manual_link", bundle: bundle)
+            let desktopTitle = L.s("welcome_desktop_link", bundle: bundle)
+
+            let controls = inspectWelcomeControls(in: screen.welcomeContent(minHeight: 852), expectedManual: manualTitle, expectedDesktop: desktopTitle)
+            let scanBtn = try XCTUnwrap(controls.scanButton, "\(lang): 缺少主按钮")
+            XCTAssertEqual(scanBtn.title, scanTitle)
+            let manualAction = try XCTUnwrap(controls.manualAction, "\(lang): 缺少无法扫码按钮动作")
+            XCTAssertTrue(controls.manualLabelFound, "\(lang): 无法扫码文案不匹配")
+            XCTAssertTrue(controls.shareLabelFound, "\(lang): 电脑端下载分享链接文案不匹配")
+            XCTAssertEqual(controls.shareURLs, [OnboardingFlow.desktopDownloadURL], "\(lang): ShareLink 须绑定电脑端下载链接")
+
+            scanBtn.action()
+            manualAction()
+            XCTAssertEqual(scanTaps, 1, "\(lang): 点击主按钮须触发 onScan")
+            XCTAssertEqual(manualTaps, 1, "\(lang): 点击无法扫码须触发 onManual")
 
             let scanFrame = try XCTUnwrap(baseFrames.scan, "\(lang): 缺少主按钮布局框")
             let manualFrame = try XCTUnwrap(baseFrames.manual, "\(lang): 缺少无法扫码布局框")
@@ -259,15 +344,19 @@ final class OnboardingNavigationTests: XCTestCase {
                 "\(lang): 页脚链接应沉至内容区最底部（desktopMaxY=\(desktopFrame.maxY), contentH=\(baseScroll.contentSize.height)）"
             )
 
-            // 1.5×（小屏 667pt）及最大字号（852pt）下整屏可滚、不截断、不重叠
+            // 1.5×（小屏 667pt）及最大字号（852pt）下整屏可滚、不截断、不重叠、按钮仍可触发
             for (largeSize, viewportH) in [
                 (ContentSizeCategory.accessibilityMedium, CGFloat(667)),
                 (ContentSizeCategory.accessibilityExtraExtraExtraLarge, CGFloat(852)),
             ] {
-                let (lgWin, _, lgScroll, lgFrames) = try hostWelcomeScreen(
+                var lgScanTaps = 0
+                var lgManualTaps = 0
+                let (lgWin, _, lgScroll, lgFrames, lgScreen) = try hostWelcomeScreen(
                     bundle: bundle,
                     sizeCategory: largeSize,
-                    viewportHeight: viewportH
+                    viewportHeight: viewportH,
+                    onScan: { lgScanTaps += 1 },
+                    onManual: { lgManualTaps += 1 }
                 )
                 defer { lgWin.isHidden = true }
 
@@ -291,8 +380,51 @@ final class OnboardingNavigationTests: XCTestCase {
                     28,
                     "\(lang) \(largeSize)@\(viewportH): 大字号滚动时页脚链接仍须保底留白 >= 28pt"
                 )
+
+                let lgControls = inspectWelcomeControls(in: lgScreen.welcomeContent(minHeight: viewportH), expectedManual: manualTitle, expectedDesktop: desktopTitle)
+                try XCTUnwrap(lgControls.scanButton).action()
+                try XCTUnwrap(lgControls.manualAction)()
+                XCTAssertEqual(lgScanTaps, 1)
+                XCTAssertEqual(lgManualTaps, 1)
             }
         }
+    }
+
+    @MainActor
+    func testOnboardingFlowWelcomeButtonsWireIntoScanAndManualSteps() throws {
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first,
+            "宿主 App 必须提供可用的 UIWindowScene"
+        )
+        let app = AppModel(backend: FakeBackend.make(.notPaired))
+        let flowModel = OnboardingFlow.FlowModel()
+        let flow = OnboardingFlow(flowModel: flowModel)
+        let host = UIHostingController(rootView: flow.environmentObject(app))
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        host.view.frame = window.bounds
+        host.view.layoutIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+
+        XCTAssertEqual(flowModel.step, .welcome)
+        let welcomeScreen = OnboardingFlow.makeWelcomeScreen(flowModel: flowModel)
+        let controls = inspectWelcomeControls(
+            in: welcomeScreen.welcomeContent(minHeight: 852),
+            expectedManual: L.s("scan_manual_link"),
+            expectedDesktop: L.s("welcome_desktop_link")
+        )
+        try XCTUnwrap(controls.scanButton).action()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(flowModel.step, .scan, "欢迎页主按钮必须把 OnboardingFlow 切到 .scan")
+
+        flowModel.step = .welcome
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        try XCTUnwrap(controls.manualAction)()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertEqual(flowModel.step, .manual(fromScan: false), "无法扫码链接必须把 OnboardingFlow 切到 .manual(fromScan: false)")
     }
 }
 

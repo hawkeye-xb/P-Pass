@@ -19,9 +19,35 @@ struct OnboardingFlow: View {
         case refused(titleKey: String, note: String?, errorCode: String? = nil), needsUpdate(OutdatedSide), failed(PairFailure)
     }
 
+    final class FlowModel: ObservableObject {
+        @Published var step: Step
+
+        init(step: Step = .welcome) {
+            self.step = step
+        }
+
+        func openScan() {
+            step = OnboardingFlow.welcomeTarget(.scan)
+        }
+
+        func openManual(fromScan: Bool = false) {
+            step = OnboardingFlow.welcomeTarget(.manual)
+            if fromScan { step = .manual(fromScan: true) }
+        }
+    }
+
     @EnvironmentObject var app: AppModel
-    @State private var step: Step = .welcome
+    @StateObject private var flowModel: FlowModel
     @State private var pairTask: Task<Void, Never>?
+
+    init(flowModel: FlowModel = FlowModel()) {
+        _flowModel = StateObject(wrappedValue: flowModel)
+    }
+
+    private var step: Step {
+        get { flowModel.step }
+        nonmutating set { flowModel.step = newValue }
+    }
 
     var body: some View {
         Group {
@@ -57,11 +83,15 @@ struct OnboardingFlow: View {
 
     /// 同 Android WelcomeScreen：顶部字标「P-PASS」，标题衬线 36 压在下半屏，三步是三行 ink-40 小字（不成卡），
     /// 主按钮 64 高 / 19 字与「无法扫码？手动配对」组成配对操作组紧贴；页脚「还没装电脑端？获取下载链接」以 ≥28pt 留白推至底部并弱化为常规字重 ink-40。
-    private var welcome: some View {
+    static func makeWelcomeScreen(flowModel: FlowModel) -> WelcomeScreen {
         WelcomeScreen(
-            onScan: { step = Self.welcomeTarget(.scan) },
-            onManual: { step = Self.welcomeTarget(.manual) }
+            onScan: { flowModel.openScan() },
+            onManual: { flowModel.openManual() }
         )
+    }
+
+    private var welcome: some View {
+        Self.makeWelcomeScreen(flowModel: flowModel)
     }
 
     private func submit(_ code: String) {
@@ -151,56 +181,60 @@ struct WelcomeScreen: View {
         }
     }
 
+    func welcomeContent(minHeight: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(verbatim: "P-PASS").font(PPFont.sans(14, .bold, relativeTo: .subheadline)).kerning(2.5)
+                .foregroundStyle(PPColor.ink60).accessibilityHidden(true)
+            Spacer(minLength: 32)
+            Text(L.s("welcome_headline", bundle: bundle)).font(PPFont.serif(36, .regular, relativeTo: .largeTitle))
+                .lineSpacing(6).fixedSize(horizontal: false, vertical: true)
+            Text(L.s("welcome_sub", bundle: bundle)).font(PPFont.body).foregroundStyle(PPColor.ink60).lineSpacing(6).padding(.top, 12)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(["welcome_step1", "welcome_step2", "welcome_step3"], id: \.self) { key in
+                    Text(L.s(key, bundle: bundle)).font(PPFont.sans(15, relativeTo: .subheadline)).foregroundStyle(PPColor.ink40).lineSpacing(5)
+                }
+            }
+            .padding(.top, 20)
+            PPButton(title: L.s("welcome_scan", bundle: bundle), height: 64, fontSize: 19, action: onScan)
+                .background(captureFrame { WelcomeMeasuredFrames(scan: $0) })
+                .padding(.top, 40)
+                .accessibilityIdentifier("welcomeScanButton")
+            Button(action: onManual) {
+                Text(L.s("scan_manual_link", bundle: bundle))
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .font(PPFont.sans(14, Self.manualLinkWeight, relativeTo: .subheadline))
+            .foregroundStyle(Self.manualLinkColor)
+            .background(captureFrame { WelcomeMeasuredFrames(manual: $0) })
+            .padding(.top, Self.manualLinkTopPadding)
+            .accessibilityIdentifier("welcomeManualLink")
+            Spacer(minLength: Self.desktopLinkMinSpacer)
+            ShareLink(item: OnboardingFlow.desktopDownloadURL) {
+                Text(L.s("welcome_desktop_link", bundle: bundle))
+                    .font(PPFont.sans(14, Self.desktopLinkWeight, relativeTo: .subheadline))
+                    .foregroundStyle(Self.desktopLinkColor)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .font(PPFont.sans(14, Self.desktopLinkWeight, relativeTo: .subheadline))
+            .foregroundStyle(Self.desktopLinkColor)
+            .background(captureFrame { WelcomeMeasuredFrames(desktop: $0) })
+            .accessibilityIdentifier("welcomeDesktopLink")
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .leading)
+        .coordinateSpace(name: "welcomeContent")
+    }
+
     var body: some View {
         GeometryReader { geo in
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(verbatim: "P-PASS").font(PPFont.sans(14, .bold, relativeTo: .subheadline)).kerning(2.5)
-                        .foregroundStyle(PPColor.ink60).accessibilityHidden(true)
-                    Spacer(minLength: 32)
-                    Text(L.s("welcome_headline", bundle: bundle)).font(PPFont.serif(36, .regular, relativeTo: .largeTitle))
-                        .lineSpacing(6).fixedSize(horizontal: false, vertical: true)
-                    Text(L.s("welcome_sub", bundle: bundle)).font(PPFont.body).foregroundStyle(PPColor.ink60).lineSpacing(6).padding(.top, 12)
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(["welcome_step1", "welcome_step2", "welcome_step3"], id: \.self) { key in
-                            Text(L.s(key, bundle: bundle)).font(PPFont.sans(15, relativeTo: .subheadline)).foregroundStyle(PPColor.ink40).lineSpacing(5)
-                        }
-                    }
-                    .padding(.top, 20)
-                    PPButton(title: L.s("welcome_scan", bundle: bundle), height: 64, fontSize: 19, action: onScan)
-                        .background(captureFrame { WelcomeMeasuredFrames(scan: $0) })
-                        .padding(.top, 40)
-                        .accessibilityIdentifier("welcomeScanButton")
-                    Button(action: onManual) {
-                        Text(L.s("scan_manual_link", bundle: bundle))
-                            .multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .font(PPFont.sans(14, Self.manualLinkWeight, relativeTo: .subheadline))
-                    .foregroundStyle(Self.manualLinkColor)
-                    .background(captureFrame { WelcomeMeasuredFrames(manual: $0) })
-                    .padding(.top, Self.manualLinkTopPadding)
-                    .accessibilityIdentifier("welcomeManualLink")
-                    Spacer(minLength: Self.desktopLinkMinSpacer)
-                    ShareLink(item: OnboardingFlow.desktopDownloadURL) {
-                        Text(L.s("welcome_desktop_link", bundle: bundle))
-                            .font(PPFont.sans(14, Self.desktopLinkWeight, relativeTo: .subheadline))
-                            .foregroundStyle(Self.desktopLinkColor)
-                            .multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .font(PPFont.sans(14, Self.desktopLinkWeight, relativeTo: .subheadline))
-                    .foregroundStyle(Self.desktopLinkColor)
-                    .background(captureFrame { WelcomeMeasuredFrames(desktop: $0) })
-                    .accessibilityIdentifier("welcomeDesktopLink")
-                }
-                .padding(32)
-                .frame(maxWidth: .infinity, minHeight: geo.size.height, alignment: .leading)
-                .coordinateSpace(name: "welcomeContent")
+                welcomeContent(minHeight: geo.size.height)
             }
         }
         .ppScreen()
