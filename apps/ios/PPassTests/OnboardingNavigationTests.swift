@@ -157,20 +157,142 @@ final class OnboardingNavigationTests: XCTestCase {
     func testWelcomeDesktopLinkLocalizedInBothLanguages() throws {
         let en = try XCTUnwrap(Bundle.main.path(forResource: "en", ofType: "lproj").flatMap(Bundle.init(path:)))
         let zh = try XCTUnwrap(Bundle.main.path(forResource: "zh-Hans", ofType: "lproj").flatMap(Bundle.init(path:)))
-        XCTAssertEqual(en.localizedString(forKey: "welcome_desktop_link", value: "\u{1}", table: nil), "No desktop app yet? Get the link")
-        XCTAssertEqual(zh.localizedString(forKey: "welcome_desktop_link", value: "\u{1}", table: nil), "还没装电脑端？获取下载链接")
+        XCTAssertEqual(L.s("welcome_desktop_link", bundle: en), "No desktop app yet? Get the link")
+        XCTAssertEqual(L.s("welcome_desktop_link", bundle: zh), "还没装电脑端？获取下载链接")
+        XCTAssertEqual(L.s("scan_manual_link", bundle: en), "Can't scan? Pair manually")
+        XCTAssertEqual(L.s("scan_manual_link", bundle: zh), "无法扫码？手动配对")
+        XCTAssertEqual(L.s("welcome_scan", bundle: en), "Scan to connect to a computer")
+        XCTAssertEqual(L.s("welcome_scan", bundle: zh), "扫码连接电脑")
+    }
+
+    func testWelcomeHierarchyTokensWeakenFooterAndGroupManualLink() {
+        XCTAssertEqual(WelcomeScreen.manualLinkColor, PPColor.ink60)
+        XCTAssertEqual(WelcomeScreen.manualLinkWeight, .bold)
+        XCTAssertTrue((6 ... 8).contains(WelcomeScreen.manualLinkTopPadding))
+        XCTAssertEqual(WelcomeScreen.desktopLinkColor, PPColor.ink40)
+        XCTAssertEqual(WelcomeScreen.desktopLinkWeight, .regular)
+        XCTAssertGreaterThanOrEqual(WelcomeScreen.desktopLinkMinSpacer, 28)
     }
 
     @MainActor
-    func testWelcomeDesktopDownloadURLAndLargeTextHosting() {
-        XCTAssertEqual(OnboardingFlow.desktopDownloadURL, URL(string: "https://p-pass.hawkeye-xb.com"))
-        let app = AppModel(backend: FakeBackend.make(.notPaired))
-        let host = UIHostingController(rootView: OnboardingFlow().environmentObject(app))
+    private func hostWelcomeScreen(
+        bundle: Bundle,
+        sizeCategory: ContentSizeCategory,
+        viewportHeight: CGFloat = 852,
+        onScan: @escaping () -> Void = {},
+        onManual: @escaping () -> Void = {}
+    ) throws -> (window: UIWindow, host: UIHostingController<AnyView>, scrollView: UIScrollView, frames: WelcomeMeasuredFrames) {
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first,
+            "宿主 App 必须提供可用的 UIWindowScene"
+        )
+        var measured = WelcomeMeasuredFrames()
+        let view = AnyView(
+            WelcomeScreen(bundle: bundle, onScan: onScan, onManual: onManual)
+                .environment(\.sizeCategory, sizeCategory)
+                .onPreferenceChange(WelcomeFramePreferenceKey.self) { measured = $0 }
+        )
+        let host = UIHostingController(rootView: view)
         host.additionalSafeAreaInsets = .zero
-        host.view.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: viewportHeight)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
         host.view.setNeedsLayout()
         host.view.layoutIfNeeded()
-        XCTAssertGreaterThan(host.view.bounds.height, 0)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.25))
+        let sv = try XCTUnwrap(firstScrollView(in: host.view), "WelcomeScreen 必须基于 ScrollView 渲染")
+        return (window, host, sv, measured)
+    }
+
+    private func firstScrollView(in root: UIView) -> UIScrollView? {
+        if let sv = root as? UIScrollView { return sv }
+        for sub in root.subviews {
+            if let found = firstScrollView(in: sub) { return found }
+        }
+        return nil
+    }
+
+    @MainActor
+    func testWelcomeLayoutHierarchyScrollingAndInteractionsInBothLanguages() throws {
+        XCTAssertEqual(OnboardingFlow.desktopDownloadURL, URL(string: "https://p-pass.hawkeye-xb.com"))
+        XCTAssertEqual(OnboardingFlow.welcomeTarget(.scan), .scan)
+        XCTAssertEqual(OnboardingFlow.welcomeTarget(.manual), .manual(fromScan: false))
+
+        // 1.5× 动态字号下，body(17pt) 至少放大至 25.5pt（.accessibilityMedium 实测 >= 1.5×）。
+        let scale15Trait = UITraitCollection(preferredContentSizeCategory: .accessibilityMedium)
+        let scaledBody = UIFontMetrics(forTextStyle: .body).scaledValue(for: PPSize.bodyMin, compatibleWith: scale15Trait)
+        XCTAssertGreaterThanOrEqual(scaledBody, PPSize.bodyMin * 1.5)
+
+        let enBundle = try XCTUnwrap(Bundle.main.path(forResource: "en", ofType: "lproj").flatMap(Bundle.init(path:)))
+        let zhBundle = try XCTUnwrap(Bundle.main.path(forResource: "zh-Hans", ofType: "lproj").flatMap(Bundle.init(path:)))
+
+        for (lang, bundle) in [("en", enBundle), ("zh-Hans", zhBundle)] {
+            let (win, _, baseScroll, baseFrames) = try hostWelcomeScreen(
+                bundle: bundle,
+                sizeCategory: .large
+            )
+            defer { win.isHidden = true }
+
+            let scanFrame = try XCTUnwrap(baseFrames.scan, "\(lang): 缺少主按钮布局框")
+            let manualFrame = try XCTUnwrap(baseFrames.manual, "\(lang): 缺少无法扫码布局框")
+            let desktopFrame = try XCTUnwrap(baseFrames.desktop, "\(lang): 缺少电脑端下载链接布局框")
+
+            XCTAssertGreaterThanOrEqual(scanFrame.height, 64, "\(lang): 主按钮高度须 >= 64pt")
+            XCTAssertGreaterThanOrEqual(manualFrame.height, 44, "\(lang): 无法扫码触摸高度须 >= 44pt")
+            XCTAssertGreaterThanOrEqual(desktopFrame.height, 44, "\(lang): 电脑端下载链接触摸高度须 >= 44pt")
+            XCTAssertLessThanOrEqual(scanFrame.maxX, 393)
+            XCTAssertLessThanOrEqual(manualFrame.maxX, 393)
+            XCTAssertLessThanOrEqual(desktopFrame.maxX, 393)
+
+            let manualGap = manualFrame.minY - scanFrame.maxY
+            let footerGap = desktopFrame.minY - manualFrame.maxY
+            XCTAssertGreaterThanOrEqual(manualGap, 4, "\(lang): 主按钮与无法扫码不能重叠")
+            XCTAssertLessThanOrEqual(manualGap, 10, "\(lang): 无法扫码须紧贴主按钮（实际间距 \(manualGap)）")
+            XCTAssertGreaterThanOrEqual(footerGap, 28, "\(lang): 页脚链接与配对操作组留白须 >= 28pt（实际 \(footerGap)）")
+            XCTAssertGreaterThan(footerGap, manualGap * 2, "\(lang): 页脚留白须明显大于操作组内间距")
+            XCTAssertEqual(
+                desktopFrame.maxY,
+                baseScroll.contentSize.height - 32,
+                accuracy: 2,
+                "\(lang): 页脚链接应沉至内容区最底部（desktopMaxY=\(desktopFrame.maxY), contentH=\(baseScroll.contentSize.height)）"
+            )
+
+            // 1.5×（小屏 667pt）及最大字号（852pt）下整屏可滚、不截断、不重叠
+            for (largeSize, viewportH) in [
+                (ContentSizeCategory.accessibilityMedium, CGFloat(667)),
+                (ContentSizeCategory.accessibilityExtraExtraExtraLarge, CGFloat(852)),
+            ] {
+                let (lgWin, _, lgScroll, lgFrames) = try hostWelcomeScreen(
+                    bundle: bundle,
+                    sizeCategory: largeSize,
+                    viewportHeight: viewportH
+                )
+                defer { lgWin.isHidden = true }
+
+                let visibleHeight = lgScroll.bounds.height - lgScroll.adjustedContentInset.top - lgScroll.adjustedContentInset.bottom
+                XCTAssertGreaterThan(
+                    lgScroll.contentSize.height,
+                    visibleHeight,
+                    "\(lang) \(largeSize)@\(viewportH): 大字号下内容超出视口并可纵向滚动（content=\(lgScroll.contentSize.height), visible=\(visibleHeight)）"
+                )
+
+                let lgScan = try XCTUnwrap(lgFrames.scan)
+                let lgManual = try XCTUnwrap(lgFrames.manual)
+                let lgDesktop = try XCTUnwrap(lgFrames.desktop)
+
+                XCTAssertGreaterThanOrEqual(lgScan.height, 64)
+                XCTAssertGreaterThanOrEqual(lgManual.height, 44)
+                XCTAssertGreaterThanOrEqual(lgDesktop.height, 44)
+                XCTAssertLessThanOrEqual(lgScan.maxY, lgManual.minY)
+                XCTAssertGreaterThanOrEqual(
+                    lgDesktop.minY - lgManual.maxY,
+                    28,
+                    "\(lang) \(largeSize)@\(viewportH): 大字号滚动时页脚链接仍须保底留白 >= 28pt"
+                )
+            }
+        }
     }
 }
 
