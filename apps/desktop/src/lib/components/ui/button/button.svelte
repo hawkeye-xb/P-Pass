@@ -29,12 +29,7 @@
 				danger: "h-11 min-h-11 rounded-md border-[1.5px] border-border-strong bg-paper px-[18px] text-[15px] font-semibold text-act hover:border-act hover:bg-act-bg hover:text-act",
 				/* 纯文字链接：不是按钮外观的次要跳转（"看全部""上一步"）；
 				   本身就是紧凑例外，不吃 size=compact。 */
-				link: "h-auto min-h-0 rounded-md border-none bg-transparent px-0 py-[2px] text-[13.5px] font-semibold text-ink-60 hover:bg-transparent hover:text-ink hover:underline hover:underline-offset-[3px]",
-			},
-			/* link 的安全绿变体："一切正常还有 N 台"这类正向次要跳转 */
-			tone: {
-				default: "",
-				safe: "text-safe hover:text-safe",
+				link: "h-auto min-h-0 rounded-md border-none bg-transparent px-0 py-[2px] text-[13.5px] font-semibold text-ink-60 underline decoration-border-strong underline-offset-[4px] hover:bg-transparent hover:text-ink hover:decoration-ink",
 			},
 			size: {
 				/* 默认不覆盖——高度已由 variant 给定 */
@@ -47,19 +42,16 @@
 		},
 		defaultVariants: {
 			variant: "primary",
-			tone: "default",
 			size: "default",
 		},
 	});
 
 	export type ButtonVariant = VariantProps<typeof buttonVariants>["variant"];
-	export type ButtonTone = VariantProps<typeof buttonVariants>["tone"];
 	export type ButtonSize = VariantProps<typeof buttonVariants>["size"];
 
 	export type ButtonProps = WithElementRef<HTMLButtonAttributes> &
 		WithElementRef<HTMLAnchorAttributes> & {
 			variant?: ButtonVariant;
-			tone?: ButtonTone;
 			size?: ButtonSize;
 		};
 </script>
@@ -68,7 +60,6 @@
 	let {
 		class: className,
 		variant = "primary",
-		tone = "default",
 		size = "default",
 		ref = $bindable(null),
 		href = undefined,
@@ -83,7 +74,7 @@
 	<a
 		bind:this={ref}
 		data-slot="button"
-		class={cn(buttonVariants({ variant, tone, size }), className)}
+		class={cn(buttonVariants({ variant, size }), className)}
 		href={disabled ? undefined : href}
 		aria-disabled={disabled}
 		role={disabled ? "link" : undefined}
@@ -96,7 +87,7 @@
 	<button
 		bind:this={ref}
 		data-slot="button"
-		class={cn(buttonVariants({ variant, tone, size }), className)}
+		class={cn(buttonVariants({ variant, size }), className)}
 		{type}
 		{disabled}
 		{...restProps}

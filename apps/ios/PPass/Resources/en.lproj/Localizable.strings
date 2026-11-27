@@ -13,6 +13,7 @@
 "decision_title" = "Choose the photos to back up automatically";
 "decision_destination" = "After you choose albums and a time range, photos in that range are sent to %1$@ each time you open the app.";
 "decision_choose_scope" = "Turn on automatic backup";
+"decision_single_transfer_prompt" = "Or send a few manually";
 "scope_album_no_access_title" = "Photos access is incomplete";
 "scan_manual_title" = "Enter pairing code";
 "scan_manual_body" = "On the computer's \"Add a device\" card, click \"Can't scan? Copy the pairing code\", send it to this phone, and paste it below.";
@@ -86,7 +87,6 @@
 "storage_detail_lost" = "Pairing is no longer valid";
 "storage_detail_offline" = "Not connected · %1$@";
 "hero_of_n" = "/ %1$@ photos backed up";
-"pending_count" = "%1$ld to back up";
 "triplet_unavailable" = "Couldn't read the album photo count.";
 "hero_counts_unreadable" = "The backup record can't be read right now, so progress isn't shown. It will retry when P-Pass is opened.";
 "hero_unreconciled_title" = "Recounting photos";
@@ -163,7 +163,9 @@
 "share_download_failed" = "Couldn't get the original. Try again.";
 "share" = "Share";
 "tab_photos" = "Photos";
-"tab_settings" = "Settings";
+"tab_settings" = "Backup";
+"settings_section_single_transfer" = "Send once";
+"settings_section_preferences" = "Preferences";
 "already_in_gallery" = "Already in Photos";
 "identity_unavailable_title" = "P-Pass can't start right now";
 "identity_unavailable_body" = "A system feature on this phone isn't responding, so P-Pass can't connect to your computer.\n\nTap \"Try again\", or restart the phone and open P-Pass again.";

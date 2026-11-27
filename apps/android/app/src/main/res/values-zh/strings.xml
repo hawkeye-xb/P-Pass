@@ -19,6 +19,7 @@
     <string name="decision_title">选择要自动备份的照片</string>
     <string name="decision_destination">选好相册和时间范围后，每次打开 App，范围内的照片会自动传到 %1$s。</string>
     <string name="decision_choose_scope">开启自动备份</string>
+    <string name="decision_single_transfer_prompt">或先手动传几张</string>
     <string name="scope_album_no_access_title">相册未完整授权</string>
 
     <!-- M3 全页面状态稿：独立子页，不是内联展开。 -->
@@ -128,7 +129,6 @@
     <!-- #1883：电脑此刻连不上。信息卡只陈述事实，不再凭「配对还有效」就说「已连接」（照片页说的是同一件事）。 -->
     <string name="storage_detail_offline">未连接 · %1$s</string>
     <string name="hero_of_n">/ %1$s 张已备份</string>
-    <string name="pending_count">待备份 %1$d 张</string>
     <string name="triplet_unavailable">无法读取相册里的照片数量</string>
     <!-- #1038：账本（order 表）读不出来：不给任何完成度结论。与 triplet_unavailable（读不到相册数量）是两件事。 -->
     <string name="hero_counts_unreadable">备份记录暂时无法读取，不显示备份进度。打开 P-Pass 时会重试。</string>
@@ -264,11 +264,10 @@
     <string name="share">分享</string>
 
     <string name="tab_photos">照片</string>
-    <!-- 2026-08-17：用 claude_design MCP 重新核对设计稿原文，页名/tab
-         名都是静态的「设置」，不随配对失效/电池未加白等状态变红：
-         上一轮按另一份较早的设计稿快照改成了"备份"/红字"备份 !"，
-         这次改回当前设计稿的原文。 -->
-    <string name="tab_settings">设置</string>
+    <!-- #2082：第二 Tab 对齐 tokens.json（Photos / Backup）。 -->
+    <string name="tab_settings">备份</string>
+    <string name="settings_section_single_transfer">单次手动传</string>
+    <string name="settings_section_preferences">偏好与更多</string>
     <!-- MOB-24: 重复保存时说人话，别再写一份重复文件。 -->
     <string name="already_in_gallery">相册中已有这张照片</string>
     <!-- #1106: 设备身份读不出来时的拒绝启动页。 -->

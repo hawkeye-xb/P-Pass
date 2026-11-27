@@ -29,6 +29,20 @@ function backupResult(counts) {
   return parts.length ? parts.join(t("ui.audit_part_sep")) : t("ui.audit_backup_done");
 }
 
+export function auditActorParts(event, devices) {
+  const payload = event?.payload ?? {};
+  const actor = event?.actor;
+  const device = devices.find((item) => item.node_id === actor);
+  if (device) return { name: device.name, shortId: `#${actor.slice(0, 8)}` };
+  if (event?.kind?.startsWith("pair.") && payload.deviceName) {
+    return { name: payload.deviceName, shortId: null };
+  }
+  if (actor) {
+    return { name: t("ui.audit_unknown_device_name"), shortId: `#${actor.slice(0, 8)}` };
+  }
+  return { name: t("ui.audit_local"), shortId: null };
+}
+
 export function auditWho(event, devices) {
   const payload = event?.payload ?? {};
   const actor = event?.actor;

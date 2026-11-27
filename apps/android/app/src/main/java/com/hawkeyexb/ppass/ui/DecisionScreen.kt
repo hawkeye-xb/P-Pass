@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -51,7 +52,13 @@ fun DecisionScreen(
                 )
                 Spacer(Modifier.height(40.dp))
                 PrimaryButton(stringResource(R.string.decision_choose_scope), onChooseScope, enabled = !busy)
-                Spacer(Modifier.height(18.dp))
+                Spacer(Modifier.height(28.dp))
+                Text(
+                    stringResource(R.string.decision_single_transfer_prompt),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = PPColor.Ink40,
+                )
+                Spacer(Modifier.height(8.dp))
                 androidx.compose.material3.Surface(
                     color = PPColor.Paper,
                     shape = androidx.compose.foundation.shape.RoundedCornerShape(PPSize.RadiusCard),

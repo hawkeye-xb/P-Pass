@@ -3,16 +3,17 @@ package com.hawkeyexb.ppass.ui
 import com.hawkeyexb.ppass.R
 
 internal object SettingsLayout {
-    enum class Group { BACKUP, SELECTION, CONDITIONS }
+    enum class Group(val headerRes: Int? = null) {
+        BACKUP(null),
+        SELECTION(R.string.settings_section_single_transfer),
+        CONDITIONS(R.string.settings_section_preferences),
+    }
     enum class Backup { RULE, SCOPE, BACKGROUND }
     enum class Condition { WIFI, NOTIFICATIONS, MORE }
 
     enum class Selection(val labelRes: Int) {
         PHOTOS(R.string.pick_from_photos_label),
         FILES(R.string.pick_from_files_label);
-
-        fun isHeading(photoPickerAvailable: Boolean): Boolean =
-            if (photoPickerAvailable) this == PHOTOS else this == FILES
 
         fun request(photos: () -> Unit, files: () -> Unit) {
             when (this) {

@@ -7,7 +7,7 @@ import XCTest
 /// 宿主经 xcodebuild 的 `TEST_RUNNER_<键>` 环境变量传入（测试进程里去掉前缀）：
 ///   UIREG_PAIR_LINK       配对串（ppf://pair?…，每个用例一条新的）
 ///   UIREG_INVERT          反证：等于本用例名时，系统弹窗故意点反向选项（判定期望不变 ⇒ 该用例必须 FAIL）
-///   UIREG_SETTINGS_TAB    「设置」标签页的显示文字，中英用 | 分隔（取自 App 的 Localizable.strings）
+///   UIREG_SETTINGS_TAB    「备份」标签页的显示文字，中英用 | 分隔（取自 App 的 Localizable.strings）
 ///   UIREG_NOTIFY_LABEL    「通知」开关的显示文字，同上
 /// 测试打到 stdout 的 `UIREG <事件>` 行由宿主读（验证码就走这条：`UIREG PAIR_CODE=<6 位>`）。
 enum UIReg {
@@ -518,18 +518,18 @@ class UIRegressCase: XCTestCase {
     // MARK: 设置页
 
     func openSettingsTab() {
-        for label in UIReg.labels("UIREG_SETTINGS_TAB", fallback: ["设置", "Settings"]) {
+        for label in UIReg.labels("UIREG_SETTINGS_TAB", fallback: ["备份", "Backup"]) {
             let b = app.tabBars.buttons[label]
             // 清场紧贴点击：等待的这两秒里系统也可能把照片框弹出来，弹框在场时点击会被吞掉（#1844）。
             if b.waitForExistence(timeout: 2) { clearSystemAlertsIfAny("before:settings-tab"); b.tap(); UIReg.say("SETTINGS_OPEN"); return }
         }
         // iOS 26 的标签栏不一定是 tabBars：退回按文字找按钮。
-        for label in UIReg.labels("UIREG_SETTINGS_TAB", fallback: ["设置", "Settings"]) {
+        for label in UIReg.labels("UIREG_SETTINGS_TAB", fallback: ["备份", "Backup"]) {
             let b = app.buttons[label]
             if b.exists { clearSystemAlertsIfAny("before:settings-tab"); b.tap(); UIReg.say("SETTINGS_OPEN"); return }
         }
         dump("settings-tab")
-        XCTFail("找不到「设置」标签")
+        XCTFail("找不到「备份」标签")
     }
 
     /// 决定页选「先挑几张试试」选 1 张 → 进照片页 → 设置页。用于要先到主界面的用例。

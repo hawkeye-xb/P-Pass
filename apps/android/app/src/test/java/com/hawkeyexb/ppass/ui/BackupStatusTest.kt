@@ -1,6 +1,10 @@
 package com.hawkeyexb.ppass.ui
 
 import com.hawkeyexb.ppass.R
+import com.hawkeyexb.ppass.backup.BackupTriplet
+import com.hawkeyexb.ppass.backup.MediaAccess
+import com.hawkeyexb.ppass.backup.flow.WaitReason
+import com.hawkeyexb.ppass.backup.tripletOf
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -94,14 +98,78 @@ class BackupStatusTest {
         assertEquals(listOf("b"), filterTimeline(items, TimelineFilter.Family, mine) { it })
     }
 
-    // ── 工具：解析真实 values-zh/strings.xml（同 StringsSymmetryTest 手法）──
+    // ── #2082：英雄卡四档底色状态机 + 去重 + 备份 Tab / 分组标题文案 ──
 
-    private fun zhStrings(): Map<String, String> {
+    @Test
+    fun hero_surface_tone_matrix_enforces_four_semantic_tones() {
+        val done = tripletOf(n = 10L, confirmedCount = 10L, lastSuccessAt = 1L)
+        val pending = tripletOf(n = 10L, confirmedCount = 4L, lastSuccessAt = 1L)
+        val zero = tripletOf(n = 0L, confirmedCount = 0L, lastSuccessAt = 0L)
+        val unreconciled = tripletOf(n = 10L, confirmedCount = 20L, lastSuccessAt = 1L)
+
+        // !autoRule 一律 neutral
+        assertEquals(HeroSurfaceTone.Neutral, heroSurfaceTone(false, HeroRender.AccessBlocked, false, BackupUiState.Idle, done, false, false))
+        assertEquals(HeroSurfaceTone.Neutral, heroSurfaceTone(false, HeroRender.Triplet, false, BackupUiState.Waiting(WaitReason.WIFI), pending, false, false))
+        assertEquals(HeroSurfaceTone.Neutral, heroSurfaceTone(false, HeroRender.Triplet, false, BackupUiState.AllSafe(10, 0), done, false, true))
+
+        // act：权限阻断或混合相册不完整
+        assertEquals(HeroSurfaceTone.Act, heroSurfaceTone(true, HeroRender.AccessBlocked, false, BackupUiState.Idle, done, false, false))
+        assertEquals(HeroSurfaceTone.Act, heroSurfaceTone(true, HeroRender.Triplet, true, BackupUiState.Sending(1, 2, "a.jpg"), pending, false, false))
+
+        // waiting：对账中 / 等待中 / 已暂停 / 进行中 / k > 0 / 版本等待
+        assertEquals(HeroSurfaceTone.Waiting, heroSurfaceTone(true, HeroRender.Unreconciled, false, BackupUiState.Idle, unreconciled, false, false))
+        assertEquals(HeroSurfaceTone.Waiting, heroSurfaceTone(true, HeroRender.Triplet, false, BackupUiState.Waiting(WaitReason.WIFI), done, false, true))
+        assertEquals(HeroSurfaceTone.Waiting, heroSurfaceTone(true, HeroRender.Triplet, false, BackupUiState.Paused, done, false, false))
+        assertEquals(HeroSurfaceTone.Waiting, heroSurfaceTone(true, HeroRender.Triplet, false, BackupUiState.Preparing, done, false, true))
+        assertEquals(HeroSurfaceTone.Waiting, heroSurfaceTone(true, HeroRender.Triplet, false, BackupUiState.Sending(1, 2, "a.jpg"), done, false, true))
+        assertEquals(HeroSurfaceTone.Waiting, heroSurfaceTone(true, HeroRender.Triplet, false, BackupUiState.Idle, pending, false, true))
+        assertEquals(HeroSurfaceTone.Waiting, heroSurfaceTone(true, HeroRender.Triplet, false, BackupUiState.AllSafe(10, 0), done, false, true, hasWaitReason = true))
+
+        // neutral：未选范围 / 计数不可读 / 读不出 / 从今天起空态 / 失败态 / allSafeAllowed == false
+        assertEquals(HeroSurfaceTone.Neutral, heroSurfaceTone(true, HeroRender.NoAlbums, false, BackupUiState.NoAlbums, null, false, false))
+        assertEquals(HeroSurfaceTone.Neutral, heroSurfaceTone(true, HeroRender.CountsUnreadable, false, BackupUiState.Idle, null, false, false))
+        assertEquals(HeroSurfaceTone.Neutral, heroSurfaceTone(true, HeroRender.Unreadable, false, BackupUiState.Idle, null, false, false))
+        assertEquals(HeroSurfaceTone.Neutral, heroSurfaceTone(true, HeroRender.Triplet, false, BackupUiState.Idle, zero, true, true))
+        assertEquals(HeroSurfaceTone.Neutral, heroSurfaceTone(true, HeroRender.Triplet, false, BackupUiState.Trouble("err"), done, false, true))
+        assertEquals(HeroSurfaceTone.Neutral, heroSurfaceTone(true, HeroRender.Triplet, false, BackupUiState.AllSafe(10, 0), done, false, false))
+
+        // safe：仅 allSafeAllowed 且无等待/进行中/异常
+        assertEquals(HeroSurfaceTone.Safe, heroSurfaceTone(true, HeroRender.Triplet, false, BackupUiState.AllSafe(10, 0), done, false, true))
+
+        // 底色与分隔线 token 映射
+        assertEquals(PPColor.ActBg, heroSurfaceBackground(HeroSurfaceTone.Act))
+        assertEquals(PPColor.WaitingBg, heroSurfaceBackground(HeroSurfaceTone.Waiting))
+        assertEquals(PPColor.Linen, heroSurfaceBackground(HeroSurfaceTone.Neutral))
+        assertEquals(PPColor.SafeBg, heroSurfaceBackground(HeroSurfaceTone.Safe))
+        assertEquals(PPColor.Hairline, heroSurfaceDivider(HeroSurfaceTone.Neutral))
+    }
+
+    @Test
+    fun mobile_visual_hierarchy_copy_matches_both_languages_and_drops_pending_count() {
+        val zh = stringsFor("values-zh")
+        val en = stringsFor("values")
+        assertFalse("pending_count 已移除以消除重复待备份拼接", zh.containsKey("pending_count"))
+        assertFalse("pending_count 已移除以消除重复待备份拼接", en.containsKey("pending_count"))
+        assertEquals("备份", zh["tab_settings"])
+        assertEquals("Backup", en["tab_settings"])
+        assertEquals("单次手动传", zh["settings_section_single_transfer"])
+        assertEquals("Send once", en["settings_section_single_transfer"])
+        assertEquals("偏好与更多", zh["settings_section_preferences"])
+        assertEquals("Preferences", en["settings_section_preferences"])
+        assertEquals("或先手动传几张", zh["decision_single_transfer_prompt"])
+        assertEquals("Or send a few manually", en["decision_single_transfer_prompt"])
+    }
+
+    // ── 工具：解析真实 values{-zh,}/strings.xml（同 StringsSymmetryTest 手法）──
+
+    private fun zhStrings(): Map<String, String> = stringsFor("values-zh")
+
+    private fun stringsFor(localeDir: String): Map<String, String> {
         var dir = File(System.getProperty("user.dir"))
         while (!File(dir, "apps/android").isDirectory) {
             dir = dir.parentFile ?: error("apps/android not found above ${System.getProperty("user.dir")}")
         }
-        val xml = File(dir, "apps/android/app/src/main/res/values-zh/strings.xml")
+        val xml = File(dir, "apps/android/app/src/main/res/$localeDir/strings.xml")
         val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(xml)
         val nodes = doc.getElementsByTagName("string")
         val result = LinkedHashMap<String, String>()

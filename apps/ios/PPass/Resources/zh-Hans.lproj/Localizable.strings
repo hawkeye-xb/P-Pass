@@ -13,6 +13,7 @@
 "decision_title" = "选择要自动备份的照片";
 "decision_destination" = "选好相册和时间范围后，每次打开 App，范围内的照片会自动传到 %1$@。";
 "decision_choose_scope" = "开启自动备份";
+"decision_single_transfer_prompt" = "或先手动传几张";
 "scope_album_no_access_title" = "相册未完整授权";
 "scan_manual_title" = "输入配对码";
 "scan_manual_body" = "在电脑的「添加设备」里点「无法扫码？复制配对码」，把它发到这台手机上，粘贴到下面。";
@@ -86,7 +87,6 @@
 "storage_detail_lost" = "配对已失效";
 "storage_detail_offline" = "未连接 · %1$@";
 "hero_of_n" = "/ %1$@ 张已备份";
-"pending_count" = "待备份 %1$ld 张";
 "triplet_unavailable" = "无法读取相册里的照片数量";
 "hero_counts_unreadable" = "备份记录暂时无法读取，不显示备份进度。打开 P-Pass 时会重试。";
 "hero_unreconciled_title" = "正在重新统计照片";
@@ -163,7 +163,9 @@
 "share_download_failed" = "无法获取原图，请重试。";
 "share" = "分享";
 "tab_photos" = "照片";
-"tab_settings" = "设置";
+"tab_settings" = "备份";
+"settings_section_single_transfer" = "单次手动传";
+"settings_section_preferences" = "偏好与更多";
 "already_in_gallery" = "相册中已有这张照片";
 "identity_unavailable_title" = "P-Pass 暂时无法启动";
 "identity_unavailable_body" = "手机的一项系统功能没有响应，P-Pass 暂时无法连接电脑。\n\n请点「重试」，或重启手机后再打开 P-Pass。";

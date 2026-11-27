@@ -215,6 +215,8 @@ msg_keys! {
     // ── NET-13: 设备页——打开该设备存储目录 ────────────────────────
     /// 设备行「打开文件夹」按钮的 title——揭示 originals/<node_id>/。
     UI_DEVICE_OPEN_FOLDER => "ui.device_open_folder",
+    /// 设备行「文件夹」按钮的简洁可见标签（完整设备名仍在 aria-label/title）。
+    UI_DEVICE_FOLDER_BTN => "ui.device_folder_btn",
     /// 打开设备文件夹失败时的错误提示。
     UI_DEVICE_OPEN_FOLDER_FAILED => "ui.device_open_folder_failed",
     /// #413 §7: desktop system notification when the photo library's
@@ -268,6 +270,7 @@ msg_keys! {
     UI_AUDIT_PART_SEP => "ui.audit_part_sep",
     UI_AUDIT_BACKUP_DONE => "ui.audit_backup_done",
     UI_AUDIT_UNKNOWN_DEVICE => "ui.audit_unknown_device",
+    UI_AUDIT_UNKNOWN_DEVICE_NAME => "ui.audit_unknown_device_name",
     UI_AUDIT_LOCAL => "ui.audit_local",
     UI_AUDIT_PAIR_REQUESTED => "ui.audit_pair_requested",
     UI_AUDIT_PAIR_ACCEPTED => "ui.audit_pair_accepted",
@@ -636,6 +639,7 @@ mod tests {
             UI_LIBRARY_DELETE_WARN,
             UI_LIBRARY_DELETE_WARN_DISMISS,
             UI_DEVICE_OPEN_FOLDER,
+            UI_DEVICE_FOLDER_BTN,
             UI_DEVICE_OPEN_FOLDER_FAILED,
             UI_LOW_SPACE_TITLE,
             UI_LOW_SPACE_BODY,
@@ -680,6 +684,7 @@ mod tests {
             UI_AUDIT_PART_SEP,
             UI_AUDIT_BACKUP_DONE,
             UI_AUDIT_UNKNOWN_DEVICE,
+            UI_AUDIT_UNKNOWN_DEVICE_NAME,
             UI_AUDIT_LOCAL,
             UI_AUDIT_PAIR_REQUESTED,
             UI_AUDIT_PAIR_ACCEPTED,
@@ -896,7 +901,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 383);
+        assert_eq!(ALL.len(), 385);
     }
 
     #[test]

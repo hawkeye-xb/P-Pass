@@ -222,9 +222,45 @@ internal fun HomeScreen(
             .verticalScroll(rememberScrollState())
             .padding(20.dp, 14.dp, 20.dp, 8.dp),
     ) {
+        val t = triplet
         val heroBlocked = autoBackupRuleOn && mediaAccess != MediaAccess.FULL && !hasUsableSource && hasSelectedAlbum
+        val heroRender = heroRenderOf(
+            mediaAccess,
+            t,
+            countsReadable = countsReadable,
+            scopeSaved = scopeSaved,
+            hasUsableSource = hasUsableSource,
+            hasSelectedAlbum = hasSelectedAlbum,
+        )
+        val fromTodayEmpty = showsFromTodayEmpty(heroRender, t, scopeHasStart)
+        val waitReason = visibleOutdatedSide(outdated, mediaAccess, connection.needsRepair)?.let(::outdatedTextRes)
+            ?: visibleWaitReasonRes(
+                state = state,
+                mediaAccess = mediaAccess,
+                pairingLost = connection.needsRepair,
+                reasonRes = waitReasonRes,
+                wifiOnly = wifiOnly,
+                hasUsableSource = hasUsableSource,
+                pickedOpen = (pickedBatch?.open ?: 0) > 0,
+            )
+        val allSafeAllowed = allSafeTextAllowed(
+            mediaAccess = mediaAccess,
+            triplet = t,
+            pairingLost = connection.needsRepair,
+            missingSourceCount = missingSourceNotice?.count ?: 0,
+        )
+        val heroTone = heroSurfaceTone(
+            autoRule = autoBackupRuleOn,
+            render = heroRender,
+            mixedAlbumIncomplete = mixedAlbumIncomplete,
+            state = state,
+            triplet = t,
+            fromTodayEmpty = fromTodayEmpty,
+            allSafeAllowed = allSafeAllowed,
+            hasWaitReason = waitReason != null,
+        )
         Surface(
-            color = if (heroBlocked) PPColor.ActBg else PPColor.SafeBg,
+            color = heroSurfaceBackground(heroTone),
             shape = RoundedCornerShape(PPSize.RadiusCard),
             modifier = Modifier.fillMaxWidth(),
         ) {
@@ -254,10 +290,7 @@ internal fun HomeScreen(
                         ) { Text(stringResource(R.string.auto_backup_blocked_action), fontSize = 15.sp, fontWeight = FontWeight.Bold) }
                     }
                 } else {
-                val t = triplet
-                val heroRender = heroRenderOf(mediaAccess, t, countsReadable = countsReadable, scopeSaved = scopeSaved,
-                    hasUsableSource = hasUsableSource, hasSelectedAlbum = hasSelectedAlbum)
-                if (showsFromTodayEmpty(heroRender, t, scopeHasStart)) {
+                if (fromTodayEmpty) {
                     Text(stringResource(R.string.auto_backup_from_today_empty), color = PPColor.Ink, fontSize = 15.sp)
                 } else if (heroRender == HeroRender.Triplet && t != null) {
                     val numberColor = heroNumberColor(mediaAccess, t, connection)
@@ -275,12 +308,8 @@ internal fun HomeScreen(
                         )
                     }
                     Spacer(Modifier.height(6.dp))
-                    val lastText = lastSuccessText(t.lastSuccessAt)
-                    val pendingSuffix = if (t.k > 0) {
-                        " · " + stringResource(R.string.pending_count, t.k)
-                    } else ""
                     Text(
-                        lastText + pendingSuffix,
+                        lastSuccessText(t.lastSuccessAt),
                         fontSize = 14.sp, color = PPColor.Ink60,
                     )
                 } else if (heroRender == HeroRender.Unreconciled) {
@@ -309,7 +338,7 @@ internal fun HomeScreen(
 
                 if (!autoBackupRuleOn || !heroBlocked) {
                 Spacer(Modifier.height(14.dp))
-                HorizontalDivider(color = PPColor.Safe.copy(alpha = 0.18f))
+                HorizontalDivider(color = heroSurfaceDivider(heroTone))
                 Spacer(Modifier.height(12.dp))
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -355,22 +384,6 @@ internal fun HomeScreen(
                                 Spacer(Modifier.fillMaxWidth().height(barHeight))
                             }
                         } else {
-                            val waitReason = visibleOutdatedSide(outdated, mediaAccess, connection.needsRepair)?.let(::outdatedTextRes)
-                                ?: visibleWaitReasonRes(
-                                    state = state,
-                                    mediaAccess = mediaAccess,
-                                    pairingLost = connection.needsRepair,
-                                    reasonRes = waitReasonRes,
-                                    wifiOnly = wifiOnly,
-                                    hasUsableSource = hasUsableSource,
-                                    pickedOpen = (pickedBatch?.open ?: 0) > 0,
-                                )
-                            val allSafeAllowed = allSafeTextAllowed(
-                                mediaAccess = mediaAccess,
-                                triplet = triplet,
-                                pairingLost = connection.needsRepair,
-                                missingSourceCount = missingSourceNotice?.count ?: 0,
-                            )
                             val idleLine: String? = when {
                                 waitReason != null -> stringResource(waitReason)
                                 !autoBackupRuleOn -> when (line) {
@@ -661,6 +674,10 @@ internal fun HomeScreen(
         }
 
         Spacer(Modifier.height(18.dp))
+        SettingsLayout.Group.SELECTION.headerRes?.let { headerRes ->
+            SettingsSectionHeader(stringResource(headerRes))
+            Spacer(Modifier.height(8.dp))
+        }
         val photoPickerAvailable = SingleTransferFilePicker.hasDedicatedPhotoPicker(LocalContext.current)
         val selectionRows = SettingsLayout.selectionRows(photoPickerAvailable)
         Surface(
@@ -675,13 +692,16 @@ internal fun HomeScreen(
                     CellRow(
                         label = stringResource(entry.labelRes),
                         onClick = { entry.request(photos = onPickPhotos, files = onPickFiles) },
-                        heading = entry.isHeading(photoPickerAvailable),
                     )
                 }
             }
         }
 
         Spacer(Modifier.height(18.dp))
+        SettingsLayout.Group.CONDITIONS.headerRes?.let { headerRes ->
+            SettingsSectionHeader(stringResource(headerRes))
+            Spacer(Modifier.height(8.dp))
+        }
         Surface(
             color = PPColor.Paper,
             shape = RoundedCornerShape(PPSize.RadiusCard),
@@ -693,7 +713,6 @@ internal fun HomeScreen(
                     label = stringResource(R.string.setting_wifi_only),
                     checked = wifiOnly,
                     onCheckedChange = onWifiOnlyChange,
-                    heading = true,
                 )
                 HorizontalDivider(color = PPColor.Divider)
                 RuleSwitchRow(
@@ -1039,6 +1058,18 @@ internal fun groupThousands(n: Long): String =
     java.text.NumberFormat.getIntegerInstance().format(n)
 
 private val CellRowHeight = 52.dp
+
+@Composable
+private fun SettingsSectionHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.labelSmall,
+        color = PPColor.Ink40,
+        modifier = Modifier
+            .padding(horizontal = 4.dp)
+            .semantics { heading() },
+    )
+}
 
 @Composable
 private fun RuleSwitchRow(

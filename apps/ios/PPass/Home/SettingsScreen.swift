@@ -111,30 +111,49 @@ struct SettingsScreen: View {
 
     private var settingsSection: some View {
         ForEach(SettingsLayout.sections, id: \.self) { group in
-            Section {
-                switch group {
-                case .backup: backupRows
-                case .selection:
-                    ForEach(SettingsLayout.selectionRows, id: \.self) { entry in
-                        Button {
-                            entry.request(photos: { app.pickerRequested = true }, files: { showFilePicker = true })
-                        } label: {
-                            Text(L.s(entry.labelKey))
-                                .font(Self.labelFont)
-                                .foregroundStyle(PPColor.ink)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
-                        }
-                        .accessibilityIdentifier(entry.accessibilityID)
-                    }
-                case .conditions:
-                    ForEach(SettingsLayout.conditionRows, id: \.self) { condition in
-                        conditionRow(condition)
-                    }
+            if let headerKey = group.headerKey {
+                Section {
+                    sectionBody(for: group)
+                } header: {
+                    sectionHeader(L.s(headerKey))
                 }
+                .ppTinted(PPUI.Surface.settingsCard)
+            } else {
+                Section {
+                    sectionBody(for: group)
+                }
+                .ppTinted(PPUI.Surface.settingsCard)
             }
-            .ppTinted(PPUI.Surface.settingsCard)
         }
+    }
+
+    @ViewBuilder private func sectionBody(for group: SettingsLayout.Group) -> some View {
+        switch group {
+        case .backup: backupRows
+        case .selection:
+            ForEach(SettingsLayout.selectionRows, id: \.self) { entry in
+                SingleTransferSelectionRow(
+                    title: L.s(entry.labelKey),
+                    horizontalPadding: 0,
+                    minHeight: nil
+                ) {
+                    entry.request(photos: { app.pickerRequested = true }, files: { showFilePicker = true })
+                }
+                .accessibilityIdentifier(entry.accessibilityID)
+            }
+        case .conditions:
+            ForEach(SettingsLayout.conditionRows, id: \.self) { condition in
+                conditionRow(condition)
+            }
+        }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(PPFont.footnote)
+            .foregroundStyle(PPColor.ink40)
+            .textCase(nil)
+            .accessibilityAddTraits(.isHeader)
     }
 
     @ViewBuilder private var backupRows: some View {

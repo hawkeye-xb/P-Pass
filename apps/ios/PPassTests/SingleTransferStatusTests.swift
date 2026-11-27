@@ -9,6 +9,24 @@ final class SingleTransferStatusTests: XCTestCase {
     func testSettingsGroupsAreFixedAndInOrder() {
         XCTAssertEqual(SettingsLayout.sections, [.backup, .selection, .conditions])
         XCTAssertEqual(SettingsLayout.conditionRows, [.wifi, .notifications, .more])
+        XCTAssertNil(SettingsLayout.Group.backup.headerKey)
+        XCTAssertEqual(SettingsLayout.Group.selection.headerKey, "settings_section_single_transfer")
+        XCTAssertEqual(SettingsLayout.Group.conditions.headerKey, "settings_section_preferences")
+    }
+
+    func testVisualHierarchyCopyAndBackupTabSymbol() throws {
+        let en = try XCTUnwrap(Bundle.main.path(forResource: "en", ofType: "lproj").flatMap(Bundle.init(path:)))
+        let zh = try XCTUnwrap(Bundle.main.path(forResource: "zh-Hans", ofType: "lproj").flatMap(Bundle.init(path:)))
+        XCTAssertEqual(en.localizedString(forKey: "settings_section_single_transfer", value: "\u{1}", table: nil), "Send once")
+        XCTAssertEqual(zh.localizedString(forKey: "settings_section_single_transfer", value: "\u{1}", table: nil), "单次手动传")
+        XCTAssertEqual(en.localizedString(forKey: "settings_section_preferences", value: "\u{1}", table: nil), "Preferences")
+        XCTAssertEqual(zh.localizedString(forKey: "settings_section_preferences", value: "\u{1}", table: nil), "偏好与更多")
+        XCTAssertEqual(en.localizedString(forKey: "decision_single_transfer_prompt", value: "\u{1}", table: nil), "Or send a few manually")
+        XCTAssertEqual(zh.localizedString(forKey: "decision_single_transfer_prompt", value: "\u{1}", table: nil), "或先手动传几张")
+        XCTAssertEqual(en.localizedString(forKey: "tab_settings", value: "\u{1}", table: nil), "Backup")
+        XCTAssertEqual(zh.localizedString(forKey: "tab_settings", value: "\u{1}", table: nil), "备份")
+        XCTAssertFalse(MainTabs.backupTabSymbol.lowercased().contains("cloud"))
+        XCTAssertEqual(MainTabs.backupTabSymbol, "arrow.triangle.2.circlepath")
     }
 
     func testBackupScopeRowRequiresAutoBackupRule() {

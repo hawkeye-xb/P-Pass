@@ -23,12 +23,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -84,11 +81,7 @@ fun TwoTabs(
                     ) { onTab(0) }
                     TabCell(
                         stringResource(R.string.tab_settings), tab == 1, Modifier.weight(1f),
-                        icon = { tint ->
-                            // UI-13: 齿轮手绘 Canvas 已删除——material-icons-core
-                            // 自带 Settings，零额外体积（随 material3 传递依赖）。
-                            Icon(Icons.Filled.Settings, contentDescription = null, tint = tint)
-                        },
+                        icon = { tint -> BackupTabIcon(tint) },
                         alert = settingsAlert,
                     ) { onTab(1) }
                 }

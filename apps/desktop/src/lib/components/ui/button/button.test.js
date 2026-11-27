@@ -40,9 +40,12 @@ describe("Button 组件合同", () => {
     expect(cls.has("h-11")).toBe(false);
   });
 
-  it("link tone=safe：正向次要跳转用安全绿，不是中性灰", () => {
-    const cls = tokens(buttonVariants({ variant: "link", tone: "safe" }));
-    expect(cls.has("text-safe")).toBe(true);
+  it("link：默认带克制下划线、居中灰墨色且悬停加黑下划线，不再提供安全绿 tone", () => {
+    const cls = tokens(buttonVariants({ variant: "link", size: "default" }));
+    expect(cls.has("underline")).toBe(true);
+    expect(cls.has("decoration-border-strong")).toBe(true);
+    expect(cls.has("text-ink-60")).toBe(true);
+    expect(cls.has("text-safe")).toBe(false);
   });
 
   it("size=compact 是显式例外，且不覆盖 link 自己的紧凑高度", () => {
