@@ -155,8 +155,11 @@ class TwoTabsComposeTest {
         val settingsLabel = locCtx.getString(R.string.tab_settings)
         val tabRoleMatcher = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
 
-        // 1. 初始状态：照片选中、备份未选中，无红点角标
+        // 1. 初始状态：底部栏暴露 selectableGroup 成组语义，照片选中、备份未选中，无红点角标
         compose.onNodeWithText("photos-pane").assertIsDisplayed()
+        compose.onNodeWithTag("two_tabs_bar")
+            .assertIsDisplayed()
+            .assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.SelectableGroup))
         compose.onNodeWithTag("tab_cell_photos")
             .assertIsDisplayed()
             .assertHeightIsAtLeast(48.dp)

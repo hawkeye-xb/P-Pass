@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.HorizontalDivider
@@ -83,6 +84,7 @@ fun TwoTabs(
                         .fillMaxWidth()
                         .height(64.dp)
                         .background(PPColor.Paper)
+                        .selectableGroup()
                         .testTag("two_tabs_bar"),
                 ) {
                     TabCell(
