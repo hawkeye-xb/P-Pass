@@ -322,12 +322,8 @@
     .then((v) => (installedVersion = v || ""))
     .catch(() => {});
   // UPD-06 (#616): **版本真相源**——壳版本与服务版本分开，不再互相冒充。
-  // 旧实现 displayVersion = status?.version || version（服务优先）会让"装完壳没换"
-  // 显示成新版本号（看着像升级成功），再点检查更新又提示同一个更新（0.7.4↔0.7.5
-  // 真机鬼打墙）。现在：页脚显示真实运行版本，混版本时两个都摆出来。
   const shellVersion = $derived(version);
   const serviceVersion = $derived(status?.version || "");
-  const displayVersion = $derived(serviceVersion || shellVersion);
   // #1044 B13：壳与内核的版本关系由 daemon 下结论（status.shell_relation：
   // same / shell_older / shell_newer；壳没报版本时为 null = 不提示）。
   const shellRelation = $derived(status?.shell_relation ?? null);
@@ -547,9 +543,48 @@
   // 取所有设备水位里 last_backup_at 最大的那条，真实数据，没有就
   // 优雅退回旧文案（没备份过/watermarks 还没加载完时不假装有数据）。
   // #1066：由 daemon 在 devices.list 里给结论（{at, name} | null），前端不再拿水位推导。
+  let contentEl = $state(null);
+  let contentHeight = $state(0);
+  let contentWidth = $state(0);
+  $effect(() => {
+    const el = contentEl;
+    if (!el) return;
+    const updateSize = () => {
+      contentHeight = el.clientHeight || 0;
+      contentWidth = Math.max(0, (el.clientWidth || 0) - 76);
+    };
+    updateSize();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      contentHeight = el.clientHeight || rect?.height || 0;
+      contentWidth = rect?.width ?? Math.max(0, (el.clientWidth || 0) - 76);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+
+  const isWideOverview = $derived(contentWidth >= 760);
+  const overviewAvailH = $derived(
+    isWideOverview
+      ? Math.max(0, contentHeight - 320)
+      : Math.max(0, contentHeight - 360) / 2,
+  );
+  const overviewDeviceLimit = $derived(
+    Math.max(1, Math.floor(overviewAvailH / 68)),
+  );
+  const overviewAuditLimit = $derived(
+    Math.max(1, Math.min(isWideOverview ? 12 : 8, Math.floor(overviewAvailH / 38))),
+  );
+
   const lastBackupOverall = $derived(lastBackupOverallWire);
   const deviceGroups = $derived(deviceGroupsOf(devices, byActivity));
-  const waterRows = $derived(overviewRows(devices, watermarks, nowMs));
+  const waterRows = $derived(overviewRows(devices, watermarks, nowMs, overviewDeviceLimit));
+  const overviewAlertCount = $derived(
+    devices.filter(
+      (d) => d.removal === "none" && deviceRow(d, watermarks[d.node_id], nowMs).alert,
+    ).length,
+  );
 
   // auto = 快到期时的自动换码（计次、失败不弹提示：码到期后自会盖住，给刷新按钮）。
   async function startPairing({ auto = false } = {}) {
@@ -1711,7 +1746,8 @@
 
     <!-- tabindex=-1：弹窗触发元素被移除（关掉后焦点回不来）时，Dialog 组件把
          焦点兜底到这里——可编程聚焦、不进 Tab 序，向导壳同理。 -->
-    <main class="content" data-page={page} tabindex="-1">
+    <main class="content" data-page={page} tabindex="-1" bind:this={contentEl}>
+      <div class="content-container">
       <!-- #1132 D11：主界面缺 h1（axe `page-has-heading-one`）；不放可见大标题，
            视觉由各页的 h2 页题承担，这里补一个读屏可见的 sr-only h1。 -->
       <h1 class="sr-only">P-Pass</h1>
@@ -1753,36 +1789,74 @@
 
       {#if page === "overview"}
         <section class="page" data-testid="page-overview">
-          <div>
-            <!-- 2026-08-13：设计稿离线版标题带真实照片数——"全家的照片"
-                 换成"全家 N 张照片"，photoCount 没拿到时退回原句（不写
-                 假数字）。 -->
-            {#if blocker}
-              <!-- L1 阻塞：标题就是状态本身，不给「安全地住在这台电脑上」这类完成度结论。 -->
-              <h2
-                class="m-0 font-serif text-[28px] font-normal leading-[1.3] {blocker.tone === 'act' ? 'text-act' : blocker.tone === 'idle' ? 'text-ink' : 'text-waiting'}"
-                data-testid="blocker-headline"
-              >
-                {t(blocker.headlineKey)}
-              </h2>
-            {:else}
-            <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3] text-ink">
-              {#if photoCount !== null}{t("ui.overview_title_count", { n: photoCount })}{:else}{t("ui.overview_title")}{/if}
-            </h2>
-            <!-- 副标题：有真实"最近一次备份"数据就用设计稿的格式，没有
-                 （比如还没配对过/一次都没备份过）就退回旧的配对数摘要，
-                 不硬凑一句假话。 -->
-            <p class="mt-[6px] text-[14px] text-ink-40">
-              {#if lastBackupOverall}
-                {t("ui.overview_last_backup", { time: humanTime(lastBackupOverall.at, nowMs), name: lastBackupOverall.name })}
+          <!-- 顶层：Hero 视觉焦点（32px 衬线主标题 + 副标题 + 右侧克制次级按钮） -->
+          <div class="flex flex-wrap items-start justify-between gap-[16px]">
+            <div class="min-w-0 flex-1">
+              {#if blocker}
+                <!-- L1 阻塞：标题就是状态本身，不给「安全地住在这台电脑上」这类完成度结论。 -->
+                <h2
+                  class="m-0 font-serif text-[32px] font-normal leading-[1.25] {blocker.tone === 'act' ? 'text-act' : blocker.tone === 'idle' ? 'text-ink' : 'text-waiting'}"
+                  data-testid="blocker-headline"
+                >
+                  {t(blocker.headlineKey)}
+                </h2>
               {:else}
-                {t("ui.paired_count", { n: pairedCount })}{#if photoCount !== null}{` · ${t("ui.overview_library_count", { n: photoCount })}`}{/if}
+                <h2 class="m-0 font-serif text-[32px] font-normal leading-[1.25] text-ink">
+                  {#if photoCount !== null}{t("ui.overview_title_count", { n: photoCount })}{:else}{t("ui.overview_title")}{/if}
+                </h2>
+                <p class="mt-[6px] text-[14px] text-ink-40">
+                  {#if lastBackupOverall}
+                    {t("ui.overview_last_backup", { time: humanTime(lastBackupOverall.at, nowMs), name: lastBackupOverall.name })}
+                  {:else}
+                    {t("ui.paired_count", { n: pairedCount })}{#if photoCount !== null}{` · ${t("ui.overview_library_count", { n: photoCount })}`}{/if}
+                  {/if}
+                  {disconnectedClause(disconnectedCount)}
+                  {#if status?.removed_devices > 0}{t("ui.revoked_count", { n: status.removed_devices })}{/if}
+                </p>
               {/if}
-              {disconnectedClause(disconnectedCount)}
-              {#if status?.removed_devices > 0}{t("ui.revoked_count", { n: status.removed_devices })}{/if}
-            </p>
+            </div>
+            {#if !blocker && pairedCount > 0}
+              <Button variant="secondary" class="flex-none" onclick={() => startPairing()}>
+                <span aria-hidden="true">+</span><span>{t("ui.add_device")}</span>
+              </Button>
             {/if}
           </div>
+
+          {#if !blocker && pairedCount > 0}
+            <!-- 极轻的 3 项核心摘要带（细上下分隔线，无厚白框） -->
+            <div
+              class="flex flex-wrap items-center gap-x-[14px] gap-y-[6px] border-y border-divider py-[10px] text-[13px] text-ink-60"
+              data-testid="overview-summary-strip"
+            >
+              <span>{t("ui.paired_count", { n: pairedCount })}</span>
+              {#if diskFree !== null && diskTotal !== null}
+                <span class="text-border-strong" aria-hidden="true">|</span>
+                <span>{t("ui.overview_disk_summary", { free: diskFree, total: diskTotal })}</span>
+              {/if}
+              <span class="text-border-strong" aria-hidden="true">|</span>
+              {#if overviewAlertCount > 0}
+                <button
+                  type="button"
+                  class="inline-flex cursor-pointer items-center gap-[6px] rounded-sm border-0 bg-transparent p-0 font-sans text-[13px] font-medium text-act outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring"
+                  data-testid="overview-health-btn"
+                  onclick={() => go("devices")}
+                >
+                  <span class="h-[8px] w-[8px] flex-none rounded-full bg-act"></span>
+                  <span>{t("ui.overview_devices_attention", { n: overviewAlertCount })}</span>
+                </button>
+              {:else if devicesError}
+                <span class="inline-flex items-center gap-[6px]">
+                  <span class="h-[8px] w-[8px] flex-none rounded-full bg-act"></span>
+                  <span class="font-medium text-act">{devicesError.text}</span>
+                </span>
+              {:else}
+                <span class="inline-flex items-center gap-[6px]">
+                  <span class="h-[8px] w-[8px] flex-none rounded-full bg-safe"></span>
+                  <span class="text-ink-60">{t("ui.overview_health_ok")}</span>
+                </span>
+              {/if}
+            </div>
+          {/if}
 
           {#if !isServiceRunning(serviceState)}
             <Card
@@ -1887,13 +1961,27 @@
               </div>
             {/if}
 
-            <!-- 总览两档主次布局：≥900px 左主列竖排「备份状态 → 最近动静」，右辅列自然高度放「添加设备」；<900px 单栏竖排。 -->
-            <div
-              class="grid grid-cols-1 items-start gap-[22px] min-[900px]:grid-cols-[minmax(0,1.55fr)_minmax(280px,1fr)]"
-              data-testid="overview-grid"
-            >
-              <div class="flex min-w-0 flex-col gap-[22px]" data-testid="overview-primary-col">
-                <Card class="text-[16px]">
+            {#if pairedCount === 0}
+              <!-- 0 台设备：主舞台只突出「添加第一台设备」主卡片，不展示空的设备状态与活动卡。 -->
+              <Card class="max-w-[520px] gap-[12px] text-[16px]" data-testid="overview-empty-add">
+                <h3 class="mb-0 text-[15px] font-semibold">{t("ui.add_first_device")}</h3>
+                <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.add_device_body")}</p>
+                {#if disconnectedCount > 0}
+                  <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{noDevicesText(disconnectedCount)}</p>
+                {/if}
+                <Button variant="primary" class="self-start" onclick={() => startPairing()}>{t("ui.generate_qr")}</Button>
+                <Button variant="link" class="self-start" onclick={copyPairQuiet}>{t("ui.qr_fallback")}</Button>
+                <Button
+                  variant="link"
+                  class="self-start text-[12.5px] font-normal text-ink-40 no-underline hover:text-ink hover:underline"
+                  data-testid="mobile-download-empty"
+                  onclick={() => openAboutLink("https://p-pass.hawkeye-xb.com")}
+                >{t("ui.mobile_download_hint")}</Button>
+              </Card>
+            {:else}
+              <!-- 3 层视觉金字塔中层 + 底层：<760px 单列竖排，≥760px 左主栏「备份状态」卡片（1.6fr）+ 右辅栏安静「最近活动」时间线（1fr）。 -->
+              <div class="overview-grid" data-testid="overview-grid">
+                <Card class="min-w-0 text-[16px]" data-testid="overview-backup-card">
                   <h3 class="mb-[12px] text-[15px] font-semibold">{t("ui.backup_status")}</h3>
                   {#if devicesError}
                     <!-- DESK-63 (#946): the service may be running fine while
@@ -1903,69 +1991,64 @@
                       {devicesError.text}<span class="mt-[2px] block text-[12px]">{errCodeLine(devicesError)}</span>
                     </p>
                   {/if}
-                  {#if pairedCount === 0}
-                    <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{noDevicesText(disconnectedCount)}</p>
-                  {:else}
-                    <ul class="m-0 list-none p-0">
-                      {#each waterRows.shown as { d, row }}
-                        <li class="flex items-center gap-[10px] border-b border-divider py-[10px] last:border-b-0">
-                          <!-- T-091: 右侧接 device.watermarks 真数据（设计稿总览
-                               水位卡为单行结构）。T-092: 行点变四色——哨兵 act >
-                               连接态（direct=safe / relay=wait / offline·unknown=idle）。 -->
+                  <ul class="m-0 list-none p-0">
+                    {#each waterRows.shown as { d, row }}
+                      <li class="border-b border-divider last:border-b-0">
+                        <button
+                          type="button"
+                          class="-mx-[10px] flex w-[calc(100%+20px)] cursor-pointer items-center gap-[12px] rounded-sm border-0 bg-transparent px-[10px] py-[12px] text-left font-sans transition-colors outline-none hover:bg-linen focus-visible:ring-3 focus-visible:ring-ring"
+                          onclick={() => go("devices")}
+                        >
+                          <!-- T-091: 右侧接 device.watermarks 真数据。T-092: 行点变四色——哨兵 act > 连接态。 -->
                           <span class="h-[9px] w-[9px] flex-none rounded-full {DOT_BG[row.dot]}"></span>
-                          <span class="flex-1 text-[15px] font-semibold">{displayName(d)}</span>
-                          <span class="flex-none text-[13.5px] {row.alert ? 'text-act' : 'text-ink-40'}">{row.right}</span>
-                        </li>
-                      {/each}
-                    </ul>
-                    {#if waterRows.moreOk > 0}
-                      <Button variant="link" class="mt-px self-start" onclick={() => go("devices")}
-                        >{t("ui.water_more_ok", { n: waterRows.moreOk })} ›</Button
-                      >
-                    {/if}
+                          <div class="min-w-0 flex-1">
+                            <div class="truncate text-[15px] font-semibold text-ink">{displayName(d)}</div>
+                            <div class="mt-[2px] truncate text-[12.5px] {row.alert ? 'text-act' : 'text-ink-40'}">{row.sub}</div>
+                          </div>
+                          <span class="flex flex-none items-center gap-[8px] text-[13px] {row.alert ? 'text-act' : 'text-ink-40'}">
+                            <span>{row.right}</span>
+                            <span class="text-ink-40" aria-hidden="true">›</span>
+                          </span>
+                        </button>
+                      </li>
+                    {/each}
+                  </ul>
+                  {#if waterRows.moreOk > 0}
+                    <Button variant="link" class="mt-[8px] self-start" onclick={() => go("devices")}
+                      >{t("ui.water_more_ok", { n: waterRows.moreOk })} ›</Button
+                    >
                   {/if}
                 </Card>
 
-                <Card class="gap-[12px] text-[16px]">
-                  <h3 class="mb-0 text-[15px] font-semibold">{t("ui.recent_activity")}</h3>
-                  <div>
-                    {#if visibleAudit.length === 0}
-                      <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.no_activity")}</p>
-                    {:else}
-                      <!-- 单行紧凑文案（设备+事件+相对时间连成一行，不分列、
-                           行间不加分隔线），跟主活动记录页的双列卡片行是两种
-                           密度，故意不共用 .log-rows。 -->
-                      <ul class="m-0 flex list-none flex-col gap-[10px] p-0 text-[14px] text-ink">
-                        <!-- DESK-08: key = 审计主键 e.id。原本是 `e.ts + ":" + e.action`
-                             ——WATCH-02 一次删 N 张会在同一毫秒写 N 条
-                             asset.removed_external，key 撞了 Svelte 直接抛
-                             each_key_duplicate。时间戳不是身份。 -->
-                        {#each visibleAudit.slice(0, 3) as e (e.id)}
-                          {@const at = humanTime(e.ts, nowMs)}
-                          {@const actor = auditActorParts(e, devices)}
-                          <li title={auditWho(e, devices)}><b class="font-semibold">{actor.name}</b> {auditText(e)}{#if at} · {at}{/if}</li>
-                        {/each}
-                      </ul>
-                    {/if}
-                  </div>
-                  <Button variant="link" class="self-start" onclick={() => go("log")}>{t("ui.all_activity")} ›</Button>
-                </Card>
+                <!-- 底层 / 右辅栏：彻底降重的安静时间线（无厚重白卡边框、无 <b> 加粗、克制 4–6 条） -->
+                <section class="min-w-0 pt-[4px]" data-testid="overview-activity-card">
+                  <h3 class="m-0 mb-[10px] text-[13px] font-semibold tracking-[0.02em] text-ink-60">{t("ui.recent_activity")}</h3>
+                  {#if visibleAudit.length === 0}
+                    <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.no_activity")}</p>
+                  {:else}
+                    <ul class="m-0 flex list-none flex-col p-0 text-[13px] text-ink-60">
+                      {#each visibleAudit.slice(0, overviewAuditLimit) as e (e.id)}
+                        {@const at = humanTime(e.ts, nowMs)}
+                        {@const actor = auditActorParts(e, devices)}
+                        <li
+                          class="flex items-baseline justify-between gap-[12px] border-b border-divider py-[9px] last:border-b-0"
+                          title={auditWho(e, devices)}
+                        >
+                          <span class="min-w-0 flex-1">
+                            <span class="text-ink-60">{actor.name}</span>{" "}
+                            <span class="text-ink-40">{auditText(e)}</span>
+                          </span>
+                          {#if at}
+                            <span class="flex-none whitespace-nowrap text-[12.5px] tabular-nums text-ink-40">{at}</span>
+                          {/if}
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                  <Button variant="link" class="mt-[8px] self-start text-[13px]" onclick={() => go("log")}>{t("ui.all_activity")} ›</Button>
+                </section>
               </div>
-
-              <!-- 卡片本身不居中——标题、说明文字都是左对齐的普通文本；
-                   只有按钮内文字（Button 基类自带 justify-center）和底部
-                   「无法扫码」退路是居中的。 -->
-              <!-- T4 (H-10b): 二维码不再是常驻卡片——点按钮弹窗出码，配对完
-                   状态消失；扫码后的允许/拒绝也走模态。 -->
-              <Card class="gap-[12px] text-[16px]">
-                <h3 class="mb-0 text-[15px] font-semibold">{t("ui.add_device")}</h3>
-                <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.add_device_body")}</p>
-                <Button variant={pairedCount === 0 ? "primary" : "secondary"} class="w-full" onclick={() => startPairing()}>{t("ui.generate_qr")}</Button>
-                <!-- 设计稿 v2：无法扫码的退路提升到卡片级——不打开弹窗也
-                     能复制配对串（copyPairQuiet 静默取串，主路径仍是扫码）。 -->
-                <Button variant="link" class="w-full" onclick={copyPairQuiet}>{t("ui.qr_fallback")}</Button>
-              </Card>
-            </div>
+            {/if}
           {/if}
         </section>
       {:else if page === "devices"}
@@ -2246,59 +2329,76 @@
           <p class="mt-[10px] text-[13px] leading-[1.6] text-ink-40">{t("ui.log_footnote")}</p>
         </section>
       {:else if page === "settings"}
-        <section class="page max-w-[680px]" data-testid="page-settings">
+        <section class="page" data-testid="page-settings">
           <!-- DESK-08: 设置页已迁 Tailwind + Card/Button；所有 IPC 调用与
                条件渲染（serviceIsStale 重启行/磁盘水位行）一字未动。 -->
           <div>
             <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.settings")}</h2>
           </div>
-          <div class="flex flex-col gap-[22px]" data-testid="settings-layers">
-            <!-- ① 核心区：照片库 -->
-            <Card class="text-[16px]" data-testid="settings-library-card">
-              <h3 class="mb-[12px] text-[15px] font-semibold">{t("ui.library")}</h3>
-              {#if status?.library_dir}
-                <code class="block rounded-sm bg-linen px-[16px] py-[12px] text-[14px] break-all">{status.library_dir}</code>
-              {/if}
-              <div class="mt-[12px] flex flex-wrap gap-[10px]">
-                <Button onclick={openLibrary}>{t("ui.open_library")}</Button>
-                <!-- #639：「更改照片库位置」恢复，语义改为整库搬迁（手机零重扫码、零重传、原目录搬空）。 -->
-                <Button variant="secondary" onclick={chooseFolder} data-testid="change-library">{t("ui.change_library")}</Button>
-              </div>
-              <!-- T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes）——
-                   「可用 X GB / 共 Y GB」+ 细进度条（token 色）；任一字段
-                   null（磁盘统计拿不到）整行连进度条一起隐藏。 -->
-              {#if diskFree !== null && diskTotal !== null && diskPct !== null}
-                <div class="mt-[14px] flex justify-between gap-[12px] border-t border-divider pt-[14px] text-[14px] font-semibold">
-                  <span>{t("ui.disk_space")}</span>
-                  <span class="text-[14px] font-normal text-ink-40">{t("ui.disk_free_of_total", { free: diskFree, total: diskTotal })}</span>
+          <!-- 设置页两档主次布局（按内容区真实可用宽度响应）：<860px 单栏三层竖排（照片库 → 应用与支持 → 停止后台服务）；≥860px 左主列「照片库 + 停止后台服务」，右辅列「应用与支持」。 -->
+          <div class="settings-grid" data-testid="settings-layers">
+            <div class="settings-primary-col" data-testid="settings-primary-col">
+              <!-- ① 核心区：照片库 -->
+              <Card class="settings-library-card text-[16px]" data-testid="settings-library-card">
+                <h3 class="mb-[12px] text-[15px] font-semibold">{t("ui.library")}</h3>
+                {#if status?.library_dir}
+                  <code class="block rounded-sm bg-linen px-[16px] py-[12px] text-[14px] break-all">{status.library_dir}</code>
+                {/if}
+                <div class="mt-[12px] flex flex-wrap gap-[10px]">
+                  <Button onclick={openLibrary}>{t("ui.open_library")}</Button>
+                  <!-- #639：「更改照片库位置」恢复，语义改为整库搬迁（手机零重扫码、零重传、原目录搬空）。 -->
+                  <Button variant="secondary" onclick={chooseFolder} data-testid="change-library">{t("ui.change_library")}</Button>
                 </div>
-                <div
-                  class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"
-                  role="progressbar"
-                  aria-label={t("ui.disk_space")}
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                  aria-valuenow={diskPct}
-                ><div class="h-full rounded-full bg-ink" style="width:{diskPct}%"></div></div>
+                <!-- T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes）——
+                     「可用 X GB / 共 Y GB」+ 细进度条（token 色）；任一字段
+                     null（磁盘统计拿不到）整行连进度条一起隐藏。 -->
+                {#if diskFree !== null && diskTotal !== null && diskPct !== null}
+                  <div class="mt-[14px] flex justify-between gap-[12px] border-t border-divider pt-[14px] text-[14px] font-semibold">
+                    <span>{t("ui.disk_space")}</span>
+                    <span class="text-[14px] font-normal text-ink-40">{t("ui.disk_free_of_total", { free: diskFree, total: diskTotal })}</span>
+                  </div>
+                  <div
+                    class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"
+                    role="progressbar"
+                    aria-label={t("ui.disk_space")}
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow={diskPct}
+                  ><div class="h-full rounded-full bg-ink" style="width:{diskPct}%"></div></div>
+                {/if}
+                {#if status?.relocate_leftover}
+                  <!-- F6：原位置删不掉的残留，显示到用户删掉为止（daemon 每次 status 核一次目录还在不在）。 -->
+                  <p class="m-0 mt-[10px] text-[13px] leading-[1.6] break-all text-waiting" data-testid="relocate-leftover">{t("ui.relocate_leftover", { dir: status.relocate_leftover })}</p>
+                {/if}
+                <!-- W-4：只在确认系统盘没开磁盘加密时出现一行现状，不阻断使用；
+                     查不到（"unknown"）不提示。 -->
+                {#if status?.disk_encryption === "off"}
+                  <div class="mt-[14px] flex justify-between gap-[12px] border-t border-divider pt-[14px] text-[14px] font-semibold" data-testid="disk-encryption-off">
+                    <span>{t("ui.disk_encryption")}</span>
+                    <span class="text-[14px] font-normal text-ink-40">{t("ui.disk_encryption_off")}</span>
+                  </div>
+                {/if}
+                <!-- #639：后果说明随入口恢复，文案改为整库搬迁。 -->
+                <p class="m-0 mt-[10px] text-[13px] leading-[1.6] text-ink-40">{t("ui.library_change_hint")}</p>
+              </Card>
+
+              <!-- ③ 危险区：低权重独立紧凑区 -->
+              {#if canStopService(serviceState)}
+                <Card
+                  class="settings-danger-card flex-row flex-wrap items-center justify-between gap-[16px] py-[16px] text-[16px]"
+                  data-testid="settings-danger-zone"
+                >
+                  <div class="min-w-0 flex-1 basis-[260px]">
+                    <h3 class="m-0 text-[14px] font-semibold text-ink">{t("ui.stop_service")}</h3>
+                    <p class="m-0 mt-[4px] text-[13px] leading-[1.5] text-ink-40">{t("ui.stop_hint")}</p>
+                  </div>
+                  <Button variant="danger" class="flex-none" onclick={stopService}>{t("ui.stop_service")}</Button>
+                </Card>
               {/if}
-              {#if status?.relocate_leftover}
-                <!-- F6：原位置删不掉的残留，显示到用户删掉为止（daemon 每次 status 核一次目录还在不在）。 -->
-                <p class="m-0 mt-[10px] text-[13px] leading-[1.6] break-all text-waiting" data-testid="relocate-leftover">{t("ui.relocate_leftover", { dir: status.relocate_leftover })}</p>
-              {/if}
-              <!-- W-4：只在确认系统盘没开磁盘加密时出现一行现状，不阻断使用；
-                   查不到（"unknown"）不提示。 -->
-              {#if status?.disk_encryption === "off"}
-                <div class="mt-[14px] flex justify-between gap-[12px] border-t border-divider pt-[14px] text-[14px] font-semibold" data-testid="disk-encryption-off">
-                  <span>{t("ui.disk_encryption")}</span>
-                  <span class="text-[14px] font-normal text-ink-40">{t("ui.disk_encryption_off")}</span>
-                </div>
-              {/if}
-              <!-- #639：后果说明随入口恢复，文案改为整库搬迁。 -->
-              <p class="m-0 mt-[10px] text-[13px] leading-[1.6] text-ink-40">{t("ui.library_change_hint")}</p>
-            </Card>
+            </div>
 
             <!-- ② 常规与支持：软件更新 + 关于（版本与外链）合进同一张紧凑分组列表卡 -->
-            <Card size="flush" class="text-[16px]" data-testid="about-card">
+            <Card size="flush" class="settings-about-card text-[16px]" data-testid="about-card">
               <!-- UI-19（2026-10-01 验收人拍板）：语言切换入口**暂时隐藏**——
                    观感不佳，先不露面。i18n 机制与文案一律未删：LANG_OPTIONS /
                    langPref / changeLanguage 原样保留，字典键也在。
@@ -2311,14 +2411,32 @@
                    （daemon 下发的 status.shell_relation ≠ same）时标出来。 -->
               <h3 class="m-0 border-b border-divider px-[22px] py-[14px] text-[15px] font-semibold">{t("ui.about")}</h3>
               <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[13px] text-[15px] font-medium">
+                <span>{t("ui.about_shell_version")}</span>
+                <span class="flex items-center gap-[8px] font-mono text-[13.5px] font-normal text-ink-40" data-testid="about-shell-version">
+                  {#if isTestBuild}
+                    <span class="env-badge" data-testid="about-test-build">{t("ui.env_badge_test")}</span>
+                  {/if}
+                  {shellVersion ? `v${shellVersion}` : "—"}
+                </span>
+              </div>
+              <div class="flex items-center justify-between gap-[12px] px-[22px] py-[13px] text-[15px] font-medium">
+                <span>{t("ui.about_service_version")}</span>
+                <span class="flex items-center gap-[8px] font-mono text-[13.5px] font-normal text-ink-40" data-testid="about-service-version">
+                  {#if versionsDiffer}
+                    <span class="env-badge" data-testid="about-versions-differ">{t("ui.about_versions_differ")}</span>
+                  {/if}
+                  {serviceVersion ? `v${serviceVersion}` : "—"}
+                </span>
+              </div>
+              <div class="flex items-center justify-between gap-[12px] border-t border-divider px-[22px] py-[8px] text-[15px] font-medium">
                 <span>{t("ui.software_update")}</span>
-                <Button variant="secondary" onclick={() => checkForUpdate(true)} disabled={updateBusy}>
+                <Button variant="secondary" class="h-[30px] min-h-[30px] px-3 text-[13px]" onclick={() => checkForUpdate(true)} disabled={updateBusy}>
                   {t("ui.check_update")}
                 </Button>
               </div>
               <!-- UPD-06 (#616)：状态机的显式状态行——过程可见、失败可重试；
                    #1132 D4：常驻 role="status" 区域（ARIA22），空闲时零高度。 -->
-              <div role="status" data-testid="update-status" class={updatePhase === "idle" ? "text-[13px] leading-[1.6] text-ink-40" : "border-b border-divider px-[22px] py-[12px] text-[13px] leading-[1.6] text-ink-40"}>
+              <div role="status" data-testid="update-status" class={updatePhase === "idle" ? "text-[13px] leading-[1.6] text-ink-40" : "border-t border-divider px-[22px] py-[12px] text-[13px] leading-[1.6] text-ink-40"}>
                 {#if updatePhase === "checking"}
                   <span>{t("ui.update_checking")}</span>
                 {:else if updatePhase === "up-to-date"}
@@ -2352,7 +2470,7 @@
               </div>
               <!-- UPD-06 (#616)：壳旧 ⇒ 换壳。 -->
               {#if shellIsStale}
-                <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[13px] text-[15px] font-medium">
+                <div class="flex items-center justify-between gap-[12px] border-t border-divider px-[22px] py-[13px] text-[15px] font-medium">
                   <span>{t("ui.shell_restart_needed", { version: installedVersion })}</span>
                   <Button variant="secondary" onclick={relaunchShellNow} disabled={updateBusy}>
                     {t("ui.restart_app_now")}
@@ -2361,29 +2479,16 @@
               {/if}
               <!-- DAE-04: 桌面壳更新后 daemon 还是旧版时才显示。 -->
               {#if serviceIsStale && kernelPhase === "restarting"}
-                <p class="m-0 border-b border-divider px-[22px] py-[13px] text-[13px] leading-[1.6] text-ink-40">{t("ui.kernel_converge_restarting")}</p>
+                <p class="m-0 border-t border-divider px-[22px] py-[13px] text-[13px] leading-[1.6] text-ink-40">{t("ui.kernel_converge_restarting")}</p>
               {:else if serviceIsStale}
-                <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[13px] text-[15px] font-medium">
+                <div class="flex items-center justify-between gap-[12px] border-t border-divider px-[22px] py-[13px] text-[15px] font-medium">
                   <span>{t("ui.restart_service")}</span>
                   <Button variant="secondary" onclick={() => restartDaemonProcess("update")} disabled={restartingService}>
                     {restartingService ? t("ui.restarting_service") : t("ui.restart_service_btn")}
                   </Button>
                 </div>
-                <p class="m-0 border-b border-divider px-[22px] py-[12px] text-[13px] leading-[1.6] text-ink-40">{kernelPhase === "deferred" ? t("ui.kernel_converge_deferred") : t("ui.restart_service_hint")}</p>
+                <p class="m-0 border-t border-divider px-[22px] py-[12px] text-[13px] leading-[1.6] text-ink-40">{kernelPhase === "deferred" ? t("ui.kernel_converge_deferred") : t("ui.restart_service_hint")}</p>
               {/if}
-              <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[13px] text-[15px] font-medium">
-                <span>{t("ui.about_shell_version")}</span>
-                <span class="font-mono text-[13.5px] font-normal text-ink-40" data-testid="about-shell-version">{shellVersion ? `v${shellVersion}` : "—"}</span>
-              </div>
-              <div class="flex items-center justify-between gap-[12px] px-[22px] py-[13px] text-[15px] font-medium">
-                <span>{t("ui.about_service_version")}</span>
-                <span class="flex items-center gap-[8px] font-mono text-[13.5px] font-normal text-ink-40" data-testid="about-service-version">
-                  {#if versionsDiffer}
-                    <span class="env-badge" data-testid="about-versions-differ">{t("ui.about_versions_differ")}</span>
-                  {/if}
-                  {serviceVersion ? `v${serviceVersion}` : "—"}
-                </span>
-              </div>
               {#each aboutLinks(getLocale()) as link (link.id)}
                 <button
                   type="button"
@@ -2401,23 +2506,10 @@
                 </button>
               {/each}
             </Card>
-
-            <!-- ③ 危险区：底部低权重独立紧凑区 -->
-            {#if canStopService(serviceState)}
-              <Card
-                class="flex-row flex-wrap items-center justify-between gap-[16px] py-[16px] text-[16px]"
-                data-testid="settings-danger-zone"
-              >
-                <div class="min-w-0 flex-1 basis-[260px]">
-                  <h3 class="m-0 text-[14px] font-semibold text-ink">{t("ui.stop_service")}</h3>
-                  <p class="m-0 mt-[4px] text-[13px] leading-[1.5] text-ink-40">{t("ui.stop_hint")}</p>
-                </div>
-                <Button variant="danger" class="flex-none" onclick={stopService}>{t("ui.stop_service")}</Button>
-              </Card>
-            {/if}
           </div>
         </section>
       {/if}
+      </div>
     </main>
     <!-- T4 (H-10b): 配对状态机模态——二维码弹窗 + 允许/拒绝弹窗。
          #1132 D1：弹窗要读得出名称（axe `aria-dialog-name`）。 -->
@@ -2467,6 +2559,12 @@
       {:else}
         <p class="hint modal-hint m-0">{t("ui.pair_generating")}</p>
       {/if}
+      <Button
+        variant="link"
+        class="text-[12.5px] font-normal text-ink-40 no-underline hover:text-ink hover:underline"
+        data-testid="mobile-download-modal"
+        onclick={() => openAboutLink("https://p-pass.hawkeye-xb.com")}
+      >{t("ui.mobile_download_hint")}</Button>
     </Dialog>
 
     <!-- UX-08: 待确认加入列表。一块 = 一次申请（lib/pairRequests.js）。关掉（Esc / 右上角 /
@@ -2602,23 +2700,6 @@
         <Button onclick={() => (photoViewer = null)}>{t("ui.close")}</Button>
       </div>
     </Dialog>
-    <!-- T1: 版本号——报问题/排查时先知道装的是什么版本。 -->
-    {#if displayVersion}
-      <footer class="version-footer">
-        <!-- UPD-06 (#616)：页脚显示**壳**版本（这个二进制自己的版本）。旧实现优先
-             显示服务版本（displayVersion = status?.version || version），混版本时
-             会让人以为"已经升级好了"；服务版本不一致时在旁边**明说**，不再冒充。 -->
-        <span>P-Pass v{shellVersion || displayVersion}</span>
-        {#if versionsDiffer}
-          <span class="env-badge">{t("ui.version_mismatch", { shell: shellVersion, service: serviceVersion })}</span>
-        {/if}
-        <!-- DESK-02①: 环境显式徽标——prerelease 构建琥珀小徽标（「测试版」），
-             环境在 UI 上一眼可辨，不靠用户读懂 -test 后缀；正式构建只显示版本号。 -->
-        {#if isTestBuild}
-          <span class="env-badge">{t("ui.env_badge_test")}</span>
-        {/if}
-      </footer>
-    {/if}
   </div>
   {#if relocLock}
     <!-- #639：搬迁锁定层——等待（琥珀），只有标题与进度，没有任何可点的东西；搬完服务自己重启，状态一变层就消失。 -->
@@ -2656,6 +2737,7 @@
   }
   :global(html), :global(body), :global(#app) {
     height: 100%;
+    overflow: hidden;
   }
   /* T-082: 键盘焦点统一用 token 色 outline，消灭系统默认蓝色焦点圈。
      :global 覆盖本窗口全部可聚焦元素（含 Wizard）。 */
@@ -2748,22 +2830,79 @@
   }
   .content {
     flex: 1;
+    min-width: 0;
+    overflow-x: hidden;
     overflow-y: auto;
-    padding: 34px 38px;
+    padding: 34px 38px 48px;
     box-sizing: border-box;
+  }
+  .content-container {
+    container-type: inline-size;
+    width: 100%;
+    min-width: 0;
+  }
+  main[data-page="log"] .content-container,
+  main[data-page="photos"] .content-container,
+  main[data-page="devices"] .content-container {
+    height: 100%;
   }
   .page {
     display: flex;
     flex-direction: column;
     gap: 22px;
-    max-width: 1120px;
-    margin: 0 auto;
+    width: 100%;
+    min-width: 0;
   }
-  main[data-page="photos"] .page {
-    max-width: none;
+  .overview-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 22px;
   }
-  main[data-page="settings"] .page {
-    max-width: 680px;
+  .settings-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 22px;
+  }
+  .settings-primary-col {
+    display: contents;
+  }
+  :global(.settings-library-card) {
+    min-width: 0;
+    order: 1;
+  }
+  :global(.settings-about-card) {
+    min-width: 0;
+    order: 2;
+  }
+  :global(.settings-danger-card) {
+    min-width: 0;
+    order: 3;
+  }
+  @container (min-width: 760px) {
+    .overview-grid {
+      grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr);
+      align-items: start;
+      gap: 28px;
+    }
+  }
+  @container (min-width: 860px) {
+    .settings-grid {
+      grid-template-columns: minmax(0, 1.4fr) minmax(300px, 1fr);
+      align-items: start;
+    }
+    .settings-primary-col {
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+      min-width: 0;
+      order: 1;
+    }
+    :global(.settings-library-card),
+    :global(.settings-danger-card) {
+      order: initial;
+    }
   }
 
 
@@ -2860,19 +2999,6 @@
   /* DESK-15：原生 button/.primary/.link-more 视觉规则已删——全部收编进
      Button 组件（variant=primary/secondary/danger/link），
      不再有第二套按钮视觉实现。 */
-  .version-footer {
-    position: fixed;
-    right: 14px;
-    bottom: 8px;
-    font-size: 11px;
-    /* #1132 D7：去掉 0.8 透明度——11px 小字在纸底上只剩 3.58:1（1.4.3 要
-       4.5:1）；ink-40 不透明是 5.44:1。 */
-    color: var(--pp-ink-40);
-    user-select: none;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
   /* DESK-02①: 环境徽标——prerelease 构建琥珀小徽标（测试版），
      环境在 UI 上一眼可辨；正式构建不渲染。 */
   .env-badge {

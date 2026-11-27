@@ -384,7 +384,7 @@ describe("#1132 axe 扫描零 violation", () => {
     daemon(RICH);
     await open("#/overview");
     await settle();
-    await fireEvent.click(screen.getByRole("button", { name: "显示配对二维码" }));
+    await fireEvent.click(screen.getByRole("button", { name: "添加设备" }));
     await settle();
     // CodeRabbit：先断言弹窗真的开了再扫——点按失效时总览本身仍全绿，会漏扫整个弹窗。
     expect(screen.getByRole("dialog", { name: "配对二维码" })).toBeTruthy();
@@ -664,13 +664,9 @@ function contrast(fgHex, bgHex) {
 describe("#1132 对比度（D7 / D12）", () => {
   const value = (k) => tokens.color[k].value.replace(/#([0-9a-f]{6})[0-9a-f]{2}?/i, "#$1");
 
-  // D7：版本号小字（11px）——去掉 opacity:0.8 后 ink-40 直接落纸底。
+  // D7：小字 ink-40 直接落纸底时的对比度下限（已移除角落 version-footer，仅保留 token 数学校验）。
   it("D7 ink-40 on paper ≥ 4.5:1（去掉半透明后的小字下限）", () => {
     expect(contrast(value("ink-40"), value("paper"))).toBeGreaterThanOrEqual(4.5);
-    // 修复本身：源码里 .version-footer 不再压透明度。
-    const src = srcFile("App.svelte");
-    const footer = src.slice(src.indexOf(".version-footer"), src.indexOf(".env-badge"));
-    expect(footer).not.toContain("opacity");
   });
 
   // D12：焦点环从 ring/50（3.40:1，刚过线没余量）改成 ring 全量。

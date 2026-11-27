@@ -31,5 +31,19 @@ describe("desktop device projection", () => {
     expect(shown.map(({ d }) => d.node_id)).toEqual(["warn-new", "warn-old", "ok-new"]);
     expect(moreOk).toBe(1);
     expect(input[0].node_id).toBe("ok-old");
+
+    // 动态 maxRows：缩窄高度传入 1 时仍保留全部告警设备；放宽传入 5 时展开全部健康设备
+    const compact = overviewRows(input, {}, now, 1);
+    expect(compact.shown.map(({ d }) => d.node_id)).toEqual(["warn-new", "warn-old"]);
+    expect(compact.moreOk).toBe(2);
+
+    const expanded = overviewRows(input, {}, now, 5);
+    expect(expanded.shown.map(({ d }) => d.node_id)).toEqual([
+      "warn-new",
+      "warn-old",
+      "ok-new",
+      "ok-old",
+    ]);
+    expect(expanded.moreOk).toBe(0);
   });
 });

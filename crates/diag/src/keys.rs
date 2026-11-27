@@ -67,6 +67,11 @@ msg_keys! {
     /// DEV-01: owner picks "replace the old device" in the confirm dialog.
     /// DEV-01: owner picks "join as a brand-new device" instead.
     UI_ADD_DEVICE => "ui.add_device",
+    UI_ADD_FIRST_DEVICE => "ui.add_first_device",
+    UI_OVERVIEW_DISK_SUMMARY => "ui.overview_disk_summary",
+    UI_OVERVIEW_HEALTH_OK => "ui.overview_health_ok",
+    UI_OVERVIEW_DEVICES_ATTENTION => "ui.overview_devices_attention",
+    UI_MOBILE_DOWNLOAD_HINT => "ui.mobile_download_hint",
     UI_GENERATE_QR => "ui.generate_qr",
     UI_QR_FALLBACK => "ui.qr_fallback",
     UI_NO_DEVICES => "ui.no_devices",
@@ -145,7 +150,6 @@ msg_keys! {
     UI_UPDATE_FAILED_MANUAL_HINT => "ui.update_failed_manual_hint",
     UI_SHELL_RESTART_NEEDED => "ui.shell_restart_needed",
     UI_RESTART_APP_NOW => "ui.restart_app_now",
-    UI_VERSION_MISMATCH => "ui.version_mismatch",
     // ── Settings「关于」：壳与内核版本分开列（#1044 B13）+ 外链入口（#2065）──
     UI_ABOUT => "ui.about",
     UI_ABOUT_SHELL_VERSION => "ui.about_shell_version",
@@ -534,6 +538,11 @@ mod tests {
             UI_ALLOW_RECONNECT,
             UI_DENY,
             UI_ADD_DEVICE,
+            UI_ADD_FIRST_DEVICE,
+            UI_OVERVIEW_DISK_SUMMARY,
+            UI_OVERVIEW_HEALTH_OK,
+            UI_OVERVIEW_DEVICES_ATTENTION,
+            UI_MOBILE_DOWNLOAD_HINT,
             UI_GENERATE_QR,
             UI_QR_FALLBACK,
             UI_NO_DEVICES,
@@ -599,7 +608,6 @@ mod tests {
             UI_UPDATE_FAILED_MANUAL_HINT,
             UI_SHELL_RESTART_NEEDED,
             UI_RESTART_APP_NOW,
-            UI_VERSION_MISMATCH,
             UI_ABOUT,
             UI_ABOUT_SHELL_VERSION,
             UI_ABOUT_SERVICE_VERSION,
@@ -899,7 +907,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 384);
+        assert_eq!(ALL.len(), 388);
     }
 
     #[test]
