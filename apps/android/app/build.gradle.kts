@@ -65,7 +65,7 @@ android {
         applicationId = "com.hawkeyexb.ppass"
         minSdk = 26
         targetSdk = 35
-        versionCode = 72
+        versionCode = 73
         // DESK-02①: 构建期注入完整版本串（release tag = "v0.3.2-test.2"，
         // 去前导 v）——Android 端靠它推导更新通道（含 -test. → test）并
         // 让连续 test tag 能自动升级（isNewer 预发布段比较）。本地/非 tag
@@ -74,7 +74,7 @@ android {
             System.getenv("PPF_BUILD_VERSION")
                 ?.takeIf { it.isNotBlank() }
                 ?.removePrefix("v")
-                ?: "0.12.1"
+                ?: "0.12.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // #1820：本地开发包的构建时间（`MM-DD HH:MM`）。只由本地 `just dev` 注入 PPF_BUILD_STAMP；
         // 正式/CI 构建不设这个变量 ⇒ 空串，版本行后面不显示任何时间，版本号与更新通道不变。
