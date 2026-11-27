@@ -1,6 +1,7 @@
 package com.hawkeyexb.ppass.ui
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.hawkeyexb.ppass.proto.AssetMeta
@@ -137,6 +138,9 @@ internal class TimelineSubscriptionHolder(
         private set
 
     var refreshing by mutableStateOf(false)
+        private set
+
+    var refreshGeneration by mutableIntStateOf(0)
         private set
 
     var error by mutableStateOf<String?>(null)
@@ -317,6 +321,7 @@ internal class TimelineSubscriptionHolder(
         next = page.next
         ch.onRefreshed(page.items.map { it.hash }.toSet())
         error = null
+        refreshGeneration++
     }
 
     suspend fun appendNextPage(cursor: String) {

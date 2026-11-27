@@ -301,4 +301,35 @@ class TimelineSubscriptionHolderTest {
         assertTrue(ch.calls > beforeCalls)
         assertFalse(holder.refreshing)
     }
+
+    @Test
+    fun pullToRefreshAdvancesRefreshGenerationEvenWhenHashesUnchanged() = runTest {
+        val release = CompletableDeferred<Unit>()
+        val samePage = TimelinePage(items = listOf(AssetMeta(hash = "same", mediaType = "photo", bytes = 1)))
+        val ch = object : TimelineChannel {
+            override val loader: TimelineLoader? get() = null
+            override suspend fun loadPage(cursor: String?): TimelinePage = samePage
+            override suspend fun subscribe(onConnected: suspend () -> Unit, onInvalidated: suspend () -> Unit) {
+                onConnected()
+                release.await()
+            }
+            override fun onRefreshed(hashes: Set<String>) {}
+            override fun onAppended(hashes: Set<String>) {}
+        }
+        val holder = TimelineSubscriptionHolder(
+            scope = backgroundScope,
+            currentPairing = { pairing },
+            channelFor = { ch },
+        )
+        assertEquals(0, holder.refreshGeneration)
+
+        holder.start()
+        runCurrent()
+        assertEquals(1, holder.refreshGeneration)
+
+        holder.refresh()
+        runCurrent()
+        assertEquals(listOf("same"), holder.items.map { it.hash })
+        assertEquals("即使时间线条目未变，下拉刷新也必须推进 refreshGeneration 供空白缩略图重拉", 2, holder.refreshGeneration)
+    }
 }
