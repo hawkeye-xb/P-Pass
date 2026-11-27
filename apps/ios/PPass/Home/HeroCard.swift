@@ -144,6 +144,7 @@ struct HeroCard: View {
                 .disabled(app.commandInFlight)
             }
         }
+        .frame(minHeight: PPUI.Layout.heroProgressRowMinHeight, alignment: .center)
     }
 
     @ViewBuilder private func transferSlots(_ state: BackupUiState) -> some View {
@@ -166,7 +167,7 @@ struct HeroCard: View {
                         .font(PPFont.sans(13)).foregroundStyle(slow ? PPColor.waiting : PPColor.ink60).lineLimit(1)
                 } else {
                     Text(statusText(state) ?? " ").font(PPFont.sans(13.5, .medium)).foregroundStyle(PPColor.ink60).lineLimit(1)
-                    Text(" ").font(PPFont.sans(13))
+                    Text(" ").font(PPFont.sans(13)).lineLimit(1)
                 }
                 Spacer().frame(height: 8)
                 if case .fetchingFromICloud(_, _, _, let fraction?) = state {

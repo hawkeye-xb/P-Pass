@@ -81,6 +81,10 @@ extension PPColor {
     static let paperDim = PPColor.paper.opacity(0.62)
 }
 
+extension PPUI.Layout {
+    static let heroProgressRowMinHeight: CGFloat = 56
+}
+
 /// 全局 UIKit 外观：导航栏 / Tab 栏 / 分段控件的颜色与字体取 token（SwiftUI 的 `toolbarBackground` 管背景，
 /// 字体与分段控件只有 UIKit appearance 能管）。在 App 启动时调一次。
 enum PPAppearance {

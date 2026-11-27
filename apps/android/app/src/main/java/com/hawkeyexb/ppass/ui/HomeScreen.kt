@@ -341,7 +341,10 @@ internal fun HomeScreen(
                 HorizontalDivider(color = heroSurfaceDivider(heroTone))
                 Spacer(Modifier.height(12.dp))
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().heightIn(min = HERO_PROGRESS_ROW_MIN_HEIGHT_DP.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Column(Modifier.weight(1f)) {
                         if (busy) {
                             val slots = heroBusySlotsOf(line as StatusLine.Working, transferRow, transferProgress)
@@ -350,7 +353,7 @@ internal fun HomeScreen(
                                 slots.fileNameOverride ?: workingText(line),
                                 fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
                                 color = PPColor.Ink60,
-                                maxLines = textMaxLines, softWrap = false, overflow = TextOverflow.Ellipsis,
+                                maxLines = textMaxLines, minLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
                             )
                             Text(
                                 when (slots.secondLine.kind) {
@@ -363,7 +366,7 @@ internal fun HomeScreen(
                                 },
                                 fontSize = 13.sp,
                                 color = slots.secondLineColor,
-                                maxLines = textMaxLines, softWrap = false, overflow = TextOverflow.Ellipsis,
+                                maxLines = textMaxLines, minLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
                             )
                             Spacer(Modifier.height(8.dp))
                             val progress = transferProgress
