@@ -199,8 +199,8 @@
 "about_tagline" = "A cross-platform family photo hub, without the server setup.";
 "about_website" = "Website";
 "about_faq" = "FAQ";
-"about_feedback_email" = "Feedback (Email)";
-"about_feedback_discussions" = "Feedback (Discussions)";
+"about_feedback_email" = "Email feedback";
+"about_feedback_discussions" = "Community";
 "about_source_code" = "Source code";
 "about_source_license" = "AGPL-3.0";
 "about_privacy" = "Privacy policy";

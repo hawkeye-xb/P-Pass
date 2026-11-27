@@ -170,7 +170,10 @@ describe("#2065 设置页「关于」外链入口", () => {
     ];
 
     expect(screen.getByTestId("about-link-source").textContent).toContain("AGPL-3.0");
+    expect(screen.getByTestId("about-link-feedback-email").textContent).toContain("邮件反馈");
     expect(screen.getByTestId("about-link-feedback-email").textContent).toContain("ppass@hawkeye-xb.com");
+    expect(screen.getByTestId("about-link-feedback-discussions").textContent).toContain("社区反馈");
+    expect(screen.getByTestId("about-link-feedback-discussions").textContent).toContain("GitHub");
 
     for (const [id, url] of expected) {
       const btn = screen.getByTestId(`about-link-${id}`);
@@ -198,6 +201,11 @@ describe("#2065 设置页「关于」外链入口", () => {
     render(App);
     await settle();
     await goto("settings");
+
+    expect(screen.getByTestId("about-link-feedback-email").textContent).toContain("Email feedback");
+    expect(screen.getByTestId("about-link-feedback-email").textContent).toContain("ppass@hawkeye-xb.com");
+    expect(screen.getByTestId("about-link-feedback-discussions").textContent).toContain("Community");
+    expect(screen.getByTestId("about-link-feedback-discussions").textContent).toContain("GitHub");
 
     await fireEvent.click(screen.getByTestId("about-link-website"));
     await settle();

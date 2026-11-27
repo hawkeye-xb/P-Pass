@@ -123,4 +123,62 @@ class CellRowLayoutTest {
         assertTrue("en-US 1.5× 必须判换行", newDecision)
         assertNotEquals("旧规则永远并排，与新判定相反——旧行为在这组必红", newDecision, oldRuleAlwaysSideBySide)
     }
+
+    /**
+     * #2110：Material3 ListItem 实际有左右各 16dp（90px）与 TrailingContentStartPadding 16dp（45px），
+     * 三星 384dp 屏（卡片 344dp = 968px，2.8125 px/dp）上真正留给 headline+trailing 内容的宽度是 833px
+     * （旧误估 8dp 时为 855px）。
+     *
+     * 覆盖四类真实输入：
+     * 1. 标准字号 1.08×「邮件反馈」+ ppass@hawkeye-xb.com（698px ≤ 833px）稳稳单行；
+     * 2. 落在 (833, 855] 窗口的边界输入（335 + 468 + 42 = 845px）：旧 8dp 误判并排（断言红），
+     *    当前 16dp 正确判堆叠（断言绿），把 HomeScreen.kt 改回 8dp 必回红；
+     * 3. 1.5× 大字号（962px > 833px）切换为堆叠；
+     * 4. 320dp 窄屏（卡片 280dp ≈ 787px，可用 652px < 698px）切换为堆叠。
+     */
+    @Test
+    fun about_email_row_stays_single_line_at_standard_scale_and_stacks_when_tight() {
+        val samsungDensity = 2.8125f
+        val listItemAvailablePx = cellRowAvailableWidthPx(maxWidthPx = 968, density = samsungDensity, hasTrailing = true)
+        assertEquals("三星 968px 卡片扣除 32dp 左右与 16dp 尾部前置间距后可用宽必须为 833px", 833, listItemAvailablePx)
+
+        val emailAt108Px = 468
+        val chevronAndGapAt108Px = 31 + 11
+        val conciseLabelAt108Px = 188 // 「邮件反馈」（4 个汉字 @ 15sp × 1.08）
+
+        assertFalse(
+            "1.08× 标准字号下「邮件反馈」+ 邮箱（698px ≤ 833px）必须单行并排",
+            cellRowStacks(conciseLabelAt108Px, emailAt108Px, listItemAvailablePx, chevronAndGapAt108Px),
+        )
+
+        val emailAt15Px = (emailAt108Px * 1.5 / 1.08).toInt()
+        val conciseLabelAt15Px = (conciseLabelAt108Px * 1.5 / 1.08).toInt()
+        val chevronAndGapAt15Px = 40 + 11
+        assertTrue(
+            "1.5× 大字号下「邮件反馈」+ 邮箱超出可用宽，必须切为堆叠",
+            cellRowStacks(conciseLabelAt15Px, emailAt15Px, listItemAvailablePx, chevronAndGapAt15Px),
+        )
+
+        val narrow320CardPx = (280 * samsungDensity).toInt() // 320dp 屏扣 40dp 页边距 = 280dp ≈ 787px
+        val narrowAvailablePx = cellRowAvailableWidthPx(maxWidthPx = narrow320CardPx, density = samsungDensity, hasTrailing = true)
+        assertEquals("320dp 窄屏（280dp≈787px 卡片）扣除 32dp+16dp 后可用宽应为 652px", 652, narrowAvailablePx)
+        assertTrue(
+            "320dp 窄屏下「邮件反馈」+ 邮箱（698px > 652px）放不下，必须切为堆叠",
+            cellRowStacks(conciseLabelAt108Px, emailAt108Px, narrowAvailablePx, chevronAndGapAt108Px),
+        )
+    }
+
+    /**
+     * #2110 基线反证（8dp → 16dp 宽裕量）：
+     * 335 + 468 + 42 = 845px 落在 (833, 855] 区间——旧 8dp 误估下 available=855px 会错判并排（本条必红），
+     * 当前 16dp 真实值下 available=833px 正确判堆叠（本条为绿）。
+     */
+    @Test
+    fun boundary_between_8dp_and_16dp_trailing_padding_stacks() {
+        val availablePx = cellRowAvailableWidthPx(maxWidthPx = 968, density = 2.8125f, hasTrailing = true)
+        assertTrue(
+            "845px 落在 (833, 855] 区间：按真实 16dp 尾部间距必须判堆叠（退回旧 8dp=855px 会误判并排并令本条回红）",
+            cellRowStacks(labelWidthPx = 335, valueWidthPx = 468, availableWidthPx = availablePx, trailingWidthPx = 42),
+        )
+    }
 }
