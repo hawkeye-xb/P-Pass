@@ -1,0 +1,3 @@
+Play local videos first, save or share with progress, and pull to refresh.
+Refined scope and status; one-tap folder re-auth and resume.
+Added About, desktop link share, and screen reader labels.
