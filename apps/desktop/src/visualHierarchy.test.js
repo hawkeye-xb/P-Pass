@@ -73,11 +73,22 @@ function makeDevice(ch, name, extra = {}) {
   };
 }
 
-function setupDaemon({ devices = [], photos = [], audit = [], testBuild = false } = {}) {
+function setupDaemon({
+  devices = [],
+  photos = [],
+  audit = [],
+  testBuild = false,
+  wizardState = { show_wizard: false },
+  statusError = null,
+  devicesError = null,
+  pairedOverride = null,
+} = {}) {
   invokeMock.mockImplementation(async (cmd) => {
     switch (daemonMethodOf(cmd) ? "daemon" : cmd) {
       case "wizard_state":
-        return { show_wizard: false };
+        return wizardState;
+      case "platform_ux":
+        return { close_to_tray_hint: false, overlay_titlebar: true, sleep_owner: "user" };
       case "service_state":
         return { state: "running" };
       case "is_test_build":
@@ -99,12 +110,14 @@ function setupDaemon({ devices = [], photos = [], audit = [], testBuild = false 
       case "daemon":
         switch (daemonMethodOf(cmd)) {
           case "status":
+            if (statusError) throw new Error(statusError);
             return {
               version: "v0.6.0",
               pending_pairs: 0,
               photo_sources: photos.length,
               photo_count: photos.length,
-              paired_devices: devices.filter((d) => d.removal === "none").length,
+              paired_devices:
+                pairedOverride ?? devices.filter((d) => d.removal === "none").length,
               disconnected_devices: devices.filter((d) => d.removal === "disconnected").length,
               removed_devices: 0,
               library_dir: "/Users/demo/照片库",
@@ -113,6 +126,7 @@ function setupDaemon({ devices = [], photos = [], audit = [], testBuild = false 
               disk_encryption: "on",
             };
           case "devices.list":
+            if (devicesError) throw new Error(devicesError);
             return { devices, last_backup_overall: null };
           case "device.watermarks":
             return { watermarks: [] };
@@ -258,6 +272,12 @@ describe("#2083 + #2084 桌面端视觉权重、降噪、可点性与向导焦�
       // 高度较小（矮窗）：ResizeObserver 推入窄高内容区，设备与活动条数同步收紧
       roCallback?.([{ contentRect: { width: 900, height: 420 } }]);
       await vi.advanceTimersByTimeAsync(0);
+      const overviewGrid = screen.getByTestId("overview-grid");
+      expect(tokensOf(overviewGrid).has("overview-grid")).toBe(true);
+      expect(Array.from(overviewGrid.children).map((el) => el.getAttribute("data-testid"))).toEqual([
+        "overview-backup-card",
+        "overview-activity-card",
+      ]);
       const backupCard = screen.getByTestId("overview-backup-card");
       const activityCard = screen.getByTestId("overview-activity-card");
       expect(backupCard.querySelectorAll("ul li")).toHaveLength(1);
@@ -343,10 +363,15 @@ describe("#2083 + #2084 桌面端视觉权重、降噪、可点性与向导焦�
 
     const layers = screen.getByTestId("settings-layers");
     expect(tokensOf(layers).has("settings-grid")).toBe(true);
-    const primaryCol = screen.getByTestId("settings-primary-col");
-    expect(primaryCol.children[0].getAttribute("data-testid")).toBe("settings-library-card");
-    expect(primaryCol.children[1].getAttribute("data-testid")).toBe("settings-danger-zone");
-    expect(layers.children[1].getAttribute("data-testid")).toBe("about-card");
+    expect(screen.queryByTestId("settings-primary-col")).toBeNull();
+    expect(Array.from(layers.children).map((el) => el.getAttribute("data-testid"))).toEqual([
+      "settings-library-card",
+      "about-card",
+      "settings-danger-zone",
+    ]);
+    expect(tokensOf(layers.children[0]).has("settings-library-card")).toBe(true);
+    expect(tokensOf(layers.children[1]).has("settings-about-card")).toBe(true);
+    expect(tokensOf(layers.children[2]).has("settings-danger-card")).toBe(true);
 
     // ① 核心区：路径、磁盘水位、打开/搬迁交互
     const libCard = screen.getByTestId("settings-library-card");
@@ -616,5 +641,92 @@ describe("#2083 + #2084 桌面端视觉权重、降噪、可点性与向导焦�
       HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
       globalThis.ResizeObserver = origRO;
     }
+  });
+
+  it("#2092 status 读取失败（status === null）或 devices.list 失败时不误显添加第一台设备空态", async () => {
+    setupDaemon({ statusError: "status_unavailable" });
+    await openApp("#/overview");
+
+    expect(screen.queryByTestId("overview-empty-add")).toBeNull();
+    expect(screen.getByTestId("overview-grid")).toBeTruthy();
+    expect(screen.getByTestId("overview-backup-card")).toBeTruthy();
+
+    cleanup();
+    setupDaemon({ devices: [], pairedOverride: 0, devicesError: "devices_unavailable" });
+    await openApp("#/overview");
+
+    expect(screen.queryByTestId("overview-empty-add")).toBeNull();
+    expect(screen.getByTestId("overview-grid")).toBeTruthy();
+    expect(screen.getByTestId("devices-error")).toBeTruthy();
+  });
+
+  it("#2092 离线超 15 天且 needs_attention=false 的设备与摘要带关注数一致，窄高下仍置顶", async () => {
+    let roCallback = null;
+    const origRO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(cb) {
+        roCallback = cb;
+      }
+      observe() {}
+      disconnect() {}
+    };
+
+    try {
+      const devs = [
+        makeDevice("a", "正常手机1", { last_activity_at: NOW - 10_000 }),
+        makeDevice("b", "正常手机2", { last_activity_at: NOW - 20_000 }),
+        makeDevice("c", "久未联系手机", {
+          presence: "offline",
+          row_state: "idle",
+          needs_attention: false,
+          last_seen: NOW - 16 * 86_400_000,
+          last_activity_at: NOW - 16 * 86_400_000,
+        }),
+      ];
+      setupDaemon({ devices: devs });
+      await openApp("#/overview");
+
+      roCallback?.([{ contentRect: { width: 900, height: 420 } }]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(screen.getByTestId("overview-health-btn").textContent).toContain("1 台设备需关注");
+      const backupCard = screen.getByTestId("overview-backup-card");
+      const rows = backupCard.querySelectorAll("ul li");
+      expect(rows).toHaveLength(1);
+      expect(rows[0].textContent).toContain("久未联系手机");
+      expect(backupCard.textContent).toContain("另有 2 台正常");
+    } finally {
+      globalThis.ResizeObserver = origRO;
+    }
+  });
+
+  it("#2092 首启向导渲染在独立 wizard-shell 容器内且操作按钮完整可达，主界面使用 shell 与 content 容器", async () => {
+    setupDaemon({
+      wizardState: {
+        show_wizard: true,
+        default_dir: "/Users/demo/Pictures/P-Pass",
+        configured_library_dir: null,
+      },
+    });
+    await openApp();
+
+    const wizardShell = document.querySelector("main.wizard-shell");
+    expect(wizardShell).toBeTruthy();
+    expect(document.querySelector(".shell")).toBeNull();
+    expect(wizardShell.querySelector("button")).toBeTruthy();
+
+    cleanup();
+    setupDaemon({ devices: [makeDevice("a", "客厅的手机")] });
+    await openApp("#/settings");
+    expect(document.querySelector("main.wizard-shell")).toBeNull();
+    expect(document.querySelector(".shell")).toBeTruthy();
+    expect(document.querySelector("main.content")).toBeTruthy();
+
+    const layers = screen.getByTestId("settings-layers");
+    expect(Array.from(layers.children).map((el) => el.getAttribute("data-testid"))).toEqual([
+      "settings-library-card",
+      "about-card",
+      "settings-danger-zone",
+    ]);
   });
 });

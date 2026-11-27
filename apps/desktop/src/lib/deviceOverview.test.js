@@ -20,12 +20,13 @@ describe("desktop device projection", () => {
   });
 
   it("keeps all backup warnings, caps healthy rows, and omits disconnected devices", () => {
+    const healthy = { removal: "none", presence: "online", last_seen: now - day };
     const input = [
-      { ...offline, node_id: "ok-old", last_activity_at: 3 },
-      { ...offline, node_id: "ok-new", last_activity_at: 4 },
-      { ...offline, node_id: "warn-old", last_activity_at: 1, needs_attention: true },
-      { ...offline, node_id: "warn-new", last_activity_at: 2, needs_attention: true },
-      { ...offline, node_id: "away", last_activity_at: 5, removal: "disconnected" },
+      { ...healthy, node_id: "ok-old", last_activity_at: 3 },
+      { ...healthy, node_id: "ok-new", last_activity_at: 4 },
+      { ...healthy, node_id: "warn-old", last_activity_at: 1, row_state: "needs_attention" },
+      { ...healthy, node_id: "warn-new", last_activity_at: 2, row_state: "needs_attention" },
+      { ...healthy, node_id: "away", last_activity_at: 5, removal: "disconnected" },
     ];
     const { shown, moreOk } = overviewRows(input, {}, now);
     expect(shown.map(({ d }) => d.node_id)).toEqual(["warn-new", "warn-old", "ok-new"]);
@@ -45,5 +46,18 @@ describe("desktop device projection", () => {
       "ok-old",
     ]);
     expect(expanded.moreOk).toBe(0);
+  });
+
+  it("pins offline >15d devices with needs_attention=false ahead of healthy rows when maxRows=1", () => {
+    const healthy = { removal: "none", presence: "online", last_seen: now - day };
+    const input = [
+      { ...healthy, node_id: "ok-new", last_activity_at: 4 },
+      { ...healthy, node_id: "ok-old", last_activity_at: 3 },
+      { ...offline, node_id: "stale-only", row_state: "idle", needs_attention: false, last_activity_at: 1 },
+    ];
+    const { shown, moreOk } = overviewRows(input, {}, now, 1);
+    expect(shown.map(({ d }) => d.node_id)).toEqual(["stale-only"]);
+    expect(shown[0].row.alert).toBe(true);
+    expect(moreOk).toBe(2);
   });
 });

@@ -44,8 +44,8 @@ export function overviewRows(devices, watermarks, now, maxRows = OVERVIEW_ROWS) 
   const cap = Number.isFinite(maxRows) ? Math.max(0, Math.floor(maxRows)) : OVERVIEW_ROWS;
   const active = devices.filter((d) => d.removal === "none").sort(byActivity);
   const withRow = active.map((d) => ({ d, row: deviceRow(d, watermarks[d.node_id], now) }));
-  const alerts = withRow.filter((x) => x.d.needs_attention);
-  const ok = withRow.filter((x) => !x.d.needs_attention);
+  const alerts = withRow.filter((x) => x.row.alert);
+  const ok = withRow.filter((x) => !x.row.alert);
   const shown = [...alerts, ...ok.slice(0, Math.max(0, cap - alerts.length))];
   return { shown, moreOk: ok.length - (shown.length - alerts.length) };
 }

@@ -1988,7 +1988,7 @@
               </div>
             {/if}
 
-            {#if pairedCount === 0}
+            {#if status !== null && !devicesError && pairedCount === 0}
               <!-- 0 台设备：主舞台只突出「添加第一台设备」主卡片，不展示空的设备状态与活动卡。 -->
               <Card class="max-w-[520px] gap-[12px] text-[16px]" data-testid="overview-empty-add">
                 <h3 class="mb-0 text-[15px] font-semibold">{t("ui.add_first_device")}</h3>
@@ -2367,67 +2367,51 @@
           <div>
             <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.settings")}</h2>
           </div>
-          <!-- 设置页两档主次布局（按内容区真实可用宽度响应）：<860px 单栏三层竖排（照片库 → 应用与支持 → 停止后台服务）；≥860px 左主列「照片库 + 停止后台服务」，右辅列「应用与支持」。 -->
+          <!-- 设置页两档主次布局（按内容区真实可用宽度响应）：<860px 单栏三层竖排（照片库 → 关于与更新 → 停止后台服务）；≥860px 用 CSS Grid 网格位置定位为左主列「照片库 + 停止后台服务」、右辅列「关于与更新」，DOM/焦点顺序严格一致（WCAG 2.4.3）。 -->
           <div class="settings-grid" data-testid="settings-layers">
-            <div class="settings-primary-col" data-testid="settings-primary-col">
-              <!-- ① 核心区：照片库 -->
-              <Card class="settings-library-card text-[16px]" data-testid="settings-library-card">
-                <h3 class="mb-[12px] text-[15px] font-semibold">{t("ui.library")}</h3>
-                {#if status?.library_dir}
-                  <code class="block rounded-sm bg-linen px-[16px] py-[12px] text-[14px] break-all">{status.library_dir}</code>
-                {/if}
-                <div class="mt-[12px] flex flex-wrap gap-[10px]">
-                  <Button onclick={openLibrary}>{t("ui.open_library")}</Button>
-                  <!-- #639：「更改照片库位置」恢复，语义改为整库搬迁（手机零重扫码、零重传、原目录搬空）。 -->
-                  <Button variant="secondary" onclick={chooseFolder} data-testid="change-library">{t("ui.change_library")}</Button>
-                </div>
-                <!-- T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes）——
-                     「可用 X GB / 共 Y GB」+ 细进度条（token 色）；任一字段
-                     null（磁盘统计拿不到）整行连进度条一起隐藏。 -->
-                {#if diskFree !== null && diskTotal !== null && diskPct !== null}
-                  <div class="mt-[14px] flex justify-between gap-[12px] border-t border-divider pt-[14px] text-[14px] font-semibold">
-                    <span>{t("ui.disk_space")}</span>
-                    <span class="text-[14px] font-normal text-ink-40">{t("ui.disk_free_of_total", { free: diskFree, total: diskTotal })}</span>
-                  </div>
-                  <div
-                    class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"
-                    role="progressbar"
-                    aria-label={t("ui.disk_space")}
-                    aria-valuemin="0"
-                    aria-valuemax="100"
-                    aria-valuenow={diskPct}
-                  ><div class="h-full rounded-full bg-ink" style="width:{diskPct}%"></div></div>
-                {/if}
-                {#if status?.relocate_leftover}
-                  <!-- F6：原位置删不掉的残留，显示到用户删掉为止（daemon 每次 status 核一次目录还在不在）。 -->
-                  <p class="m-0 mt-[10px] text-[13px] leading-[1.6] break-all text-waiting" data-testid="relocate-leftover">{t("ui.relocate_leftover", { dir: status.relocate_leftover })}</p>
-                {/if}
-                <!-- W-4：只在确认系统盘没开磁盘加密时出现一行现状，不阻断使用；
-                     查不到（"unknown"）不提示。 -->
-                {#if status?.disk_encryption === "off"}
-                  <div class="mt-[14px] flex justify-between gap-[12px] border-t border-divider pt-[14px] text-[14px] font-semibold" data-testid="disk-encryption-off">
-                    <span>{t("ui.disk_encryption")}</span>
-                    <span class="text-[14px] font-normal text-ink-40">{t("ui.disk_encryption_off")}</span>
-                  </div>
-                {/if}
-                <!-- #639：后果说明随入口恢复，文案改为整库搬迁。 -->
-                <p class="m-0 mt-[10px] text-[13px] leading-[1.6] text-ink-40">{t("ui.library_change_hint")}</p>
-              </Card>
-
-              <!-- ③ 危险区：低权重独立紧凑区 -->
-              {#if canStopService(serviceState)}
-                <Card
-                  class="settings-danger-card flex-row flex-wrap items-center justify-between gap-[16px] py-[16px] text-[16px]"
-                  data-testid="settings-danger-zone"
-                >
-                  <div class="min-w-0 flex-1 basis-[260px]">
-                    <h3 class="m-0 text-[14px] font-semibold text-ink">{t("ui.stop_service")}</h3>
-                    <p class="m-0 mt-[4px] text-[13px] leading-[1.5] text-ink-40">{t("ui.stop_hint")}</p>
-                  </div>
-                  <Button variant="danger" class="flex-none" onclick={stopService}>{t("ui.stop_service")}</Button>
-                </Card>
+            <!-- ① 核心区：照片库 -->
+            <Card class="settings-library-card text-[16px]" data-testid="settings-library-card">
+              <h3 class="mb-[12px] text-[15px] font-semibold">{t("ui.library")}</h3>
+              {#if status?.library_dir}
+                <code class="block rounded-sm bg-linen px-[16px] py-[12px] text-[14px] break-all">{status.library_dir}</code>
               {/if}
-            </div>
+              <div class="mt-[12px] flex flex-wrap gap-[10px]">
+                <Button onclick={openLibrary}>{t("ui.open_library")}</Button>
+                <!-- #639：「更改照片库位置」恢复，语义改为整库搬迁（手机零重扫码、零重传、原目录搬空）。 -->
+                <Button variant="secondary" onclick={chooseFolder} data-testid="change-library">{t("ui.change_library")}</Button>
+              </div>
+              <!-- T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes）——
+                   「可用 X GB / 共 Y GB」+ 细进度条（token 色）；任一字段
+                   null（磁盘统计拿不到）整行连进度条一起隐藏。 -->
+              {#if diskFree !== null && diskTotal !== null && diskPct !== null}
+                <div class="mt-[14px] flex justify-between gap-[12px] border-t border-divider pt-[14px] text-[14px] font-semibold">
+                  <span>{t("ui.disk_space")}</span>
+                  <span class="text-[14px] font-normal text-ink-40">{t("ui.disk_free_of_total", { free: diskFree, total: diskTotal })}</span>
+                </div>
+                <div
+                  class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"
+                  role="progressbar"
+                  aria-label={t("ui.disk_space")}
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow={diskPct}
+                ><div class="h-full rounded-full bg-ink" style="width:{diskPct}%"></div></div>
+              {/if}
+              {#if status?.relocate_leftover}
+                <!-- F6：原位置删不掉的残留，显示到用户删掉为止（daemon 每次 status 核一次目录还在不在）。 -->
+                <p class="m-0 mt-[10px] text-[13px] leading-[1.6] break-all text-waiting" data-testid="relocate-leftover">{t("ui.relocate_leftover", { dir: status.relocate_leftover })}</p>
+              {/if}
+              <!-- W-4：只在确认系统盘没开磁盘加密时出现一行现状，不阻断使用；
+                   查不到（"unknown"）不提示。 -->
+              {#if status?.disk_encryption === "off"}
+                <div class="mt-[14px] flex justify-between gap-[12px] border-t border-divider pt-[14px] text-[14px] font-semibold" data-testid="disk-encryption-off">
+                  <span>{t("ui.disk_encryption")}</span>
+                  <span class="text-[14px] font-normal text-ink-40">{t("ui.disk_encryption_off")}</span>
+                </div>
+              {/if}
+              <!-- #639：后果说明随入口恢复，文案改为整库搬迁。 -->
+              <p class="m-0 mt-[10px] text-[13px] leading-[1.6] text-ink-40">{t("ui.library_change_hint")}</p>
+            </Card>
 
             <!-- ② 常规与支持：软件更新 + 关于（版本与外链）合进同一张紧凑分组列表卡 -->
             <Card size="flush" class="settings-about-card text-[16px]" data-testid="about-card">
@@ -2538,6 +2522,20 @@
                 </button>
               {/each}
             </Card>
+
+            <!-- ③ 危险区：低权重独立紧凑区 -->
+            {#if canStopService(serviceState)}
+              <Card
+                class="settings-danger-card flex-row flex-wrap items-center justify-between gap-[16px] py-[16px] text-[16px]"
+                data-testid="settings-danger-zone"
+              >
+                <div class="min-w-0 flex-1 basis-[260px]">
+                  <h3 class="m-0 text-[14px] font-semibold text-ink">{t("ui.stop_service")}</h3>
+                  <p class="m-0 mt-[4px] text-[13px] leading-[1.5] text-ink-40">{t("ui.stop_hint")}</p>
+                </div>
+                <Button variant="danger" class="flex-none" onclick={stopService}>{t("ui.stop_service")}</Button>
+              </Card>
+            {/if}
           </div>
         </section>
       {/if}
@@ -2769,7 +2767,6 @@
   }
   :global(html), :global(body), :global(#app) {
     height: 100%;
-    overflow: hidden;
   }
   /* T-082: 键盘焦点统一用 token 色 outline，消灭系统默认蓝色焦点圈。
      :global 覆盖本窗口全部可聚焦元素（含 Wizard）。 */
@@ -2897,20 +2894,10 @@
     align-items: start;
     gap: 22px;
   }
-  .settings-primary-col {
-    display: contents;
-  }
-  :global(.settings-library-card) {
-    min-width: 0;
-    order: 1;
-  }
-  :global(.settings-about-card) {
-    min-width: 0;
-    order: 2;
-  }
+  :global(.settings-library-card),
+  :global(.settings-about-card),
   :global(.settings-danger-card) {
     min-width: 0;
-    order: 3;
   }
   @container (min-width: 760px) {
     .overview-grid {
@@ -2922,31 +2909,36 @@
   @container (min-width: 860px) {
     .settings-grid {
       grid-template-columns: minmax(0, 1.4fr) minmax(300px, 1fr);
+      grid-template-rows: auto 1fr;
       align-items: start;
     }
-    .settings-primary-col {
-      display: flex;
-      flex-direction: column;
-      gap: 22px;
-      min-width: 0;
-      order: 1;
+    :global(.settings-library-card) {
+      grid-column: 1;
+      grid-row: 1;
     }
-    :global(.settings-library-card),
     :global(.settings-danger-card) {
-      order: initial;
+      grid-column: 1;
+      grid-row: 2;
+    }
+    :global(.settings-about-card) {
+      grid-column: 2;
+      grid-row: 1 / span 2;
     }
   }
 
 
 
-  
 
 
-  
+
+
 
   /* wizard 全窗（首启向导独占，无侧栏） */
   .wizard-shell {
     max-width: 680px;
+    height: 100vh;
+    overflow-y: auto;
+    box-sizing: border-box;
     margin: 0 auto;
     padding: 24px;
   }
