@@ -52,6 +52,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -342,7 +343,10 @@ internal fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
 
                 Row(
-                    modifier = Modifier.fillMaxWidth().heightIn(min = HERO_PROGRESS_ROW_MIN_HEIGHT_DP.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = HERO_PROGRESS_ROW_MIN_HEIGHT_DP.dp)
+                        .testTag("hero_progress_row"),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
@@ -354,6 +358,7 @@ internal fun HomeScreen(
                                 fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
                                 color = PPColor.Ink60,
                                 maxLines = textMaxLines, minLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.testTag("hero_progress_line1"),
                             )
                             Text(
                                 when (slots.secondLine.kind) {
@@ -367,24 +372,26 @@ internal fun HomeScreen(
                                 fontSize = 13.sp,
                                 color = slots.secondLineColor,
                                 maxLines = textMaxLines, minLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.testTag("hero_progress_line2"),
                             )
                             Spacer(Modifier.height(8.dp))
                             val progress = transferProgress
                             // 没有进度时也占住同高的槽，忙碌块换行时卡片不跳动。
                             val barHeight = heroBusyProgressSlotHeight(slots)
-                            if (progress != null) {
-                                // Material3 1.3 LinearProgressIndicator 默认带 gapSize=4.dp 与末端停靠圆点，必须清零才是连续直条
-                                val barColor = slots.progressColor
-                                androidx.compose.material3.LinearProgressIndicator(
-                                    progress = { progress },
-                                    modifier = Modifier.fillMaxWidth().height(barHeight),
-                                    color = barColor,
-                                    trackColor = barColor.copy(alpha = 0.18f),
-                                    gapSize = 0.dp,
-                                    drawStopIndicator = {},
-                                )
-                            } else {
-                                Spacer(Modifier.fillMaxWidth().height(barHeight))
+                            Box(Modifier.fillMaxWidth().height(barHeight).testTag("hero_progress_bar")) {
+                                if (progress != null) {
+                                    // Material3 1.3 LinearProgressIndicator 默认带 gapSize=4.dp 与末端停靠圆点，必须清零才是连续直条；
+                                    // 同时它自带 10dp 纵向 SemanticsBoundsPadding，由外层 Box 承担 testTag 测量真实视觉槽边界。
+                                    val barColor = slots.progressColor
+                                    androidx.compose.material3.LinearProgressIndicator(
+                                        progress = { progress },
+                                        modifier = Modifier.fillMaxSize(),
+                                        color = barColor,
+                                        trackColor = barColor.copy(alpha = 0.18f),
+                                        gapSize = 0.dp,
+                                        drawStopIndicator = {},
+                                    )
+                                }
                             }
                         } else {
                             val idleLine: String? = when {

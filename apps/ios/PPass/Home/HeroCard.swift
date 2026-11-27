@@ -69,6 +69,16 @@ struct HeroCard: View {
             }
             .padding(.vertical, 6)
             .ppTinted(Self.surfaceBackground(tone))
+            .coordinateSpace(name: "heroCard")
+            .onPreferenceChange(HeroProgressFrameKey.self) { frames in
+                if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+                    NotificationCenter.default.post(
+                        name: Notification.Name("PPassHeroLayoutMeasured"),
+                        object: nil,
+                        userInfo: ["frames": frames.mapValues { NSValue(cgRect: $0) }]
+                    )
+                }
+            }
         } footer: {
             if let free = app.facts.view?.desktopFreeBytes, free < DesktopHealth.lowSpaceBytes {
                 Text(L.s("desktop_low_space_hint"))
@@ -133,6 +143,7 @@ struct HeroCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 if state.isRunning { transferSlots(state) } else if let text = statusText(state) {
                     Text(text).font(PPFont.statusLine).foregroundStyle(statusColor(state))
+                        .accessibilityIdentifier("hero_progress_idle_line")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -145,6 +156,9 @@ struct HeroCard: View {
             }
         }
         .frame(minHeight: PPUI.Layout.heroProgressRowMinHeight, alignment: .center)
+        .reportHeroFrame("hero_progress_row")
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("hero_progress_row")
     }
 
     @ViewBuilder private func transferSlots(_ state: BackupUiState) -> some View {
@@ -156,28 +170,47 @@ struct HeroCard: View {
                 if case .fetchingFromICloud(let done, let total, let file, let fraction) = state {
                     Text(file).font(PPFont.sans(13.5, .medium)).foregroundStyle(PPColor.ink60)
                         .lineLimit(1).truncationMode(.middle)
+                        .reportHeroFrame("hero_progress_line1")
+                        .accessibilityIdentifier("hero_progress_line1")
                     Text(L.f("state_fetching_icloud", Int(((fraction ?? 0) * 100).rounded()), done, total))
                         .font(PPFont.sans(13)).foregroundStyle(PPColor.ink60).lineLimit(1)
+                        .reportHeroFrame("hero_progress_line2")
+                        .accessibilityIdentifier("hero_progress_line2")
                 } else if case .sending(let done, let total, let file) = state {
                     Text(file).font(PPFont.sans(13.5, .medium)).foregroundStyle(PPColor.ink60)
                         .lineLimit(1).truncationMode(.middle)
+                        .reportHeroFrame("hero_progress_line1")
+                        .accessibilityIdentifier("hero_progress_line1")
                     Text(slow ? L.f("state_sending_slow", quiet)
                          : TransferText.bytes(v?.currentBytesSent ?? 0, v?.currentTotalBytes ?? 0)
                             .map { L.f("state_sending_detail", $0, done, total) } ?? L.f("state_sending", done, total))
                         .font(PPFont.sans(13)).foregroundStyle(slow ? PPColor.waiting : PPColor.ink60).lineLimit(1)
+                        .reportHeroFrame("hero_progress_line2")
+                        .accessibilityIdentifier("hero_progress_line2")
                 } else {
                     Text(statusText(state) ?? " ").font(PPFont.sans(13.5, .medium)).foregroundStyle(PPColor.ink60).lineLimit(1)
+                        .reportHeroFrame("hero_progress_line1")
+                        .accessibilityIdentifier("hero_progress_line1")
                     Text(" ").font(PPFont.sans(13)).lineLimit(1)
+                        .reportHeroFrame("hero_progress_line2")
+                        .accessibilityIdentifier("hero_progress_line2")
                 }
                 Spacer().frame(height: 8)
                 if case .fetchingFromICloud(_, _, _, let fraction?) = state {
                     PPProgressBar(value: fraction, total: 1, tint: PPColor.safe, track: PPColor.safe.opacity(0.18))
+                        .reportHeroFrame("hero_progress_bar")
+                        .accessibilityIdentifier("hero_progress_bar")
                 } else if let v, v.currentTotalBytes > 0, case .sending = state {
                     let tint = slow ? PPColor.waiting : PPColor.safe
                     PPProgressBar(value: Double(v.currentBytesSent), total: Double(v.currentTotalBytes),
                                   tint: tint, track: tint.opacity(0.18))
+                        .reportHeroFrame("hero_progress_bar")
+                        .accessibilityIdentifier("hero_progress_bar")
                 } else {
                     Color.clear.frame(height: 6)
+                        .reportHeroFrame("hero_progress_bar")
+                        .accessibilityElement()
+                        .accessibilityIdentifier("hero_progress_bar")
                 }
             }
         }
@@ -254,5 +287,24 @@ struct HeroCompactActionButton: View {
                 )
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct HeroProgressFrameKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] { [:] }
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
+private extension View {
+    @ViewBuilder func reportHeroFrame(_ id: String) -> some View {
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            self.background(GeometryReader { g in
+                Color.clear.preference(key: HeroProgressFrameKey.self, value: [id: g.frame(in: .named("heroCard"))])
+            })
+        } else {
+            self
+        }
     }
 }

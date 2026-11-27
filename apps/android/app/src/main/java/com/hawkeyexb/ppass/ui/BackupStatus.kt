@@ -138,8 +138,8 @@ internal data class HeroBusySlots(
     val progressSlotHeightDp: Int = 6,
 )
 
-/** 英雄区底部进度槽最小高度，避免忙碌态与空闲态切换时卡片整体跳动。 */
-internal const val HERO_PROGRESS_ROW_MIN_HEIGHT_DP = 56
+/** 英雄区底部进度槽最小高度（忙碌态两行 + 8dp 间距 + 6dp 进度条实测约 62.6dp），避免忙碌态与空闲态切换时卡片整体跳动。 */
+internal const val HERO_PROGRESS_ROW_MIN_HEIGHT_DP = 64
 
 /** 忙碌块文字的 maxLines：单行模式下超出省略。 */
 internal fun heroBusyTextMaxLines(slots: HeroBusySlots): Int = if (slots.singleLine) 1 else Int.MAX_VALUE
