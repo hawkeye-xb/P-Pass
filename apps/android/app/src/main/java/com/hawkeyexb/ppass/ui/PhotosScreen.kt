@@ -189,7 +189,9 @@ class TimelineLoader(
             ProtoJson.encodeToJsonElement(ThumbGet.serializer(), ThumbGet(hash, size)),
         )
         if (!resp.ok) return null
-        val data = ProtoJson.decodeFromJsonElement(ThumbData.serializer(), resp.result!!)
+        val result = resp.result ?: return null
+        val data = ProtoJson.decodeFromJsonElement(ThumbData.serializer(), result)
+        if (data.placeholder) return null
         val bytes = Base64.decode(data.jpegBase64, Base64.DEFAULT)
         val bmp = decodeDesktopThumb(bytes, hash, size.px) ?: return null
         thumbCache.put(key, bmp)
@@ -254,6 +256,7 @@ internal fun PhotosScreen(
     val items = holder.items
     val next = holder.next
     val loading = holder.loading
+    val refreshGeneration = holder.refreshGeneration
     val error = holder.error
     LaunchedEffect(error) { error?.let { PLog.w("PPassTimeline", "photos tab load failed: $it") } }
     val chrome = photosTimelineChrome(connection, error)
@@ -428,6 +431,7 @@ internal fun PhotosScreen(
                         ThumbCell(
                             localMedia, asset,
                             isMine = localNodeId?.let { asset.sourceDeviceOrNull() == it } == true,
+                            refreshGeneration = refreshGeneration,
                         ) {
                             updateViewer(MediaViewerSession.open(shown, asset.hash))
                         }
@@ -475,17 +479,33 @@ private fun groupByMonth(items: List<AssetMeta>): List<Pair<String, List<AssetMe
         .entries.map { it.key to it.value }
 }
 
+internal suspend fun resolveThumbTile(
+    current: Bitmap?,
+    cacheKey: String,
+    cached: (String) -> Bitmap? = { thumbCache.get(it) },
+    fetch: suspend () -> Bitmap?,
+): Bitmap? {
+    if (current != null) return current
+    return cached(cacheKey) ?: fetch()
+}
+
 @Composable
 private fun ThumbCell(
     localMedia: LocalFirstLoader<Bitmap>,
     asset: AssetMeta,
     isMine: Boolean,
+    refreshGeneration: Int = 0,
     onOpen: () -> Unit,
 ) {
+    val cacheKey = "${asset.hash}/256"
     @Suppress("ProduceStateDoesNotAssignValue")
-    val bmp by produceState<Bitmap?>(initialValue = thumbCache.get("${asset.hash}/256"), asset.hash) {
-        if (value == null) {
-            value = runCatching { localMedia.thumb(asset, ThumbSize.S256, isMine) }.getOrNull()
+    val bmp by produceState<Bitmap?>(
+        initialValue = thumbCache.get(cacheKey),
+        key1 = asset.hash,
+        key2 = refreshGeneration,
+    ) {
+        value = resolveThumbTile(current = value, cacheKey = cacheKey) {
+            runCatching { localMedia.thumb(asset, ThumbSize.S256, isMine) }.getOrNull()
         }
     }
     Box(
