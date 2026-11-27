@@ -284,9 +284,10 @@ describe("#2083 + #2084 桌面端视觉权重、降噪、可点性与向导焦�
     expect(aboutCard.querySelector('[data-testid="about-shell-version"]')?.textContent).toContain("v0.6.0");
     expect(aboutCard.querySelector('[data-testid="about-service-version"]')?.textContent).toContain("v0.6.0");
 
+    checkUpdate.mockClear();
     await fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
     await vi.advanceTimersByTimeAsync(0);
-    expect(checkUpdate).toHaveBeenCalled();
+    expect(checkUpdate).toHaveBeenCalledTimes(1);
 
     await fireEvent.click(screen.getByTestId("about-link-website"));
     await vi.advanceTimersByTimeAsync(0);

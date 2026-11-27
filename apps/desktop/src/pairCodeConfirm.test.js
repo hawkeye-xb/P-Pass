@@ -393,7 +393,7 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     expect(document.body.textContent).toContain("验证码已提交");
   });
 
-  // #2092 / #1257：二维码弹窗只保留码、说明与操作，电脑名称与标识核对仅在确认弹窗出现。
+  // #2092 / #1257：二维码弹窗只保留码、说明与操作，电脑标识核对（desktop-fingerprint）保留在确认弹窗。
   it("二维码弹窗不显示电脑名称与电脑标识（核对在确认那一步）", async () => {
     const d = desktop();
     d.fingerprint = "AB12 CD34";
