@@ -1,5 +1,15 @@
 enum SettingsLayout {
-    enum Group: Hashable { case backup, selection, conditions }
+    enum Group: Hashable {
+        case backup, selection, conditions
+
+        var headerKey: String? {
+            switch self {
+            case .backup: nil
+            case .selection: "settings_section_single_transfer"
+            case .conditions: "settings_section_preferences"
+            }
+        }
+    }
     enum Backup: Hashable {
         case rule, scope, background
 

@@ -20,6 +20,7 @@
     <string name="decision_title">Choose the photos to back up automatically</string>
     <string name="decision_destination">After you choose albums and a time range, photos in that range are sent to %1$s each time you open the app.</string>
     <string name="decision_choose_scope">Turn on automatic backup</string>
+    <string name="decision_single_transfer_prompt">Or send a few manually</string>
     <string name="scope_album_no_access_title">Photos access is incomplete</string>
 
     <string name="scan_manual_title">Enter pairing code</string>
@@ -138,7 +139,6 @@
          claiming "Connected" off pairing validity alone (the photos tab says the same thing). -->
     <string name="storage_detail_offline">Not connected · %1$s</string>
     <string name="hero_of_n">/ %1$s photos backed up</string>
-    <string name="pending_count">%1$d to back up</string>
     <string name="triplet_unavailable">Couldn\'t read the album photo count.</string>
     <!-- #1038: the backup ledger (order table) can't be read ： no progress verdict at all. Not triplet_unavailable (album count). -->
     <string name="hero_counts_unreadable">The backup record can\'t be read right now, so progress isn\'t shown. It will retry when P-Pass is opened.</string>
@@ -273,9 +273,10 @@
 
     <!-- Tabs -->
     <string name="tab_photos">Photos</string>
-    <!-- 2026-08-17: re-checked the design doc via the claude_design MCP ：
-         the tab/page name is a static "Settings", not state-dependent. -->
-    <string name="tab_settings">Settings</string>
+    <!-- #2082: align second tab with tokens.json (Photos / Backup). -->
+    <string name="tab_settings">Backup</string>
+    <string name="settings_section_single_transfer">Send once</string>
+    <string name="settings_section_preferences">Preferences</string>
     <!-- MOB-24: 重复保存时说人话，别再写一份重复文件。 -->
     <string name="already_in_gallery">Already in Photos</string>
     <!-- #1106: 设备身份读不出来时的拒绝启动页。 -->

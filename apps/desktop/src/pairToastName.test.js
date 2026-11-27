@@ -108,12 +108,13 @@ describe("DEV-06 接线", () => {
     expect(app).toContain("pairResultName");
   });
 
-  it("回归护栏：活动记录三行的名字渲染不动（仍是 auditWho(e, devices)）", () => {
-    // 真机实测这三行是对的（#349 第二条评论）——本卡不许把它们改坏。
-    const hits = app.match(/auditWho\(e, devices\)/g) ?? [];
+  it("回归护栏：活动记录名字渲染使用 auditActorParts 拆出设备名且保留 auditWho tooltip", () => {
+    // #349 + #2084：总览最近活动与活动记录页均从 auditActorParts 取 name / shortId，
+    // 总览保留 title={auditWho(e, devices)}，不漏掉未配对/未知设备口径。
+    const hits = app.match(/auditActorParts\(e, devices\)/g) ?? [];
     expect(hits.length).toBe(2); // 总览页 + 活动记录页两个渲染点
     expect(app).toContain(
-      'import { auditText, auditWho } from "./auditProjection.js"'
+      'import { auditActorParts, auditText, auditWho } from "./auditProjection.js"'
     );
   });
 });

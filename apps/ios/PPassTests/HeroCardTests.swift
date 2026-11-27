@@ -60,4 +60,24 @@ final class HeroCardTests: XCTestCase {
         button.action()
         XCTAssertTrue(tapped)
     }
+
+    /// #2082：英雄卡四档底色与分隔线颜色一一对应 tokens.json 语义色。
+    func testHeroSurfaceToneColorsAndDividers() {
+        XCTAssertEqual(HeroCard.surfaceBackground(.act), PPColor.actBg)
+        XCTAssertEqual(HeroCard.dividerColor(.act), PPColor.act.opacity(0.18))
+        XCTAssertEqual(HeroCard.surfaceBackground(.waiting), PPColor.waitingBg)
+        XCTAssertEqual(HeroCard.dividerColor(.waiting), PPColor.waiting.opacity(0.18))
+        XCTAssertEqual(HeroCard.surfaceBackground(.neutral), PPColor.linen)
+        XCTAssertEqual(HeroCard.dividerColor(.neutral), PPColor.hairline)
+        XCTAssertEqual(HeroCard.surfaceBackground(.safe), PPColor.safeBg)
+        XCTAssertEqual(HeroCard.dividerColor(.safe), PPColor.safe.opacity(0.18))
+    }
+
+    /// #2082：上半区 lastLine 只显示最近成功，即使 k > 0 也不再拼接待备份张数（避免与下半区 state_pending 重复）。
+    func testLastLineDoesNotAppendPendingCountWhenKIsPositive() {
+        let withPending = BackupTriplet(n: 10, m: 4, lastSuccessAt: 1_700_000_000_000, confirmedRaw: 4)
+        let zeroPending = BackupTriplet(n: 10, m: 10, lastSuccessAt: 1_700_000_000_000, confirmedRaw: 10)
+        XCTAssertEqual(HeroCard.lastLine(withPending), HeroCard.lastLine(zeroPending))
+        XCTAssertFalse(HeroCard.lastLine(withPending).contains("·"))
+    }
 }

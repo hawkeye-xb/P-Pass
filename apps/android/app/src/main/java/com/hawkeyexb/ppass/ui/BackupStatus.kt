@@ -69,6 +69,13 @@ enum class HeroRender {
     Triplet,
 }
 
+enum class HeroSurfaceTone {
+    Act,
+    Waiting,
+    Neutral,
+    Safe,
+}
+
 internal fun backupScopeRowCount(selectedBucketCount: Int?): Int? = selectedBucketCount?.takeIf { it > 0 }
 
 internal fun selectedExistingCount(selected: Set<Long>?, existing: Set<Long>?): Int? = when {
@@ -195,6 +202,54 @@ internal fun heroIdleLineColor(waitReason: Int?, line: StatusLine, allSafeAllowe
         line is StatusLine.AllSafe && allSafeAllowed -> PPColor.Safe
         else -> PPColor.Ink60
     }
+
+internal fun heroSurfaceTone(
+    autoRule: Boolean,
+    render: HeroRender,
+    mixedAlbumIncomplete: Boolean,
+    state: BackupUiState,
+    triplet: BackupTriplet?,
+    fromTodayEmpty: Boolean,
+    allSafeAllowed: Boolean,
+    hasWaitReason: Boolean = false,
+): HeroSurfaceTone {
+    if (!autoRule) return HeroSurfaceTone.Neutral
+    if (render == HeroRender.AccessBlocked || mixedAlbumIncomplete) return HeroSurfaceTone.Act
+    if (render == HeroRender.NoAlbums) return HeroSurfaceTone.Neutral
+    if (
+        render == HeroRender.Unreconciled ||
+        isBackupRunning(state) ||
+        state is BackupUiState.Paused ||
+        state is BackupUiState.Waiting ||
+        hasWaitReason ||
+        (triplet?.k ?: 0L) > 0L
+    ) {
+        return HeroSurfaceTone.Waiting
+    }
+    if (render == HeroRender.CountsUnreadable || render == HeroRender.Unreadable || fromTodayEmpty) {
+        return HeroSurfaceTone.Neutral
+    }
+    if (state is BackupUiState.Trouble || state is BackupUiState.NoAlbums) {
+        return HeroSurfaceTone.Neutral
+    }
+    val hasConfirmedOrAllSafe =
+        state is BackupUiState.AllSafe || ((triplet?.n ?: 0L) > 0L && (triplet?.m ?: 0L) > 0L)
+    return if (allSafeAllowed && hasConfirmedOrAllSafe) HeroSurfaceTone.Safe else HeroSurfaceTone.Neutral
+}
+
+internal fun heroSurfaceBackground(tone: HeroSurfaceTone): Color = when (tone) {
+    HeroSurfaceTone.Act -> PPColor.ActBg
+    HeroSurfaceTone.Waiting -> PPColor.WaitingBg
+    HeroSurfaceTone.Neutral -> PPColor.Linen
+    HeroSurfaceTone.Safe -> PPColor.SafeBg
+}
+
+internal fun heroSurfaceDivider(tone: HeroSurfaceTone): Color = when (tone) {
+    HeroSurfaceTone.Act -> PPColor.Act.copy(alpha = 0.18f)
+    HeroSurfaceTone.Waiting -> PPColor.Waiting.copy(alpha = 0.18f)
+    HeroSurfaceTone.Neutral -> PPColor.Hairline
+    HeroSurfaceTone.Safe -> PPColor.Safe.copy(alpha = 0.18f)
+}
 
 internal fun showsFromTodayEmpty(
     render: HeroRender,

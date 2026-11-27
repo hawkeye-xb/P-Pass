@@ -201,4 +201,41 @@ final class HomeProjectionTests: XCTestCase {
             }
         }
     }
+
+    // MARK: #2082 heroSurfaceTone 状态矩阵
+
+    func test_hero_surface_tone_matrix() {
+        let done = P.tripletOf(n: 10, confirmed: 10, lastSuccessAt: 1)
+        let pending = P.tripletOf(n: 10, confirmed: 4, lastSuccessAt: 1)
+        let zero = P.tripletOf(n: 0, confirmed: 0, lastSuccessAt: 0)
+
+        // 1. !autoRule 一律 neutral（即使权限阻断 / 等待 / allSafeAllowed）
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: false, render: .accessBlocked, uiState: .idle, triplet: done, fromTodayEmpty: false, allSafeAllowed: false), .neutral)
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: false, render: .triplet, uiState: .waiting(.wifi), triplet: pending, fromTodayEmpty: false, allSafeAllowed: false), .neutral)
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: false, render: .triplet, uiState: .allSafe(ingested: 10), triplet: done, fromTodayEmpty: false, allSafeAllowed: true), .neutral)
+
+        // 2. act：autoRule 且 accessBlocked / mixedAlbumIncomplete
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: true, render: .accessBlocked, uiState: .idle, triplet: done, fromTodayEmpty: false, allSafeAllowed: false), .act)
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: true, render: .mixedAlbumIncomplete, uiState: .sending(done: 1, total: 2, currentFile: "a.jpg"), triplet: pending, fromTodayEmpty: false, allSafeAllowed: false), .act)
+
+        // 3. waiting：unreconciled / waiting / paused / sending / fetching / preparing / k > 0
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: true, render: .unreconciled, uiState: .idle, triplet: P.tripletOf(n: 10, confirmed: 20, lastSuccessAt: 1), fromTodayEmpty: false, allSafeAllowed: false), .waiting)
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: true, render: .triplet, uiState: .waiting(.wifi), triplet: done, fromTodayEmpty: false, allSafeAllowed: true), .waiting)
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: true, render: .triplet, uiState: .paused, triplet: done, fromTodayEmpty: false, allSafeAllowed: false), .waiting)
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: true, render: .triplet, uiState: .sending(done: 1, total: 2, currentFile: "a.jpg"), triplet: done, fromTodayEmpty: false, allSafeAllowed: true), .waiting)
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: true, render: .triplet, uiState: .fetchingFromICloud(done: 1, total: 2, currentFile: "a.heic", fraction: 0.5), triplet: done, fromTodayEmpty: false, allSafeAllowed: true), .waiting)
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: true, render: .triplet, uiState: .preparing, triplet: done, fromTodayEmpty: false, allSafeAllowed: true), .waiting)
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: true, render: .triplet, uiState: .idle, triplet: pending, fromTodayEmpty: false, allSafeAllowed: true), .waiting)
+
+        // 4. neutral：noAlbums / countsUnreadable / unreadable / fromTodayEmpty / trouble / allSafeAllowed == false
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: true, render: .noAlbums, uiState: .noAlbums, triplet: nil, fromTodayEmpty: false, allSafeAllowed: false), .neutral)
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: true, render: .countsUnreadable, uiState: .idle, triplet: nil, fromTodayEmpty: false, allSafeAllowed: false), .neutral)
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: true, render: .unreadable, uiState: .idle, triplet: nil, fromTodayEmpty: false, allSafeAllowed: false), .neutral)
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: true, render: .triplet, uiState: .idle, triplet: zero, fromTodayEmpty: true, allSafeAllowed: true), .neutral)
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: true, render: .triplet, uiState: .trouble("err"), triplet: done, fromTodayEmpty: false, allSafeAllowed: true), .neutral)
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: true, render: .triplet, uiState: .allSafe(ingested: 10), triplet: done, fromTodayEmpty: false, allSafeAllowed: false), .neutral)
+
+        // 5. safe：仅 allSafeAllowed 且无等待/进行中/异常
+        XCTAssertEqual(P.heroSurfaceTone(autoRule: true, render: .triplet, uiState: .allSafe(ingested: 10), triplet: done, fromTodayEmpty: false, allSafeAllowed: true), .safe)
+    }
 }

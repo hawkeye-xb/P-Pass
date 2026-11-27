@@ -164,26 +164,28 @@ class HomeScreenSemanticsTest {
         }
     }
 
-    /** 分组标题：三个固定分组不贴标签（组名即首行，2026-09-14 用户拍板），首行带 heading 语义。
-     *  #1889：「更多」并入「通知」所在组后不再是分组首行，它的 heading 语义随之下线——
-     *  由 more_row_joins_the_notify_group 单独钉住，这里只留三个真正的分组首行。 */
+    /** 分组标题：第 1 组紧跟英雄卡、首行「自动备份」带 heading 语义；第 2、3 组由独立分组标题（单次手动传 / 偏好与更多）承载 heading 语义（#2082）。 */
     @Test
     fun group_first_rows_carry_heading_semantics() {
         host {
             // 语言随宿主 App；按资源 id 取当前语言的组名文本。
-            for (labelRes in intArrayOf(
-                R.string.auto_backup_rule_label,
-                R.string.pick_from_photos_label,
-                R.string.setting_wifi_only,
+            val firstGroupRow = testContext.getString(R.string.auto_backup_rule_label)
+            val row = awaitNode("第 1 组首行文本「$firstGroupRow」") { it.text?.toString() == firstGroupRow }
+                .clickableSelfOrAncestor()
+                ?: throw AssertionError("分组首行必须可点（$firstGroupRow）；树：\n${describeTree()}")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                assertTrue("第 1 组首行「$firstGroupRow」必须带 heading 语义", row.isHeading)
+            }
+            for (headerRes in intArrayOf(
+                R.string.settings_section_single_transfer,
+                R.string.settings_section_preferences,
             )) {
-                val label = testContext.getString(labelRes)
-                val textNode = awaitNode("分组首行文本「$label」") { it.text?.toString() == label }
-                val row = textNode.clickableSelfOrAncestor()
-                    ?: throw AssertionError("分组首行必须可点（$label）；树：\n${describeTree()}")
+                val label = testContext.getString(headerRes)
+                val headerNode = awaitNode("分组标题「$label」") { it.text?.toString() == label }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     assertTrue(
-                        "分组首行「$label」必须带 heading 语义（TalkBack 按标题在分组间导航）",
-                        row.isHeading,
+                        "分组标题「$label」必须带 heading 语义（TalkBack 按标题在分组间导航）",
+                        headerNode.isHeading,
                     )
                 }
             }

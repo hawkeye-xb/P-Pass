@@ -6,9 +6,11 @@ import SwiftUI
 /// 次入口是欢迎页「手动输入」同一种文字链接。
 struct SingleTransferSelectionRow: View {
     let title: String
+    var horizontalPadding: CGFloat = 16
+    var minHeight: CGFloat? = PPUI.Layout.rowMinHeight
     let action: () -> Void
 
-    var minimumHeight: CGFloat { PPUI.Layout.rowMinHeight }
+    var minimumHeight: CGFloat { minHeight ?? PPUI.Layout.rowMinHeight }
     var disclosureSymbol: String { "chevron.right" }
 
     var body: some View {
@@ -23,8 +25,8 @@ struct SingleTransferSelectionRow: View {
                     .foregroundStyle(PPColor.ink40)
                     .accessibilityHidden(true)
             }
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, minHeight: minimumHeight, alignment: .leading)
+            .padding(.horizontal, horizontalPadding)
+            .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .leading)
             .contentShape(Rectangle())
         }
     }
@@ -57,6 +59,10 @@ struct DecisionScreen: View {
                     PPButton(title: L.s("decision_choose_scope"), enabled: !app.decisionBusy, height: 64, fontSize: 19) { app.decisionChooseScope() }
                         .accessibilityIdentifier("decisionChooseScope")
                         .padding(.top, 40)
+                    Text(L.s("decision_single_transfer_prompt"))
+                        .font(PPFont.footnote)
+                        .foregroundStyle(PPColor.ink40)
+                        .padding(.top, 28)
                     VStack(spacing: 0) {
                         SingleTransferSelectionRow(title: L.s("pick_from_photos_label"), action: app.decisionPickPhotos)
                             .accessibilityIdentifier("decisionPickPhotos")
@@ -72,7 +78,7 @@ struct DecisionScreen: View {
                     )
                     .opacity(app.decisionBusy ? 0.5 : 1)
                     .disabled(app.decisionBusy)
-                    .padding(.top, 18)
+                    .padding(.top, 8)
                 }
                 .padding(32)
                 .frame(maxWidth: .infinity, minHeight: geo.size.height, alignment: .leading)

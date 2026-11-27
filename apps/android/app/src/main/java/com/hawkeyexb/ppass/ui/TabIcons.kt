@@ -1,11 +1,5 @@
-// UI-13: 齿轮图标已删除，改用 Icons.Filled.Settings/Icons.Outlined.Settings
-// （material-icons-core，随 material3 传递依赖，零体积增量，见
-// build.gradle.kts 的依赖注释）。相机图标继续手绘——material-icons-core
-// 的 49 图标集里没有相机/相册类图标（`unzip -l` 实测核对过完整清单），
-// 而 material-icons-extended 在 build.gradle.kts 里已有明确记录的架构
-// 决策：**故意不引**（release 未开 R8，extended 会实打实往 APK 里塞
-// 几 MB，为一两个图标不划算）。为了一个相机图标反悔这条决策，不在本卡
-// 授权范围内——这不是"忘了处理"的死角，是评估过后的真实约束。
+// UI-13 / #2082: 照片与备份两个底部 Tab 图标均用 22.dp 等粗线稿手绘在 Canvas 里，
+// 零 material-icons-extended 体积增量，且严格不使用任何云朵形状（符合「不存云端」红线）。
 package com.hawkeyexb.ppass.ui
 
 import androidx.compose.foundation.Canvas
@@ -42,5 +36,46 @@ fun PhotosTabIcon(tint: Color, modifier: Modifier = Modifier) {
             lineTo(8f * s, 19.5f * s)
         }
         drawPath(path, color = tint, style = stroke)
+    }
+}
+
+/** 备份 tab 图标：双弧循环箭头（对位 iOS arrow.triangle.2.circlepath，非云朵图标）。 */
+@Composable
+fun BackupTabIcon(tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(22.dp)) {
+        val s = size.width / 24f
+        val stroke = Stroke(width = 1.8f * s, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val arcBoxTopLeft = Offset(4f * s, 4f * s)
+        val arcBoxSize = Size(16f * s, 16f * s)
+        drawArc(
+            color = tint,
+            startAngle = -145f,
+            sweepAngle = 130f,
+            useCenter = false,
+            topLeft = arcBoxTopLeft,
+            size = arcBoxSize,
+            style = stroke,
+        )
+        val topArrow = Path().apply {
+            moveTo(17.0f * s, 8.8f * s)
+            lineTo(19.73f * s, 9.93f * s)
+            lineTo(21.0f * s, 7.3f * s)
+        }
+        drawPath(topArrow, color = tint, style = stroke)
+        drawArc(
+            color = tint,
+            startAngle = 35f,
+            sweepAngle = 130f,
+            useCenter = false,
+            topLeft = arcBoxTopLeft,
+            size = arcBoxSize,
+            style = stroke,
+        )
+        val bottomArrow = Path().apply {
+            moveTo(7.0f * s, 15.2f * s)
+            lineTo(4.27f * s, 14.07f * s)
+            lineTo(3.0f * s, 16.7f * s)
+        }
+        drawPath(bottomArrow, color = tint, style = stroke)
     }
 }

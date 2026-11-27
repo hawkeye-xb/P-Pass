@@ -11,6 +11,11 @@ struct HeroCard: View {
                                                hasUsableSource: app.backupAvailability.hasUsableSource,
                                                hasSelectedAlbum: app.sourceAvailability.hasSelectedAlbum,
                                                mixedAlbumIncomplete: app.showsMixedAlbumIncomplete)
+        let fromTodayEmpty = Self.showsFromTodayEmpty(render: render, triplet: triplet, since: app.since)
+        let allSafeAllowed = HomeProjection.allSafeTextAllowed(app.access, triplet, connection: app.connection,
+                                                               missingSource: app.facts.missingSourceUnacknowledged)
+        let tone = HomeProjection.heroSurfaceTone(autoRule: app.autoRule, render: render, uiState: app.uiState,
+                                                  triplet: triplet, fromTodayEmpty: fromTodayEmpty, allSafeAllowed: allSafeAllowed)
         Section {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -38,7 +43,7 @@ struct HeroCard: View {
                         Text(L.s("hero_unreconciled_title")).font(PPFont.cardTitle).foregroundStyle(PPColor.waiting)
                         Text(L.s("hero_unreconciled_body")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
                     case .triplet:
-                        if Self.showsFromTodayEmpty(render: render, triplet: triplet, since: app.since) {
+                        if fromTodayEmpty {
                             Text(L.s("auto_backup_from_today_empty")).font(PPFont.cardBody).foregroundStyle(PPColor.ink)
                         } else if let triplet {
                             tripletView(triplet)
@@ -47,7 +52,7 @@ struct HeroCard: View {
                     }
                 }
                 if render != .accessBlocked || !app.autoRule {
-                    Rectangle().fill(PPColor.safe.opacity(0.18)).frame(height: 1)
+                    Rectangle().fill(Self.dividerColor(tone)).frame(height: 1)
                         .padding(.top, PPUI.Layout.heroDividerAbove).padding(.bottom, PPUI.Layout.heroDividerBelow)
                     progressRow
                 }
@@ -63,7 +68,7 @@ struct HeroCard: View {
                 }
             }
             .padding(.vertical, 6)
-            .ppTinted(render == .accessBlocked && app.autoRule ? PPColor.actBg : PPColor.safeBg)
+            .ppTinted(Self.surfaceBackground(tone))
         } footer: {
             if let free = app.facts.view?.desktopFreeBytes, free < DesktopHealth.lowSpaceBytes {
                 Text(L.s("desktop_low_space_hint"))
@@ -88,13 +93,30 @@ struct HeroCard: View {
                 }
             }
             .foregroundStyle(color)
-            Text(lastLine(t)).font(PPFont.sans(PPUI.TextSize.heroMeta, relativeTo: .subheadline)).foregroundStyle(PPColor.ink60)
+            Text(Self.lastLine(t)).font(PPFont.sans(PPUI.TextSize.heroMeta, relativeTo: .subheadline)).foregroundStyle(PPColor.ink60)
         }
     }
 
-    private func lastLine(_ t: BackupTriplet) -> String {
-        let when = LastSuccessText.line(t.lastSuccessAt)
-        return t.k > 0 ? when + " · " + L.f("pending_count", Int(t.k)) : when
+    internal static func lastLine(_ t: BackupTriplet) -> String {
+        LastSuccessText.line(t.lastSuccessAt)
+    }
+
+    internal static func surfaceBackground(_ tone: HeroSurfaceTone) -> Color {
+        switch tone {
+        case .act: return PPColor.actBg
+        case .waiting: return PPColor.waitingBg
+        case .neutral: return PPColor.linen
+        case .safe: return PPColor.safeBg
+        }
+    }
+
+    internal static func dividerColor(_ tone: HeroSurfaceTone) -> Color {
+        switch tone {
+        case .act: return PPColor.act.opacity(0.18)
+        case .waiting: return PPColor.waiting.opacity(0.18)
+        case .neutral: return PPColor.hairline
+        case .safe: return PPColor.safe.opacity(0.18)
+        }
     }
 
     internal static func showsFromTodayEmpty(render: HeroRender, triplet: BackupTriplet?,

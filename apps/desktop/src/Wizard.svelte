@@ -87,7 +87,7 @@
 
   {#if view.step === 1}
     <div class="flex flex-col gap-4">
-      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_library_title")}</h2>
+      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3] outline-none focus-visible:ring-3 focus-visible:ring-ring">{t("ui.wizard_library_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_library_body_mac")}</p>
       <!-- DESK-05: 路径始终有值（默认填充 defaultDir / 预填已配置库）——
            不再要求先点按钮才能继续。路径 ≠ 默认时旁挂「回到默认」链接，
@@ -97,7 +97,7 @@
         <Button variant="secondary" class="flex-none" onclick={flow.chooseFolder}>{t("ui.wizard_change_folder")}</Button>
       </div>
       {#if view.libraryDir !== defaultDir}
-        <Button variant="link" tone="safe" class="self-start" onclick={flow.useDefault} title={t("ui.wizard_use_default")}>↺ {t("ui.wizard_use_default")}</Button>
+        <Button variant="link" class="self-start" onclick={flow.useDefault} title={t("ui.wizard_use_default")}>↺ {t("ui.wizard_use_default")}</Button>
       {/if}
       <!-- 设计稿 v2：TCC 保护目录提醒——「桌面」「文稿」受 macOS 保护会
            额外弹一次权限申请，放不下时也更难搬家。 -->
@@ -109,7 +109,7 @@
     </div>
   {:else if view.step === 2}
     <div class="flex flex-col gap-4">
-      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_sleep_title")}</h2>
+      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3] outline-none focus-visible:ring-3 focus-visible:ring-ring">{t("ui.wizard_sleep_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_sleep_body")}</p>
       {#if power?.kind === "never"}
         <div class="flex items-center gap-3 rounded-xl border border-border px-[18px] py-[14px]">
@@ -159,7 +159,7 @@
          开机自启通知 + 本地网络授权弹窗）/不会做什么（B1 起不再写「如果被拦」，拦截说明在官网下载页），点「完成」才真正启动 daemon（含 autostart
          注册，finishSetup）。 -->
     <div class="flex flex-col gap-4">
-      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_service_title")}</h2>
+      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3] outline-none focus-visible:ring-3 focus-visible:ring-ring">{t("ui.wizard_service_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_service_body")}</p>
       <!-- 设计稿 v2："标签(120px)+说明"的表格式布局（#481 起四行），不是
            各自独立的卡片——分隔线贴边，跟其它页面的 list-card 同款。 -->

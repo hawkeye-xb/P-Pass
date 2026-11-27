@@ -274,6 +274,9 @@ class SingleTransferStatusTest {
             listOf(SettingsLayout.Group.BACKUP, SettingsLayout.Group.SELECTION, SettingsLayout.Group.CONDITIONS),
             SettingsLayout.sections,
         )
+        assertEquals(null, SettingsLayout.Group.BACKUP.headerRes)
+        assertEquals(R.string.settings_section_single_transfer, SettingsLayout.Group.SELECTION.headerRes)
+        assertEquals(R.string.settings_section_preferences, SettingsLayout.Group.CONDITIONS.headerRes)
         assertEquals(
             listOf(SettingsLayout.Condition.WIFI, SettingsLayout.Condition.NOTIFICATIONS, SettingsLayout.Condition.MORE),
             SettingsLayout.conditionRows,
@@ -298,12 +301,9 @@ class SingleTransferStatusTest {
     fun single_transfer_collapses_to_files_row_when_dedicated_photo_picker_is_unavailable() {
         val withPicker = SettingsLayout.selectionRows(photoPickerAvailable = true)
         assertEquals(listOf(SettingsLayout.Selection.PHOTOS, SettingsLayout.Selection.FILES), withPicker)
-        assertTrue(SettingsLayout.Selection.PHOTOS.isHeading(photoPickerAvailable = true))
-        assertFalse(SettingsLayout.Selection.FILES.isHeading(photoPickerAvailable = true))
 
         val withoutPicker = SettingsLayout.selectionRows(photoPickerAvailable = false)
         assertEquals(listOf(SettingsLayout.Selection.FILES), withoutPicker)
-        assertTrue(SettingsLayout.Selection.FILES.isHeading(photoPickerAvailable = false))
     }
 
     @Test

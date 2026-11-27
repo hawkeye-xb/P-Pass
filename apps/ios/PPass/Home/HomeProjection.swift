@@ -90,6 +90,7 @@ enum HeroRender: Equatable {
     case mixedAlbumIncomplete
     case countsUnreadable, noAlbums, unreadable, unreconciled, triplet
 }
+enum HeroSurfaceTone: Equatable { case act, waiting, neutral, safe }
 
 enum LastSuccess: Equatable {
     case never, justNow
@@ -242,6 +243,27 @@ enum HomeProjection {
 
     static func allSafeTextAllowed(_ access: MediaAccess, _ t: BackupTriplet?, connection: ConnectionState, missingSource: Int64) -> Bool {
         allSafeTextAllowed(access, t, pairingLost: connection.needsRepair, missingSource: missingSource)
+    }
+
+    static func heroSurfaceTone(autoRule: Bool, render: HeroRender, uiState: BackupUiState,
+                                triplet: BackupTriplet?, fromTodayEmpty: Bool, allSafeAllowed: Bool) -> HeroSurfaceTone {
+        guard autoRule else { return .neutral }
+        if render == .accessBlocked || render == .mixedAlbumIncomplete { return .act }
+        if render == .noAlbums { return .neutral }
+        if render == .unreconciled || uiState.isRunning || uiState == .paused || (triplet?.k ?? 0) > 0 {
+            return .waiting
+        }
+        if case .waiting = uiState { return .waiting }
+        if render == .countsUnreadable || render == .unreadable || fromTodayEmpty { return .neutral }
+        if case .trouble = uiState { return .neutral }
+        if case .noAlbums = uiState { return .neutral }
+        let hasConfirmedOrAllSafe: Bool
+        if case .allSafe = uiState {
+            hasConfirmedOrAllSafe = true
+        } else {
+            hasConfirmedOrAllSafe = (triplet?.n ?? 0) > 0 && (triplet?.m ?? 0) > 0
+        }
+        return (allSafeAllowed && hasConfirmedOrAllSafe) ? .safe : .neutral
     }
 
     static func settingsAlert(connection: ConnectionState, hasBackgroundNotice: Bool) -> Bool {

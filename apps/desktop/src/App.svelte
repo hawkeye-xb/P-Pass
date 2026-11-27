@@ -59,6 +59,7 @@
   import ClockIcon from "@lucide/svelte/icons/clock";
   import SettingsIcon from "@lucide/svelte/icons/settings";
   import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
+  import PencilIcon from "@lucide/svelte/icons/pencil";
   import ExternalLinkIcon from "@lucide/svelte/icons/external-link";
   import { aboutLinks } from "./lib/aboutLinks.js";
   import { humanTime } from "./lib/humanTime.js";
@@ -85,7 +86,7 @@
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
   // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
   import { externalDeleteNotice } from "./lib/externalDelete.js";
-  import { auditText, auditWho } from "./auditProjection.js";
+  import { auditActorParts, auditText, auditWho } from "./auditProjection.js";
   // MOB-47: 视频查看器加载编排（asset 协议 hash 授权 + thumb.get 兜底 +
   // isCancelled 竞态闸）——纯函数可单测，App.svelte 只做接线的薄壳。
   import {
@@ -1903,7 +1904,7 @@
                  （T-082 反转过一次是为了贴设计稿，现在不追设计稿了）；
                  中屏两栏并排时"添加设备"卡内容天然比"备份状态"空
                  状态多，不等高会让水位卡下面露出一大块空白背景。 -->
-            <div class="grid grid-cols-1 gap-[22px] min-[1080px]:grid-cols-2 min-[1440px]:grid-cols-3">
+            <div class="grid grid-cols-1 gap-[22px] min-[1080px]:grid-cols-[1.4fr_1fr] min-[1440px]:grid-cols-[1.35fr_1fr_1.1fr]">
               <Card class="text-[16px]">
                 <h3 class="mb-[12px] text-[15px] font-semibold">{t("ui.backup_status")}</h3>
                 {#if devicesError}
@@ -1934,7 +1935,7 @@
                     {/each}
                   </ul>
                   {#if waterRows.moreOk > 0}
-                    <Button variant="link" tone="safe" class="mt-px self-start" onclick={() => go("devices")}
+                    <Button variant="link" class="mt-px self-start" onclick={() => go("devices")}
                       >{t("ui.water_more_ok", { n: waterRows.moreOk })} ›</Button
                     >
                   {/if}
@@ -1949,10 +1950,10 @@
               <Card class="gap-[12px] text-[16px]">
                 <h3 class="mb-0 text-[15px] font-semibold">{t("ui.add_device")}</h3>
                 <p class="m-0 flex-1 text-[13px] leading-[1.6] text-ink-40">{t("ui.add_device_body")}</p>
-                <Button class="w-full" onclick={() => startPairing()}>{t("ui.generate_qr")}</Button>
+                <Button variant={pairedCount === 0 ? "primary" : "secondary"} class="w-full" onclick={() => startPairing()}>{t("ui.generate_qr")}</Button>
                 <!-- 设计稿 v2：无法扫码的退路提升到卡片级——不打开弹窗也
                      能复制配对串（copyPairQuiet 静默取串，主路径仍是扫码）。 -->
-                <Button variant="link" tone="safe" class="w-full" onclick={copyPairQuiet}>{t("ui.qr_fallback")}</Button>
+                <Button variant="link" class="w-full" onclick={copyPairQuiet}>{t("ui.qr_fallback")}</Button>
               </Card>
 
               <!-- 「最近动静」摘要卡——不再靠 hidden+断点整卡消失。中屏
@@ -1981,12 +1982,13 @@
                            each_key_duplicate。时间戳不是身份。 -->
                       {#each visibleAudit.slice(0, 3) as e (e.id)}
                         {@const at = humanTime(e.ts, nowMs)}
-                        <li><b class="font-semibold">{auditWho(e, devices)}</b> {auditText(e)}{#if at} · {at}{/if}</li>
+                        {@const actor = auditActorParts(e, devices)}
+                        <li title={auditWho(e, devices)}><b class="font-semibold">{actor.name}</b> {auditText(e)}{#if at} · {at}{/if}</li>
                       {/each}
                     </ul>
                   {/if}
                 </div>
-                <Button variant="link" tone="safe" class="self-start" onclick={() => go("log")}>{t("ui.all_activity")} ›</Button>
+                <Button variant="link" class="self-start" onclick={() => go("log")}>{t("ui.all_activity")} ›</Button>
               </Card>
             </div>
           {/if}
@@ -2075,10 +2077,10 @@
                                self-start + justify-start 双保险钉死左对齐。 -->
                           <Button
                             variant="link"
-                            class="-ml-[6px] h-auto min-h-0 max-w-full min-w-0 flex-none self-start justify-start rounded-sm border-0 border-none px-[6px] py-[2px] text-left text-[16px] leading-[1.38] font-semibold text-ink hover:bg-linen hover:underline hover:underline-offset-[3px]"
+                            class="group -ml-[6px] h-auto min-h-0 max-w-full min-w-0 flex-none self-start justify-start rounded-sm border-0 border-none px-[6px] py-[2px] text-left text-[16px] leading-[1.38] font-semibold text-ink no-underline hover:bg-linen hover:underline hover:underline-offset-[3px]"
                             title={t("ui.rename")}
                             onclick={() => startRename(d)}
-                          ><span class="truncate">{displayName(d)}</span></Button>
+                          ><span class="truncate">{displayName(d)}</span><PencilIcon size={13} aria-hidden="true" class="size-[13px] shrink-0 text-ink-40/70 transition-colors group-hover:text-ink" /></Button>
                         {/if}
                         <!-- #1071：协议版本不符的一端要更新才能互通；daemon 在
                              devices.list 每行给 needs_update（"phone" | "desktop" | null）。 -->
@@ -2106,23 +2108,24 @@
                            打开 originals/ 根目录（openDeviceFolder 内部处理）。 -->
                       <Button
                         variant="link"
-                        class="h-auto min-h-0 flex-none rounded-sm border-0 border-none px-[4px] py-[8px] text-ink-40 no-underline hover:bg-linen hover:text-ink"
+                        class="h-auto min-h-0 flex-none rounded-sm border-0 border-none px-[4px] py-[8px] text-[13.5px] font-medium text-ink-60 no-underline hover:bg-linen hover:text-ink"
                         title={t("ui.device_open_folder")}
+                        aria-label={`${t("ui.device_open_folder")} ${displayName(d)}`}
                         onclick={() => openDeviceFolder(d.node_id)}
-                      ><FolderOpenIcon size={16} /></Button>
+                      ><FolderOpenIcon size={15} aria-hidden="true" class="size-[15px]" /><span>{t("ui.device_folder_btn")}</span></Button>
                       <!-- #1132 D10 / #2079：已配对行只提供「断开」，已断开行才提供「移除」，
                            可访问名均带上设备名方便读屏分辨。 -->
                       {#if group.key === "paired"}
                         <Button
                           variant="link"
-                          class="h-auto min-h-0 rounded-sm border-0 border-none px-[4px] py-[8px] text-[14px] font-semibold text-act no-underline hover:bg-act-bg hover:underline hover:underline-offset-[3px]"
+                          class="h-auto min-h-0 rounded-sm border-0 border-none px-[4px] py-[8px] text-[13.5px] font-medium text-ink-40 no-underline hover:bg-act-bg hover:text-act focus-visible:bg-act-bg focus-visible:text-act"
                           aria-label={`${t("ui.disconnect")} ${displayName(d)}`}
                           onclick={() => disconnectDevice(d.node_id, displayName(d))}
                         >{t("ui.disconnect")}</Button>
                       {:else}
                         <Button
                           variant="link"
-                          class="h-auto min-h-0 rounded-sm border-0 border-none px-[4px] py-[8px] text-[14px] font-semibold text-act no-underline hover:bg-act-bg hover:underline hover:underline-offset-[3px]"
+                          class="h-auto min-h-0 rounded-sm border-0 border-none px-[4px] py-[8px] text-[13.5px] font-medium text-ink-40 no-underline hover:bg-act-bg hover:text-act focus-visible:bg-act-bg focus-visible:text-act"
                           aria-label={`${t("ui.remove")} ${displayName(d)}`}
                           onclick={() => revoke(d.node_id, displayName(d))}
                         >{t("ui.remove")}</Button>
@@ -2245,9 +2248,10 @@
                 {#each visibleAudit as e (e.id)}
                   {@const at = humanTime(e.ts, nowMs)}
                   {@const exact = exactTime(e.ts)}
+                  {@const actor = auditActorParts(e, devices)}
                   <li class="flex items-baseline gap-[14px] border-b border-divider px-[22px] py-[16px] last:border-b-0">
                     <span class="flex-1 text-[15px] text-ink"
-                      ><b class="font-semibold">{auditWho(e, devices)}</b> {auditText(e)}</span
+                      ><b class="font-semibold text-ink">{actor.name}</b>{#if actor.shortId}<span class="ml-1.5 font-mono text-[12px] font-normal text-ink-40">{actor.shortId}</span>{/if} {auditText(e)}</span
                     >
                     <!-- 2026-08-20（用户反馈）：右侧原来堆两行——相对时间
                          「3 分钟前」+ 精确时刻「2026-08-20 16:15」。两行指同一
@@ -2256,7 +2260,7 @@
                          改成只留相对时间，精确时刻进 title（悬停可见）——
                          空白消失，信息一个不少。 -->
                     <span
-                      class="ml-auto flex-none whitespace-nowrap text-[13px] text-ink-40"
+                      class="ml-auto flex-none whitespace-nowrap text-[13px] tabular-nums text-ink-40"
                       title={exact ?? ""}>{at ?? ""}</span
                     >
                   </li>
@@ -2435,8 +2439,8 @@
                 {/each}
               </Card>
               {#if canStopService(serviceState)}
-                <Card variant="danger" class="text-[16px]">
-                  <h3 class="mb-[12px] text-[15px] font-semibold text-act">{t("ui.stop_service")}</h3>
+                <Card class="text-[16px]">
+                  <h3 class="mb-[12px] text-[15px] font-semibold text-ink">{t("ui.stop_service")}</h3>
                   <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.stop_hint")}</p>
                   <Button variant="danger" class="self-start" onclick={stopService}>{t("ui.stop_service")}</Button>
                 </Card>
@@ -2467,11 +2471,11 @@
         </p>
         <div class="modal-actions">
           <Button variant="secondary" onclick={() => startPairing()}>{t("ui.refresh_qr")}</Button>
-          <Button onclick={closePairModal}>{t("ui.close")}</Button>
+          <Button variant="secondary" onclick={closePairModal}>{t("ui.close")}</Button>
         </div>
         <!-- 设计稿离线版 v2：扫码有困难的退路——复制配对串手动传给
              手机（比如隔空投送/微信发给家人自己粘）。 -->
-        <Button variant="link" tone="safe" onclick={copyPairString}>{t("ui.qr_fallback")}</Button>
+        <Button variant="link" onclick={copyPairString}>{t("ui.qr_fallback")}</Button>
       {:else if qrError}
         <!-- F4：生成失败——说原因 + 错误代码，给「重试」；联系不上后台服务的那几类再给「重启后台服务」。 -->
         <div class="modal-hint" role="alert" data-testid="pair-qr-error">
@@ -2882,7 +2886,7 @@
 
 
   /* DESK-15：原生 button/.primary/.link-more 视觉规则已删——全部收编进
-     Button 组件（variant=primary/secondary/danger/link，tone=safe），
+     Button 组件（variant=primary/secondary/danger/link），
      不再有第二套按钮视觉实现。 */
   .version-footer {
     position: fixed;

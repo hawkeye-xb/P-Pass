@@ -62,14 +62,14 @@
 
   {#if view.step === 1}
     <div class="flex flex-col gap-4">
-      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_library_title")}</h2>
+      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3] outline-none focus-visible:ring-3 focus-visible:ring-ring">{t("ui.wizard_library_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_library_body_win")}</p>
       <div class="flex items-center gap-[10px]">
         <code class="flex-1 rounded-xl bg-linen px-4 py-[13px] font-mono text-[14px] text-ink-60 break-all">{view.libraryDir}</code>
         <Button variant="secondary" class="flex-none" onclick={flow.chooseFolder}>{t("ui.wizard_change_folder")}</Button>
       </div>
       {#if view.libraryDir !== defaultDir}
-        <Button variant="link" tone="safe" class="self-start" onclick={flow.useDefault} title={t("ui.wizard_use_default")}>↺ {t("ui.wizard_use_default")}</Button>
+        <Button variant="link" class="self-start" onclick={flow.useDefault} title={t("ui.wizard_use_default")}>↺ {t("ui.wizard_use_default")}</Button>
       {/if}
       <!-- Windows 没有 macOS TCC 那样的系统级保护目录弹窗；真正的坑是系统盘
            受保护路径（Program Files 等）权限受限、云盘同步目录（OneDrive
@@ -83,7 +83,7 @@
     </div>
   {:else if view.step === 2}
     <div class="flex flex-col gap-4">
-      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_sleep_title")}</h2>
+      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3] outline-none focus-visible:ring-3 focus-visible:ring-ring">{t("ui.wizard_sleep_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_sleep_body")}</p>
       <!-- DAE-11 (#804)：不再「一键关闭自动睡眠」（要 UAC、永久改用户的电源设置、
            只设了插电）。改由 daemon 运行且插电时向系统声明别因空闲而睡——不用授权，
@@ -99,7 +99,7 @@
     </div>
   {:else if view.step === 3}
     <div class="flex flex-col gap-4">
-      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_service_title")}</h2>
+      <h2 bind:this={stepTitle} tabindex="-1" class="m-0 font-serif text-[28px] font-normal leading-[1.3] outline-none focus-visible:ring-3 focus-visible:ring-ring">{t("ui.wizard_service_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_service_body")}</p>
       <!-- B1：不再写「如果被拦」（拦截说明在官网下载页）；只剩「会申请什么」一行，形态没问到就整块不显示。 -->
       {#if hosting}

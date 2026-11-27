@@ -70,6 +70,8 @@ struct RootView: View {
 struct MainTabs: View {
     @EnvironmentObject var app: AppModel
 
+    static let backupTabSymbol = "arrow.triangle.2.circlepath"
+
     var body: some View {
         TabView(selection: $app.tab) {
             PhotosScreen()
@@ -78,7 +80,7 @@ struct MainTabs: View {
                 .tag(AppModel.Tab.photos)
             SettingsScreen()
                 .toolbarBackground(PPColor.paper, for: .tabBar).toolbarBackground(.visible, for: .tabBar)
-                .tabItem { Label(L.s("tab_settings"), systemImage: "gearshape") }
+                .tabItem { Label(L.s("tab_settings"), systemImage: Self.backupTabSymbol) }
                 .badge(app.settingsAlert ? "!" : nil)
                 .tag(AppModel.Tab.settings)
         }

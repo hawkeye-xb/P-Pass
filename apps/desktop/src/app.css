@@ -113,6 +113,9 @@
   pre {
     font-family: monospace;
   }
+  [tabindex="-1"]:focus:not(:focus-visible) {
+    outline: none;
+  }
 }
 
 /* ============================================================

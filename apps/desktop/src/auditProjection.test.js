@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { auditText, auditWho } from "./auditProjection.js";
+import { auditActorParts, auditText, auditWho } from "./auditProjection.js";
 import { setLocale } from "./lib/i18n.js";
 
 // I18N-03 (#492)：文案搬进字典后按系统语言取词；这里断言的是中文原文——
@@ -68,6 +68,25 @@ describe("活动记录的用户投影", () => {
         [{ node_id: "0123456789abcdef", name: "妈妈的手机" }],
       ),
     ).toBe("妈妈的手机 · #01234567");
+  });
+
+  it("#2084 auditActorParts 拆分设备名与短 ID，供总览隐藏机器码、日志弱化显示", () => {
+    expect(auditActorParts({}, [])).toEqual({ name: "这台电脑", shortId: null });
+    expect(
+      auditActorParts(
+        { actor: "0123456789abcdef" },
+        [{ node_id: "0123456789abcdef", name: "妈妈的手机" }],
+      ),
+    ).toEqual({ name: "妈妈的手机", shortId: "#01234567" });
+    expect(
+      auditActorParts(
+        { kind: "pair.requested", payload: { deviceName: "爸爸的手机" } },
+        [],
+      ),
+    ).toEqual({ name: "爸爸的手机", shortId: null });
+    expect(
+      auditActorParts({ actor: "abcdef0123456789" }, []),
+    ).toEqual({ name: "未知设备", shortId: "#abcdef01" });
   });
 
   it("#2079：device.disconnected 与 device.revoked 各有独立活动文案", () => {
