@@ -1,5 +1,6 @@
 package com.hawkeyexb.ppass.ui
 
+import kotlin.math.roundToInt
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -1136,6 +1137,19 @@ private fun RuleSwitchRow(
     )
 }
 
+internal const val CELL_ROW_HORIZONTAL_PADDING_DP = 32
+internal const val CELL_ROW_TRAILING_PADDING_DP = 16
+
+internal fun cellRowAvailableWidthPx(
+    maxWidthPx: Int,
+    density: Float,
+    hasTrailing: Boolean,
+): Int {
+    val horizontalPaddingPx = (CELL_ROW_HORIZONTAL_PADDING_DP * density).roundToInt()
+    val trailingPaddingPx = if (hasTrailing) (CELL_ROW_TRAILING_PADDING_DP * density).roundToInt() else 0
+    return (maxWidthPx - horizontalPaddingPx - trailingPaddingPx).coerceAtLeast(0)
+}
+
 internal fun cellRowStacks(
     labelWidthPx: Int,
     valueWidthPx: Int,
@@ -1147,19 +1161,19 @@ internal fun cellRowStacks(
 internal fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)? = null, heading: Boolean = false) {
     val measurer = rememberTextMeasurer()
     val clickable = onClick != null
+    val density = LocalDensity.current
     val labelStyle = LocalTextStyle.current.copy(fontSize = 15.sp)
     val valueStyle = LocalTextStyle.current.copy(fontSize = 14.sp)
     val chevronStyle = LocalTextStyle.current.copy(fontSize = 16.sp)
-    val gapPx = with(LocalDensity.current) { 4.dp.roundToPx() }
+    val gapPx = with(density) { 4.dp.roundToPx() }
     // ListItem 左右各 16dp（共 32dp），trailingContent 前固定留 16dp（TrailingContentStartPadding）；
     // 槽位内显式传测量用的同一套 style，防止 ListItem 默认的 labelSmall/bodyLarge 覆写字重与字距导致量测偏小。
-    val horizontalPaddingPx = with(LocalDensity.current) { 32.dp.roundToPx() }
-    val trailingPaddingPx = with(LocalDensity.current) { 16.dp.roundToPx() }
     BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
-        val available = (
-            constraints.maxWidth - horizontalPaddingPx -
-                if (value != null || clickable) trailingPaddingPx else 0
-            ).coerceAtLeast(0)
+        val available = cellRowAvailableWidthPx(
+            maxWidthPx = constraints.maxWidth,
+            density = density.density,
+            hasTrailing = value != null || clickable,
+        )
         val stacked = remember(label, value, available, clickable, gapPx, measurer, labelStyle, valueStyle, chevronStyle) {
             if (value == null) {
                 false
