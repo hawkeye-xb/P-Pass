@@ -122,6 +122,8 @@ def _build_synthetic_repo(root: Path) -> None:
     _write(root / "tools/arch-check.sh", "#!/usr/bin/env bash\necho arch\n")
     _write(root / "tools/setup-rust-toolchain.sh", "#!/usr/bin/env bash\necho rust\n")
     _write(root / "tools/clean-local-builds.sh", "#!/usr/bin/env bash\necho clean\n")
+    _write(root / "tools/release/test-carry-signature.sh", "#!/usr/bin/env bash\necho carry\n")
+    _write(root / "tools/release/tauri-config.test.mjs", "console.log('ok')\n")
 
     _write(root / ".github/actions/changes/action.yml", "runs:\n  using: composite\n  steps:\n    - run: python3 -B -I tools/test-ci-impact.py\n    - run: python3 -B -I tools/ci/impact.py ci\n")
     _write(root / ".github/actions/desktop-checks/action.yml", "runs:\n  using: composite\n  steps:\n    - run: tools/setup-rust-toolchain.sh\n")
@@ -143,7 +145,35 @@ def _build_synthetic_repo(root: Path) -> None:
     )
     _write(
         root / ".github/workflows/ci-docs.yml",
-        "jobs:\n  changes:\n    steps:\n      - uses: ./.github/actions/changes\n        with:\n          lane: docs\n  docs:\n    steps:\n      - run: echo docs\n  flow-tests:\n    steps:\n      - run: just flow-tests\n  gate:\n    steps:\n      - run: echo ok\n",
+        "jobs:\n"
+        "  changes:\n"
+        "    steps:\n"
+        "      - uses: ./.github/actions/changes\n"
+        "        with:\n"
+        "          lane: docs\n"
+        "  acceptance-gate:\n"
+        "    if: ${{ github.event_name == 'pull_request' }}\n"
+        "    steps:\n"
+        "      - run: echo acceptance\n"
+        "  docs:\n"
+        "    needs: changes\n"
+        "    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}\n"
+        "    steps:\n"
+        "      - run: echo docs\n"
+        "  release-plan:\n"
+        "    needs: changes\n"
+        "    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}\n"
+        "    steps:\n"
+        "      - run: bash tools/release/test-carry-signature.sh\n"
+        "      - run: node --test tools/release/tauri-config.test.mjs\n"
+        "  flow-tests:\n"
+        "    needs: changes\n"
+        "    if: ${{ !cancelled() && needs.changes.outputs.flow != 'false' }}\n"
+        "    steps:\n"
+        "      - run: just flow-tests\n"
+        "  gate:\n"
+        "    steps:\n"
+        "      - run: echo ok\n",
     )
     _git_init(root)
 
@@ -321,9 +351,32 @@ class ImpactEngineTests(unittest.TestCase):
             ios_doc_gates = impact.compute_local_gates(["docs/ios/golden.md"], tmp)
             self.assertIn("just ios-test", ios_doc_gates)
 
+            # ci-docs.yml 发版链 job（消费 needs.changes.outputs.run）调用的脚本/测试必须命中 docs lane
+            self.assertTrue(d("docs", ["tools/release/test-carry-signature.sh"]))
+            self.assertTrue(d("docs", ["tools/release/tauri-config.test.mjs"]))
+
             # 缺失 lane workflow 文件时即便是纯文档改动也 fail-closed 返回要跑
             (tmp / ".github/workflows/ci-android.yml").unlink()
             self.assertTrue(impact.decide_ci("android", ["docs/a.md"], tmp, graph=g2)[0])
+
+            # 缺失 job_filter 中任一必需 job 名时，fail-closed 返回要跑（不得静默缩小切片）
+            self.assertFalse(impact.decide_ci("ios-ffi", [".coderabbit.yaml"], tmp, graph=g2)[0])
+            _write(
+                tmp / ".github/workflows/ci-ios.yml",
+                _read(tmp / ".github/workflows/ci-ios.yml").replace("  ios-ffi:\n", "  ios-ffi-renamed:\n", 1),
+            )
+            self.assertTrue(impact.decide_ci("ios-ffi", [".coderabbit.yaml"], tmp, graph=g2)[0])
+
+            self.assertFalse(impact.decide_ci("docs-flow", [".coderabbit.yaml"], tmp, graph=g2)[0])
+            self.assertFalse(impact.decide_ci("docs", [f"crates/proto/src/lib.{EXT_RS}"], tmp, graph=g2)[0])
+            _write(
+                tmp / ".github/workflows/ci-docs.yml",
+                _read(tmp / ".github/workflows/ci-docs.yml")
+                .replace("  flow-tests:\n", "  flow-tests-renamed:\n", 1)
+                .replace("  acceptance-gate:\n", "  acceptance-gate-renamed:\n", 1),
+            )
+            self.assertTrue(impact.decide_ci("docs-flow", [".coderabbit.yaml"], tmp, graph=g2)[0])
+            self.assertTrue(impact.decide_ci("docs", [f"crates/proto/src/lib.{EXT_RS}"], tmp, graph=g2)[0])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -436,6 +489,10 @@ class ImpactEngineTests(unittest.TestCase):
             self.assertFalse(impact.decide_ci(l, f2088, ROOT, graph=g)[0], f"#2088 {l}")
         self.assertTrue(impact.decide_ci("docs", f2088, ROOT, graph=g)[0])
         self.assertTrue(impact.decide_ci("docs-flow", f2088, ROOT, graph=g)[0])
+
+        # 真实仓库下 ci-docs.yml 发版链 job 调用的脚本与 mjs 测试必须命中 docs lane
+        self.assertTrue(impact.decide_ci("docs", ["tools/release/test-carry-signature.sh"], ROOT, graph=g)[0])
+        self.assertTrue(impact.decide_ci("docs", ["tools/release/tauri-config.test.mjs"], ROOT, graph=g)[0])
 
     def test_6_mutant_counterproofs(self) -> None:
         # 变异 1：删掉 _static_inert_rust 中的 rust_readers 动态拦截时，crates 跨目录读取的新 apps 文件必须失守漏过

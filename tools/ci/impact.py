@@ -640,7 +640,16 @@ def _lane_workflow_slices(lane: str, repo_root: Path) -> tuple[dict[str, str], b
             eff = _noncomment_lines(raw)
         else:
             jobs = _extract_workflow_jobs(raw)
-            eff = "\n".join(_noncomment_lines(jobs[j]) for j in job_filter if j in jobs)
+            if any(j not in jobs for j in job_filter):
+                return {}, True
+            selected = list(job_filter)
+            if lane == "docs":
+                for j, jbody in jobs.items():
+                    if j not in selected:
+                        jb_eff = _noncomment_lines(jbody)
+                        if "needs.changes.outputs.run" in jb_eff or "needs.changes.outputs.flow" not in jb_eff:
+                            selected.append(j)
+            eff = "\n".join(_noncomment_lines(jobs[j]) for j in selected)
         slices[wf_rel] = eff
         for act in USES_ACTION_RE.findall(eff):
             if act not in seen_actions:
