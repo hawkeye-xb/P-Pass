@@ -23,7 +23,7 @@
 
 <button
 	class={cn(
-		"relative flex w-full items-center gap-2 rounded-sm px-3 py-2.5 text-left text-[15px] font-medium text-ink-60 outline-none focus-visible:ring-3 focus-visible:ring-ring data-[active=false]:hover:bg-hairline/60 data-[active=true]:bg-paper data-[active=true]:font-semibold data-[active=true]:text-ink data-[active=true]:shadow-[inset_0_0_0_1px_var(--color-border)] data-[active=true]:before:content-[''] data-[active=true]:before:absolute data-[active=true]:before:left-0 data-[active=true]:before:top-2 data-[active=true]:before:bottom-2 data-[active=true]:before:w-[3px] data-[active=true]:before:rounded-full data-[active=true]:before:bg-ink max-[1079px]:h-11 max-[1079px]:w-11 max-[1079px]:flex-none max-[1079px]:justify-center max-[1079px]:p-0 max-[1079px]:before:hidden max-[1079px]:data-[active=true]:shadow-[inset_0_0_0_1px_var(--color-border-strong)]",
+		"flex w-full items-center gap-2 rounded-sm px-3 py-2.5 text-left text-[15px] font-medium text-ink-60 outline-none focus-visible:ring-3 focus-visible:ring-ring data-[active=false]:hover:bg-hairline/60 data-[active=true]:bg-paper data-[active=true]:font-semibold data-[active=true]:text-ink data-[active=true]:shadow-[inset_0_0_0_1px_var(--color-border)] max-[1079px]:h-11 max-[1079px]:w-11 max-[1079px]:flex-none max-[1079px]:justify-center max-[1079px]:p-0 max-[1079px]:data-[active=true]:shadow-[inset_0_0_0_1px_var(--color-border-strong)]",
 		className,
 	)}
 	data-active={active}

@@ -45,6 +45,9 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 }));
 vi.mock("./lib/updateFlow.js", () => ({ runUpdate: vi.fn(async () => {}) }));
 
+import { open as openDialog, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
+import { check as checkUpdate } from "@tauri-apps/plugin-updater";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import App from "./App.svelte";
 import Wizard from "./Wizard.svelte";
 import WizardWindows from "./WizardWindows.svelte";
@@ -70,15 +73,26 @@ function makeDevice(ch, name, extra = {}) {
   };
 }
 
-function setupDaemon({ devices = [], photos = [], audit = [] } = {}) {
+function setupDaemon({
+  devices = [],
+  photos = [],
+  audit = [],
+  testBuild = false,
+  wizardState = { show_wizard: false },
+  statusError = null,
+  devicesError = null,
+  pairedOverride = null,
+} = {}) {
   invokeMock.mockImplementation(async (cmd) => {
     switch (daemonMethodOf(cmd) ? "daemon" : cmd) {
       case "wizard_state":
-        return { show_wizard: false };
+        return wizardState;
+      case "platform_ux":
+        return { close_to_tray_hint: false, overlay_titlebar: true, sleep_owner: "user" };
       case "service_state":
         return { state: "running" };
       case "is_test_build":
-        return false;
+        return testBuild;
       case "pending_shell_version":
         return "";
       case "update_failure_state":
@@ -96,12 +110,14 @@ function setupDaemon({ devices = [], photos = [], audit = [] } = {}) {
       case "daemon":
         switch (daemonMethodOf(cmd)) {
           case "status":
+            if (statusError) throw new Error(statusError);
             return {
               version: "v0.6.0",
               pending_pairs: 0,
               photo_sources: photos.length,
               photo_count: photos.length,
-              paired_devices: devices.filter((d) => d.removal === "none").length,
+              paired_devices:
+                pairedOverride ?? devices.filter((d) => d.removal === "none").length,
               disconnected_devices: devices.filter((d) => d.removal === "disconnected").length,
               removed_devices: 0,
               library_dir: "/Users/demo/照片库",
@@ -110,6 +126,7 @@ function setupDaemon({ devices = [], photos = [], audit = [] } = {}) {
               disk_encryption: "on",
             };
           case "devices.list":
+            if (devicesError) throw new Error(devicesError);
             return { devices, last_backup_overall: null };
           case "device.watermarks":
             return { watermarks: [] };
@@ -168,7 +185,7 @@ describe("#2083 + #2084 桌面端视觉权重、降噪、可点性与向导焦�
     handlers.clear();
   });
 
-  it("#2083 NavItem 选中态使用轻纸底边界 + 左侧 3px 指示条，收起态隐藏竖条并描边高亮", () => {
+  it("#2092 NavItem 选中态保留浅底、描边与加粗，不再渲染左侧竖条", () => {
     render(NavItem, { icon: HouseIcon, label: "总览", active: true });
     render(NavItem, { icon: HouseIcon, label: "照片", active: false });
 
@@ -178,10 +195,9 @@ describe("#2083 + #2084 桌面端视觉权重、降噪、可点性与向导焦�
     expect(activeTokens.has("data-[active=true]:bg-paper")).toBe(true);
     expect(activeTokens.has("data-[active=true]:text-ink")).toBe(true);
     expect(activeTokens.has("data-[active=true]:font-semibold")).toBe(true);
-    expect(activeTokens.has("data-[active=true]:before:w-[3px]")).toBe(true);
-    expect(activeTokens.has("data-[active=true]:before:bg-ink")).toBe(true);
-    expect(activeTokens.has("max-[1079px]:before:hidden")).toBe(true);
+    expect(activeTokens.has("data-[active=true]:shadow-[inset_0_0_0_1px_var(--color-border)]")).toBe(true);
     expect(activeTokens.has("max-[1079px]:data-[active=true]:shadow-[inset_0_0_0_1px_var(--color-border-strong)]")).toBe(true);
+    expect(Array.from(activeTokens).some((c) => c.includes("before:"))).toBe(false);
     expect(activeTokens.has("focus-visible:ring-3")).toBe(true);
 
     const idleBtn = screen.getByRole("button", { name: "照片" });
@@ -189,50 +205,237 @@ describe("#2083 + #2084 桌面端视觉权重、降噪、可点性与向导焦�
     expect(tokensOf(idleBtn).has("data-[active=false]:hover:bg-hairline/60")).toBe(true);
   });
 
-  it("#2083 总览页列宽按主次划分，已有设备时配对按钮降为次按钮，停止服务卡与弹窗关闭按钮退红降重", async () => {
+  it("#2092 总览 0 台态突出添加第一台设备卡并附手机端下载引导，隐藏空状态与活动区", async () => {
     setupDaemon({ devices: [] });
+    openUrl.mockClear();
     await openApp("#/overview");
 
-    const addHeading = screen.getByRole("heading", { name: "添加设备" });
-    const overviewGrid = addHeading.closest(".grid");
-    const gridTokens = tokensOf(overviewGrid);
-    expect(gridTokens.has("min-[1080px]:grid-cols-[1.4fr_1fr]")).toBe(true);
-    expect(gridTokens.has("min-[1440px]:grid-cols-[1.35fr_1fr_1.1fr]")).toBe(true);
+    expect(screen.queryByTestId("overview-summary-strip")).toBeNull();
+    expect(screen.queryByTestId("overview-grid")).toBeNull();
+    expect(screen.queryByTestId("overview-backup-card")).toBeNull();
+    expect(screen.queryByTestId("overview-activity-card")).toBeNull();
 
-    // 0 台设备时「显示配对二维码」保持主按钮强调（bg-primary）
+    const emptyCard = screen.getByTestId("overview-empty-add");
+    expect(emptyCard.textContent).toContain("添加第一台设备");
     const qrPrimaryBtn = screen.getByRole("button", { name: "显示配对二维码" });
     expect(tokensOf(qrPrimaryBtn).has("bg-primary")).toBe(true);
+    expect(screen.getByRole("button", { name: "无法扫码？复制配对码" })).toBeTruthy();
 
-    // 已有已配对设备时「显示配对二维码」降为次按钮（bg-transparent + border-border-strong）
-    cleanup();
+    const dlLink = screen.getByTestId("mobile-download-empty");
+    expect(dlLink.textContent).toContain("还没装手机端？前往官网下载");
+    await fireEvent.click(dlLink);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openUrl).toHaveBeenCalledWith("https://p-pass.hawkeye-xb.com");
+  });
+
+  it("#2092 总览日常态呈现 3 层视觉金字塔、摘要跳转、安静时间线与动态条数伸缩", async () => {
+    let roCallback = null;
+    const origRO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(cb) {
+        roCallback = cb;
+      }
+      observe() {}
+      disconnect() {}
+    };
+
+    try {
+      const devs = Array.from({ length: 5 }, (_, i) =>
+        makeDevice(String.fromCharCode(97 + i), `设备${i + 1}`, {
+          last_activity_at: NOW - i * 10_000,
+          ...(i === 0 ? { row_state: "needs_attention", needs_attention: true } : {}),
+        }),
+      );
+      const events = Array.from({ length: 8 }, (_, i) => ({
+        id: `e${i}`,
+        ts: NOW - (i + 1) * 60_000,
+        kind: "pair.accepted",
+        actor: "a".repeat(64),
+        payload: {},
+      }));
+
+      setupDaemon({ devices: devs, audit: events });
+      await openApp("#/overview");
+
+      // 顶层：Hero 标题 + 右上角次级「添加设备」按钮 + 3 项摘要带
+      const addBtn = screen.getByRole("button", { name: "添加设备" });
+      expect(tokensOf(addBtn).has("bg-primary")).toBe(false);
+      expect(tokensOf(addBtn).has("border-border-strong")).toBe(true);
+
+      const strip = screen.getByTestId("overview-summary-strip");
+      expect(strip.closest('[data-slot="card"]')).toBeNull();
+      expect(strip.textContent).toContain("已配对设备 5 台");
+      expect(strip.textContent).toContain("磁盘可用");
+      const healthBtn = screen.getByTestId("overview-health-btn");
+      expect(healthBtn.textContent).toContain("1 台设备需关注");
+
+      // 高度较小（矮窗）：ResizeObserver 推入窄高内容区，设备与活动条数同步收紧
+      roCallback?.([{ contentRect: { width: 900, height: 420 } }]);
+      await vi.advanceTimersByTimeAsync(0);
+      const overviewGrid = screen.getByTestId("overview-grid");
+      expect(tokensOf(overviewGrid).has("overview-grid")).toBe(true);
+      expect(Array.from(overviewGrid.children).map((el) => el.getAttribute("data-testid"))).toEqual([
+        "overview-backup-card",
+        "overview-activity-card",
+      ]);
+      const backupCard = screen.getByTestId("overview-backup-card");
+      const activityCard = screen.getByTestId("overview-activity-card");
+      expect(backupCard.querySelectorAll("ul li")).toHaveLength(1);
+      expect(activityCard.querySelectorAll("ul li")).toHaveLength(2);
+
+      // 高度变大（高窗）：动态展开更多设备与活动动态，不锁死 3 条
+      roCallback?.([{ contentRect: { width: 900, height: 860 } }]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(backupCard.querySelectorAll("ul li")).toHaveLength(5);
+      expect(activityCard.querySelectorAll("ul li")).toHaveLength(8);
+
+      // 底层安静时间线：不套白卡边框、不用 <b> 加粗、底端保留「查看全部 ›」
+      expect(activityCard.closest('[data-slot="card"]')).toBeNull();
+      expect(activityCard.querySelector("ul b")).toBeNull();
+      expect(screen.getByRole("button", { name: /查看全部/ })).toBeTruthy();
+
+      // 备份状态设备行显示次行并可点击直达设备页
+      const firstDeviceRow = backupCard.querySelector("ul li button");
+      expect(firstDeviceRow?.textContent).toContain("设备1");
+      expect(firstDeviceRow?.textContent).toContain("未备份");
+      await fireEvent.click(firstDeviceRow);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByTestId("page-devices")).toBeTruthy();
+
+      // 切回总览，点击摘要带「1 台设备需关注」直达设备页
+      await fireEvent.click(screen.getByRole("button", { name: "总览" }));
+      await vi.advanceTimersByTimeAsync(0);
+      await fireEvent.click(screen.getByTestId("overview-health-btn"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByTestId("page-devices")).toBeTruthy();
+    } finally {
+      globalThis.ResizeObserver = origRO;
+    }
+  });
+
+  it("#2092 总览无异常设备时摘要带显示绿点「一切正常」", async () => {
     setupDaemon({ devices: [makeDevice("a", "客厅的手机")] });
     await openApp("#/overview");
-    const qrSecondaryBtn = screen.getByRole("button", { name: "显示配对二维码" });
-    const qrSecondaryTokens = tokensOf(qrSecondaryBtn);
-    expect(qrSecondaryTokens.has("bg-primary")).toBe(false);
-    expect(qrSecondaryTokens.has("border-border-strong")).toBe(true);
 
-    // 扫码弹窗里的「关闭」按钮降为 secondary，文案链接不带安全绿 text-safe
-    await fireEvent.click(qrSecondaryBtn);
+    const strip = screen.getByTestId("overview-summary-strip");
+    expect(strip.textContent).toContain("一切正常");
+    expect(screen.queryByTestId("overview-health-btn")).toBeNull();
+    expect(strip.querySelector(".bg-safe")).toBeTruthy();
+  });
+
+  it("#2092 二维码弹窗删去 desktop-name 行、统一间距顺序并含官网下载引导", async () => {
+    setupDaemon({ devices: [makeDevice("a", "客厅的手机")] });
+    openUrl.mockClear();
+    await openApp("#/overview");
+    await fireEvent.click(screen.getByRole("button", { name: "添加设备" }));
     await vi.advanceTimersByTimeAsync(0);
+
+    const qrDialog = screen.getByRole("dialog", { name: "配对二维码" });
+    const dialogTokens = tokensOf(qrDialog);
+    expect(dialogTokens.has("flex-col")).toBe(true);
+    expect(dialogTokens.has("gap-[14px]")).toBe(true);
+    expect(screen.queryByTestId("desktop-name")).toBeNull();
+    const dialogChildTags = Array.from(qrDialog.children).map((el) => el.tagName);
+    expect(dialogChildTags).toEqual(["H3", "IMG", "P", "DIV", "BUTTON", "BUTTON"]);
+
     const closeBtn = screen.getByRole("button", { name: "关闭" });
     const closeTokens = tokensOf(closeBtn);
     expect(closeTokens.has("bg-primary")).toBe(false);
     expect(closeTokens.has("border-border-strong")).toBe(true);
 
-    // 设置页停服卡容器恢复中性纸卡与墨色标题，仅按钮保留 danger
-    cleanup();
-    setupDaemon({ devices: [makeDevice("a", "客厅的手机")] });
+    const dlModalBtn = screen.getByTestId("mobile-download-modal");
+    expect(dlModalBtn.textContent).toContain("还没装手机端？前往官网下载");
+    await fireEvent.click(dlModalBtn);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openUrl).toHaveBeenCalledWith("https://p-pass.hawkeye-xb.com");
+  });
+
+  it("#2092 设置页删除角落版本号、版本行上移至检查更新前、行高紧凑且全部交互无回归", async () => {
+    setupDaemon({ devices: [makeDevice("a", "客厅的手机")], testBuild: true });
+    openUrl.mockClear();
+    confirmDialog.mockClear();
+    openDialog.mockResolvedValueOnce(null);
     await openApp("#/settings");
+
+    // 角落版本号已彻底删除
+    expect(document.querySelector(".version-footer")).toBeNull();
+    expect(document.querySelector("footer")).toBeNull();
+
+    const layers = screen.getByTestId("settings-layers");
+    expect(tokensOf(layers).has("settings-grid")).toBe(true);
+    expect(screen.queryByTestId("settings-primary-col")).toBeNull();
+    expect(Array.from(layers.children).map((el) => el.getAttribute("data-testid"))).toEqual([
+      "settings-library-card",
+      "about-card",
+      "settings-danger-zone",
+    ]);
+    expect(tokensOf(layers.children[0]).has("settings-library-card")).toBe(true);
+    expect(tokensOf(layers.children[1]).has("settings-about-card")).toBe(true);
+    expect(tokensOf(layers.children[2]).has("settings-danger-card")).toBe(true);
+
+    // ① 核心区：路径、磁盘水位、打开/搬迁交互
+    const libCard = screen.getByTestId("settings-library-card");
+    expect(libCard.textContent).toContain("/Users/demo/照片库");
+    expect(screen.getByRole("progressbar", { name: "磁盘空间" }).getAttribute("aria-valuenow")).toBe("95");
+    await fireEvent.click(screen.getByRole("button", { name: "打开照片库" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(invokeMock).toHaveBeenCalledWith("reveal_library");
+    await fireEvent.click(screen.getByTestId("change-library"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(invokeMock).toHaveBeenCalledWith("pick_library_dir", {
+      fromDefault: false,
+      title: "更改照片库位置",
+    });
+
+    // ② 常规与支持：壳版本（含测试版徽标）与服务版本在软件更新上方，检查更新按钮紧凑
+    const aboutCard = screen.getByTestId("about-card");
+    const shellRow = screen.getByTestId("about-shell-version");
+    expect(shellRow.textContent).toContain("v0.6.0");
+    expect(screen.getByTestId("about-test-build").textContent).toBe("测试版");
+    const serviceRow = screen.getByTestId("about-service-version");
+    expect(serviceRow.textContent).toContain("v0.6.0");
+
+    const checkBtn = screen.getByRole("button", { name: "检查更新" });
+    expect(tokensOf(checkBtn).has("h-[30px]")).toBe(true);
+    expect(tokensOf(checkBtn).has("min-h-[30px]")).toBe(true);
+
+    // 确认 DOM 顺序：壳版本 → 服务版本 → 检查更新 → 外链
+    const cardChildren = Array.from(aboutCard.children);
+    const shellIdx = cardChildren.findIndex((el) => el.contains(shellRow));
+    const serviceIdx = cardChildren.findIndex((el) => el.contains(serviceRow));
+    const updateIdx = cardChildren.findIndex((el) => el.contains(checkBtn));
+    const linkIdx = cardChildren.findIndex((el) => el.getAttribute("data-testid") === "about-link-website");
+    expect(shellIdx).toBeLessThan(serviceIdx);
+    expect(serviceIdx).toBeLessThan(updateIdx);
+    expect(updateIdx).toBeLessThan(linkIdx);
+
+    // 先清空挂载期自动检查记录，再点击「检查更新」，确保只测点击本身
+    checkUpdate.mockClear();
+    await fireEvent.click(checkBtn);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(checkUpdate).toHaveBeenCalledTimes(1);
+
+    await fireEvent.click(screen.getByTestId("about-link-website"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openUrl).toHaveBeenCalledWith("https://p-pass.hawkeye-xb.com/zh/");
+
+    // ③ 危险区：紧凑横排（左标题与后果 + 右红色危险按钮），容器保持中性纸卡
+    const dangerZone = screen.getByTestId("settings-danger-zone");
+    const dangerTokens = tokensOf(dangerZone);
+    expect(dangerTokens.has("flex-row")).toBe(true);
+    expect(dangerTokens.has("justify-between")).toBe(true);
+    expect(dangerTokens.has("border-act")).toBe(false);
+    expect(dangerTokens.has("bg-act-bg")).toBe(false);
     const stopHeading = screen.getByRole("heading", { name: "停止后台服务" });
     expect(tokensOf(stopHeading).has("text-ink")).toBe(true);
     expect(tokensOf(stopHeading).has("text-act")).toBe(false);
-    const stopCard = stopHeading.closest('[data-slot="card"]');
-    expect(stopCard).toBeTruthy();
-    expect(tokensOf(stopCard).has("border-act")).toBe(false);
-    expect(tokensOf(stopCard).has("bg-act-bg")).toBe(false);
+    expect(dangerZone.textContent).toContain("停止后备份暂停");
     const stopBtn = screen.getByRole("button", { name: "停止后台服务" });
     expect(tokensOf(stopBtn).has("text-act")).toBe(true);
+    await fireEvent.click(stopBtn);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(confirmDialog).toHaveBeenCalled();
+    expect(invokeMock).toHaveBeenCalledWith("stop_daemon");
   });
 
   it("#2084 + #2079 设备页显示改名铅笔提示、文件夹文字按钮，并保留已配对「断开」/已断开「移除」的柔和危险权重", async () => {
@@ -293,9 +496,10 @@ describe("#2083 + #2084 桌面端视觉权重、降噪、可点性与向导焦�
 
     setupDaemon({ devices: [dev], audit: [evt] });
     await openApp("#/overview");
-    const activityHeading = screen.getByRole("heading", { name: "最近活动" });
-    const overviewItem = activityHeading.closest('[data-slot="card"]')?.querySelector("ul li");
+    const activitySection = screen.getByTestId("overview-activity-card");
+    const overviewItem = activitySection.querySelector("ul li");
     expect(overviewItem).toBeTruthy();
+    expect(activitySection.querySelector("ul b")).toBeNull();
     expect(overviewItem.textContent).toContain("客厅的手机");
     expect(overviewItem.textContent).not.toContain("#aaaaaaaa");
     expect(overviewItem.getAttribute("title")).toBe("客厅的手机 · #aaaaaaaa");
@@ -330,7 +534,7 @@ describe("#2083 + #2084 桌面端视觉权重、降噪、可点性与向导焦�
     setupDaemon({ devices: [dev], audit: [evt] });
     await openApp("#/overview");
 
-    const allActivityLink = screen.getByRole("button", { name: /全部活动记录/ });
+    const allActivityLink = screen.getByRole("button", { name: /查看全部/ });
     const linkTokens = tokensOf(allActivityLink);
     expect(linkTokens.has("text-safe")).toBe(false);
     expect(linkTokens.has("underline")).toBe(true);
@@ -385,5 +589,144 @@ describe("#2083 + #2084 桌面端视觉权重、降噪、可点性与向导焦�
     expect(tokensOf(winStep2Heading).has("outline-none")).toBe(true);
     expect(tokensOf(winStep2Heading).has("focus-visible:ring-3")).toBe(true);
     expect(tokensOf(winStep2Heading).has("focus-visible:ring-ring")).toBe(true);
+  });
+
+  it("#2092 总览点击指定设备行跳到设备页后精准滚动、聚焦并短暂高亮对应行", async () => {
+    const dev1 = makeDevice("a", "书房手机", { last_activity_at: NOW - 30_000 });
+    const dev2 = makeDevice("b", "客厅手机", { last_activity_at: NOW - 60_000 });
+    const dev3 = makeDevice("c", "卧室手机", { last_activity_at: NOW - 90_000 });
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    const origRO = globalThis.ResizeObserver;
+    const scrollIntoViewMock = vi.fn();
+    let roCallback = null;
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+    globalThis.ResizeObserver = class {
+      constructor(cb) {
+        roCallback = cb;
+      }
+      observe() {}
+      disconnect() {}
+    };
+
+    try {
+      setupDaemon({ devices: [dev1, dev2, dev3] });
+      await openApp("#/overview");
+      roCallback?.([{ contentRect: { width: 900, height: 860 } }]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const backupCard = screen.getByTestId("overview-backup-card");
+      const dev2Btn = Array.from(backupCard.querySelectorAll("button")).find((btn) =>
+        btn.textContent?.includes("客厅手机"),
+      );
+      expect(dev2Btn).toBeTruthy();
+
+      await fireEvent.click(dev2Btn);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(screen.getByTestId("page-devices")).toBeTruthy();
+      const targetRow = document.querySelector(`[data-device-id="${dev2.node_id}"]`);
+      expect(targetRow).toBeTruthy();
+      expect(targetRow.getAttribute("tabindex")).toBe("-1");
+      expect(document.activeElement).toBe(targetRow);
+      expect(targetRow.getAttribute("data-highlighted")).toBe("true");
+      expect(tokensOf(targetRow).has("bg-linen")).toBe(true);
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: "nearest", behavior: "smooth" });
+
+      const otherRow = document.querySelector(`[data-device-id="${dev1.node_id}"]`);
+      expect(otherRow.getAttribute("data-highlighted")).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(2500);
+      expect(targetRow.getAttribute("data-highlighted")).toBeNull();
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+      globalThis.ResizeObserver = origRO;
+    }
+  });
+
+  it("#2092 status 读取失败（status === null）或 devices.list 失败时不误显添加第一台设备空态", async () => {
+    setupDaemon({ statusError: "status_unavailable" });
+    await openApp("#/overview");
+
+    expect(screen.queryByTestId("overview-empty-add")).toBeNull();
+    expect(screen.getByTestId("overview-grid")).toBeTruthy();
+    expect(screen.getByTestId("overview-backup-card")).toBeTruthy();
+
+    cleanup();
+    setupDaemon({ devices: [], pairedOverride: 0, devicesError: "devices_unavailable" });
+    await openApp("#/overview");
+
+    expect(screen.queryByTestId("overview-empty-add")).toBeNull();
+    expect(screen.getByTestId("overview-grid")).toBeTruthy();
+    expect(screen.getByTestId("devices-error")).toBeTruthy();
+  });
+
+  it("#2092 离线超 15 天且 needs_attention=false 的设备与摘要带关注数一致，窄高下仍置顶", async () => {
+    let roCallback = null;
+    const origRO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(cb) {
+        roCallback = cb;
+      }
+      observe() {}
+      disconnect() {}
+    };
+
+    try {
+      const devs = [
+        makeDevice("a", "正常手机1", { last_activity_at: NOW - 10_000 }),
+        makeDevice("b", "正常手机2", { last_activity_at: NOW - 20_000 }),
+        makeDevice("c", "久未联系手机", {
+          presence: "offline",
+          row_state: "idle",
+          needs_attention: false,
+          last_seen: NOW - 16 * 86_400_000,
+          last_activity_at: NOW - 16 * 86_400_000,
+        }),
+      ];
+      setupDaemon({ devices: devs });
+      await openApp("#/overview");
+
+      roCallback?.([{ contentRect: { width: 900, height: 420 } }]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(screen.getByTestId("overview-health-btn").textContent).toContain("1 台设备需关注");
+      const backupCard = screen.getByTestId("overview-backup-card");
+      const rows = backupCard.querySelectorAll("ul li");
+      expect(rows).toHaveLength(1);
+      expect(rows[0].textContent).toContain("久未联系手机");
+      expect(backupCard.textContent).toContain("另有 2 台正常");
+    } finally {
+      globalThis.ResizeObserver = origRO;
+    }
+  });
+
+  it("#2092 首启向导渲染在独立 wizard-shell 容器内且操作按钮完整可达，主界面使用 shell 与 content 容器", async () => {
+    setupDaemon({
+      wizardState: {
+        show_wizard: true,
+        default_dir: "/Users/demo/Pictures/P-Pass",
+        configured_library_dir: null,
+      },
+    });
+    await openApp();
+
+    const wizardShell = document.querySelector("main.wizard-shell");
+    expect(wizardShell).toBeTruthy();
+    expect(document.querySelector(".shell")).toBeNull();
+    expect(wizardShell.querySelector("button")).toBeTruthy();
+
+    cleanup();
+    setupDaemon({ devices: [makeDevice("a", "客厅的手机")] });
+    await openApp("#/settings");
+    expect(document.querySelector("main.wizard-shell")).toBeNull();
+    expect(document.querySelector(".shell")).toBeTruthy();
+    expect(document.querySelector("main.content")).toBeTruthy();
+
+    const layers = screen.getByTestId("settings-layers");
+    expect(Array.from(layers.children).map((el) => el.getAttribute("data-testid"))).toEqual([
+      "settings-library-card",
+      "about-card",
+      "settings-danger-zone",
+    ]);
   });
 });
