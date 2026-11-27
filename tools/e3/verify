@@ -36,15 +36,24 @@ android_globs() {
             print $1 }' "$REPO_ROOT/.github/workflows/ci-android.yml"
 }
 
-# 把 android_globs 的结果读进数组再传参：直接 $(android_globs) 不带引号会被 shell
-# 再做一次路径展开，apps/android/** 变成 apps/android/app 等具体路径，通配语义丢失（#1343）。
+# 兼容：若 ci-android.yml 含显式 paths: 块（如测试夹具）则走原 paths 判定；
+# 若 ci-android.yml 使用 lane: android，则统一委托 tools/ci/impact.py。
 android_lane_hit() {
-  local g
+  local g hit
   local -a globs=()
   while IFS= read -r g; do
     [ -n "$g" ] && globs+=("$g")
   done < <(android_globs)
-  lane_hit ${globs[@]+"${globs[@]}"}
+  if [ "${#globs[@]}" -gt 0 ]; then
+    lane_hit "${globs[@]}"
+    return
+  fi
+  if [ -f "$REPO_ROOT/tools/ci/impact.py" ]; then
+    hit="$(python3 -B -I "$REPO_ROOT/tools/ci/impact.py" ci --repo "$REPO_ROOT" --base "$base" --lane android 2>/dev/null || echo true)"
+    [ "$hit" != false ]
+    return
+  fi
+  return 0
 }
 
 lane_hit() { # lane_hit <glob…>：改动有没有落在这些路径上（ci-paths.sh，fail-closed）

@@ -161,68 +161,16 @@ def check_device_ready(dev_dir: str, dev_name: str | None, unattended: bool = Tr
 
 
 def pick_gates(files: list[str], repo_dir: str) -> list[str]:
-    """按改动精准挑本机验证命令，绝不因未知配置文件（.gitignore / assets/contracts/ 等）罚跑全仓 just ci。"""
-    gates: list[str] = []
-    add = lambda g: gates.append(g) if g not in gates else None
-    code_touched = False
-    for f in [x.strip() for x in files if x.strip()]:
-        if f.startswith(("docs/", "release/notes/")) or f.endswith(".md"):
-            add("just ci-docs" if f == "AGENTS.md" else "just md-check")
-            continue
-        code_touched = True
-        if f.startswith("apps/android/"):
-            add("just android-test")
-            if "strings" in os.path.basename(f) and f.endswith(".xml"):
-                add("just mobile-static-check")
-        elif f.startswith("tools/ios/test-") and f.endswith(".sh"):
-            if os.path.isfile(os.path.join(repo_dir, f)):
-                add(f"bash {f}")
-        elif f.startswith(("apps/ios/", "tools/ios/")):
-            add("just ios-test")
-            if f.endswith((".strings", ".xcstrings")):
-                add("just ios-test --lang en")
-                add("just ios-test --lang zh")
-        elif f.startswith("assets/i18n/"):
-            add("just mobile-static-check")
-            add("just ios-test --lang en")
-            add("just ios-test --lang zh")
-        elif f.startswith("apps/desktop/src-tauri/"):
-            for sub in (
-                "nextest run --manifest-path apps/desktop/src-tauri/Cargo.toml -p p-pass-desktop",
-                "clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings",
-                "fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
-            ):
-                add(f"cargo {sub}")
-        elif f.startswith("apps/desktop/src/"):
-            add("pnpm -C apps/desktop test")
-        elif f.startswith("crates/") and len(Path(f).parts) >= 2:
-            ctoml = Path(repo_dir) / "crates" / Path(f).parts[1] / "Cargo.toml"
-            m = re.search(r'^name\s*=\s*"([^"]+)"', ctoml.read_text(encoding="utf-8"), re.M) if ctoml.is_file() else None
-            if m:
-                add(f"cargo nextest run -p {m.group(1)}")
-                add(f"cargo clippy -p {m.group(1)} --all-targets -- -D warnings")
-                add("cargo fmt --all -- --check")
-        elif f.startswith("tools/flow/") or f == "tools/test-flow.py":
-            add("python3 -B -I tools/test-flow.py")
-        elif f.startswith("tools/e3/"):
-            add("bash tools/test-e3.sh")
-        elif f.startswith("tools/tests/") and f.endswith(".py"):
-            if os.path.isfile(os.path.join(repo_dir, f)):
-                add(f"python3 -B -I {f}")
-        elif f.startswith("tools/test-") and f.endswith(".py"):
-            if os.path.isfile(os.path.join(repo_dir, f)):
-                add(f"python3 -B -I {f}")
-        elif f.startswith("tools/test-") and f.endswith(".sh"):
-            if os.path.isfile(os.path.join(repo_dir, f)):
-                add(f"bash {f}")
-        elif f.startswith(".github/workflows/"):
-            add("actionlint")
-    if code_touched:
-        add("just arch-check")
-        add("just fitness-check")
-    elif not gates:
-        add("just md-check")
-    return gates
+    """按改动与统一依赖图精准挑本机验证命令，绝不因未知配置文件（.gitignore / assets/contracts/ 等）罚跑全仓 just ci。"""
+    import importlib.util
+
+    impact_path = Path(__file__).resolve().parents[1] / "ci" / "impact.py"
+    spec = importlib.util.spec_from_file_location("ppass_ci_impact", impact_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"无法加载依赖图引擎：{impact_path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.compute_local_gates(files, repo_dir)
 
 
 def cmd_doctor(cwd: str) -> int:

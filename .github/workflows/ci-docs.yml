@@ -25,7 +25,7 @@ on:
   # #1187：路径判定挪到 job 层（.github/actions/changes），本 lane 进必过项。
   # 下面每个 job 都是秒级、无编译；路径没碰到时只跑 changes 与 gate。
   # #1422：edited / ready_for_review 让「改 PR 正文补方案引用」「草稿转正式」重跑 acceptance gate（#1471 起合入不再要验收行）。
-  # #1468：合入 main 后批量跑全量（含 Windows）。PR 上只跑快检，Windows 留到这里。
+  # #1468 / #2089：PR 与合入 main 均按四端对称门禁触发；合入 main 后全量跑一次，PR 上只跑受影响的 lane。
   # 同组同一时间只跑一次：正在跑的不取消（cancel-in-progress 对 push 为 false），
   # 排队只留最新（GitHub concurrency 原生行为：新来的替掉还在排队的）。
   push:
@@ -64,74 +64,11 @@ jobs:
       - id: c
         uses: ./.github/actions/changes
         with:
-          # 原 workflow 级 paths 原样搬来。
-          paths: |
-            tools/test-release-plan.sh
-            **.sh
-            .github/workflows/**
-            justfile
-            tools/check-shell-vars.py
-            tools/check-doc-anchors.py
-            tools/test-check-doc-anchors.sh
-            AGENTS.md
-            CLAUDE.md
-            docs/**
-            assets/design/tokens.json
-            tools/check-markdown-tables.py
-            tools/check-token-drift.py
-            tools/dogfood-smoke.sh
-            tools/ipc-lib.sh
-            tools/stage-dogfood-scripts.sh
-            tools/test-dogfood-assets.sh
-            .github/workflows/artifacts.yml
-            .github/workflows/release.yml
-            .github/workflows/ci-docs.yml
-            .github/workflows/mirror-latest.yml
-            tools/mirror-resolve-tag.sh
-            tools/test-mirror-resolve-tag.sh
-            .github/workflows/repair-manifests.yml
-            tools/release-version.sh
-            tools/check-version-bump.sh
-            tools/test-release-version-source.sh
-            # #1486：release.yml 的发版闸调 release-acceptance.sh（判定在 release-scope.sh），这几处改了都要跑它的测试。
-            tools/test-release-acceptance-gate.sh
-            tools/flow/release-acceptance.sh
-            tools/flow/release-scope.sh
-            # #894：上面的测试校验 gradle 原生库 inputs 与版本门禁安卓口径一致——gradle 改了也要跑。
-            apps/android/app/build.gradle.kts
-            tools/make-update-manifest.mjs
-            tools/release-notes.mjs
-            tools/release-notes.test.mjs
-            release/**
-            tools/release/**
-            CHANGELOG.md
-            # #1062：release-plan 钉住真实依赖图（各端入口包传递依赖哪些 crate）——Cargo 清单变了也要跑。
-            Cargo.toml
-            crates/*/Cargo.toml
-            tools/testclient/Cargo.toml
-            apps/desktop/src-tauri/Cargo.toml
-            tools/bundle-desktop-macos.sh
-            tools/daemon-helper-macos.sh
-            tools/test-release-timeouts.sh
-            # SEC-09 (#371)：pnpm 供应链豁免门禁——这些文件任何一个变了都要过 supply-chain。
-            **/pnpm-workspace.yaml
-            **/package.json
-            **/.npmrc
-            tools/check-release-age-exclude.py
-            tools/release-age-exclude-allowlist.txt
-            .github/actions/changes/**
-            tools/ci-paths.sh
+          lane: docs
       - id: f
         uses: ./.github/actions/changes
         with:
-          # #1493：流程门禁脚本、它们的自测、justfile 清单、workflow 与 AGENTS.md 里的规矩。
-          paths: |
-            tools/**
-            justfile
-            .github/**
-            AGENTS.md
-            # #914：版本真相源改了也要跑 bump 自测（脚本那侧由 tools/** 覆盖）。
-            release/versions.json
+          lane: docs-flow
 
   # #1471 按版本验收：用户看得到的改动合入时不要验收行（发版前由 just release-scope 的台账清零兜住）；
   # 本 job 只把核心的方案关：碰核心的要正文引用已采纳方案，看不见的核心还要带测试。

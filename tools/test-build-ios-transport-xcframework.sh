@@ -15,7 +15,7 @@ OUT="$FAKE/apps/ios/TransportFFITests/Generated"
 COUNT_FILE="$TMP/cargo_calls"
 : >"$COUNT_FILE"
 
-mkdir -p "$FAKE/tools" "$FAKE/crates/transport/src" "$FAKE/crates/proto/src" "$FAKE/crates/pair-pake/src" "$BIN"
+mkdir -p "$FAKE/tools" "$FAKE/crates/transport/src" "$FAKE/crates/proto/src" "$FAKE/crates/pair-pake/src" "$FAKE/third_party/noq-udp/src" "$BIN"
 cp "$SCRIPT" "$FAKE/tools/build-ios-transport-xcframework.sh"
 chmod +x "$FAKE/tools/build-ios-transport-xcframework.sh"
 
@@ -25,6 +25,7 @@ printf '[toolchain]\nchannel = "1.86.0"\n' >"$FAKE/rust-toolchain.toml"
 printf 'pub fn v() -> u32 { 1 }\n' >"$FAKE/crates/transport/src/lib.rs"
 printf 'pub const PROTO: u32 = 1;\n' >"$FAKE/crates/proto/src/lib.rs"
 printf 'pub const PAKE: u32 = 1;\n' >"$FAKE/crates/pair-pake/src/lib.rs"
+printf 'pub const NOQ: u32 = 1;\n' >"$FAKE/third_party/noq-udp/src/lib.rs"
 
 cat >"$BIN/rustup" <<'SH'
 #!/usr/bin/env bash
@@ -98,7 +99,7 @@ printf 'pub fn v() -> u32 { 2 }\n' >"$FAKE/crates/transport/src/lib.rs"
 run_build >/dev/null
 [ "$(calls)" = "4" ] || fail "修改 crates/transport 后应重编，实际 $(calls)"
 
-# 4. 修改 crates/proto 与 crates/pair-pake 也应自动重编
+# 4. 修改 crates/proto、crates/pair-pake 与 third_party/noq-udp 也应自动重编
 printf 'pub const PROTO: u32 = 2;\n' >"$FAKE/crates/proto/src/lib.rs"
 run_build >/dev/null
 [ "$(calls)" = "6" ] || fail "修改 crates/proto 后应重编，实际 $(calls)"
@@ -107,13 +108,20 @@ printf 'pub const PAKE: u32 = 2;\n' >"$FAKE/crates/pair-pake/src/lib.rs"
 run_build >/dev/null
 [ "$(calls)" = "8" ] || fail "修改 crates/pair-pake 后应重编，实际 $(calls)"
 
+fp_before="$("$FAKE/tools/build-ios-transport-xcframework.sh" --print-fingerprint)"
+printf 'pub const NOQ: u32 = 2;\n' >"$FAKE/third_party/noq-udp/src/lib.rs"
+fp_after="$("$FAKE/tools/build-ios-transport-xcframework.sh" --print-fingerprint)"
+[ "$fp_before" != "$fp_after" ] || fail "修改 third_party/noq-udp 后 --print-fingerprint 未变化"
+run_build >/dev/null
+[ "$(calls)" = "10" ] || fail "修改 third_party/noq-udp 后应重编，实际 $(calls)"
+
 # 5. 复用历史产物（目录在但无 .transport-ffi.sha256）应自动重编
 rm -f "$OUT/.transport-ffi.sha256"
 run_build >/dev/null
-[ "$(calls)" = "10" ] || fail "历史产物缺摘要时应自动重编，实际 $(calls)"
+[ "$(calls)" = "12" ] || fail "历史产物缺摘要时应自动重编，实际 $(calls)"
 
 # 6. PPASS_FORCE_REBUILD_FFI=1 强制重编
 PPASS_FORCE_REBUILD_FFI=1 run_build >/dev/null
-[ "$(calls)" = "12" ] || fail "PPASS_FORCE_REBUILD_FFI=1 应强制重编，实际 $(calls)"
+[ "$(calls)" = "14" ] || fail "PPASS_FORCE_REBUILD_FFI=1 应强制重编，实际 $(calls)"
 
-echo "PASS: tools/test-build-ios-transport-xcframework.sh（6/6 断言通过）"
+echo "PASS: tools/test-build-ios-transport-xcframework.sh（7/7 断言通过）"

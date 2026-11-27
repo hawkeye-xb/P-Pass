@@ -153,7 +153,7 @@ while IFS= read -r a; do
 done <<EOF2
 $ACTIONS
 EOF2
-grep -hoE 'tools/[A-Za-z0-9_./-]*[A-Za-z0-9_-]' "${WF_FILES[@]}" >>"$DERIVED"
+grep -hv '^[[:space:]]*#' "${WF_FILES[@]}" | grep -hoE 'tools/[A-Za-z0-9_./-]*[A-Za-z0-9_-]' >>"$DERIVED"
 sort -u "$DERIVED" -o "$DERIVED"
 n="$(grep -c . "$DERIVED")"
 bad=0
@@ -241,15 +241,32 @@ fi
 
 echo
 echo "==> 6. 变异反证甲：把 allowlist 兜底改成全放行，断言必须变红"
-MUT="$TMP/mutated.sh"
-# 变异：把兜底的 `return 1`（= 不在清单里）改成 `return 0`（= 当成无害），
-# 也就是把 allowlist 悄悄变成「什么都放行」。
-sed 's/^  return 1$/  return 0/' "$SUT" >"$MUT"
-if ! grep -q '^  return 0$' "$MUT"; then
+# prepare_mutant <out_dir> <python transform>: 复制 wrapper + impact.py 并对 impact.py 注入变异
+prepare_mutant() {
+  local mdir="$1" py_code="$2"
+  rm -rf "$mdir"
+  mkdir -p "$mdir/tools/ci"
+  cp "$SUT" "$mdir/tools/ci-needs-full-lane.sh"
+  cp "$REPO/tools/ci/impact.py" "$mdir/tools/ci/impact.py"
+  chmod +x "$mdir/tools/ci-needs-full-lane.sh"
+  python3 -B -I -c "$py_code" "$mdir/tools/ci/impact.py"
+}
+
+MUT_DIR="$TMP/mut1"
+if ! prepare_mutant "$MUT_DIR" '
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+old = "return True, f\"「{f}」不在无害清单里（lane={lane}）→ 要跑\""
+new = "return False, \"mutated allow all\""
+assert old in s, "anchor missing"
+p.write_text(s.replace(old, new, 1), encoding="utf-8")
+'; then
   echo "  ❌ 变异没生效（锚点没匹配上）—— 这一节等于没跑，判失败"
   FAIL=$((FAIL + 1))
 else
-  echo "  变异已注入：is_inert 的兜底 return 1 → return 0（allowlist 变成全放行）"
+  MUT="$MUT_DIR/tools/ci-needs-full-lane.sh"
+  echo "  变异已注入：decide_ci 的兜底 return True → return False（allowlist 变成全放行）"
   before=$FAIL
   expect "$MUT" true "【变异后应失败】改了 crates/"      crates/daemon/src/main.rs
   expect "$MUT" true "【变异后应失败】未知新目录"        newthing/x.rs
@@ -267,14 +284,20 @@ fi
 
 echo
 echo "==> 7. 变异反证乙（CI-17）：把宽 lane 的 apps/* 改坏，rust-workspace 的断言必须变红"
-# 这一节专治「第 3 节那些 false 是不是恒假式」。把 apps/* 改成一个永不匹配的
-# 模式，那些「可跳」断言必须全部变成「要跑」。
-MUT2="$TMP/mutated2.sh"
-sed 's|^      apps/\*) return 0 ;;$|      zzz-never-matches/*) return 0 ;;|' "$SUT" >"$MUT2"
-if ! grep -q 'zzz-never-matches' "$MUT2"; then
+MUT2_DIR="$TMP/mut2"
+if ! prepare_mutant "$MUT2_DIR" '
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+old = "if lane == \"rust-workspace\" and rel_path.startswith(\"apps/\"):"
+new = "if lane == \"rust-workspace\" and rel_path.startswith(\"zzz-never-matches/\"):"
+assert old in s, "anchor missing"
+p.write_text(s.replace(old, new, 1), encoding="utf-8")
+'; then
   echo "  ❌ 变异没生效（锚点没匹配上）—— 这一节等于没跑，判失败"
   FAIL=$((FAIL + 1))
 else
+  MUT2="$MUT2_DIR/tools/ci-needs-full-lane.sh"
   echo "  变异已注入：宽 lane 的 apps/* → zzz-never-matches/*"
   before=$FAIL
   expect_lane "$MUT2" rust-workspace false "【变异后应失败】只改桌面壳" apps/desktop/src-tauri/src/lib.rs
@@ -292,19 +315,30 @@ else
 fi
 
 echo
-echo "==> 7b. 变异反证丙（#1066）：去掉两个手机端常量文件的登记，宽 lane 的断言必须变红"
-MUT3="$TMP/mutated3.sh"
-grep -v 'FlowContract.kt) return 1\|FlowTypes.swift) return 1' "$SUT" >"$MUT3"
-if cmp -s "$SUT" "$MUT3"; then
+echo "==> 7b. 变异反证丙（#1066）：去掉两个手机端常量文件的跨目录识别，宽 lane 的断言必须变红"
+MUT3_DIR="$TMP/mut3"
+if ! prepare_mutant "$MUT3_DIR" '
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+old_r = "if readers and (lane != \"rust-workspace\" or any(pkg != graph.tauri_pkg for pkg in readers)):"
+new_r = "if False:"
+old_f = "\"apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/flow/FlowContract.kt\","
+old_i = "\"apps/ios/Packages/PPassCore/Sources/PPassCore/Flow/FlowTypes.swift\","
+assert old_r in s and old_f in s and old_i in s, "anchor missing"
+s = s.replace(old_r, new_r, 1).replace(old_f, "", 1).replace(old_i, "", 1)
+p.write_text(s, encoding="utf-8")
+'; then
   echo "  ❌ 变异没生效（锚点没匹配上）—— 这一节等于没跑，判失败"
   FAIL=$((FAIL + 1))
 else
+  MUT3="$MUT3_DIR/tools/ci-needs-full-lane.sh"
   before=$FAIL
   expect_lane "$MUT3" rust-workspace true "【变异后应失败】Android 低空间常量文件" "$ANDROID_LOW"
   expect_lane "$MUT3" rust-workspace true "【变异后应失败】iOS 低空间常量文件" "$IOS_LOW"
   gained=$((FAIL - before))
   if [ "$gained" -eq 2 ]; then
-    echo "  ✅ 两条断言在变异后全部变红 ⇒ 登记真的在起作用"
+    echo "  ✅ 两条断言在变异后全部变红 ⇒ 登记与动态扫描都在起作用"
     FAIL=$((FAIL - 2))
     PASS=$((PASS + 1))
   else
@@ -315,16 +349,23 @@ fi
 
 echo
 echo "==> 7c. 变异反证丁（#1467）：去掉新补的无害条目，「可跳」断言必须变红"
-MUT4="$TMP/mutated4.sh"
-grep -v '^    tools/flow/\* | tools/e3/\*\|^    release/notes/\*) return 0\|^    tools/test-flow\.py' "$SUT" >"$MUT4"
-if [ "$(wc -l <"$SUT")" -ne "$(( $(wc -l <"$MUT4") + 3 ))" ]; then
-  echo "  ❌ 变异没生效（锚点没匹配上 3 行）—— 这一节等于没跑，判失败"
+MUT4_DIR="$TMP/mut4"
+if ! prepare_mutant "$MUT4_DIR" '
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+s2 = s.replace("\"release/notes/\", ", "").replace("\"tools/flow/\", ", "").replace("\".github/ISSUE_TEMPLATE/\"", "\"zzz-no-match/\"")
+assert s2 != s, "anchor missing"
+p.write_text(s2, encoding="utf-8")
+'; then
+  echo "  ❌ 变异没生效（锚点没匹配上）—— 这一节等于没跑，判失败"
   FAIL=$((FAIL + 1))
 else
+  MUT4="$MUT4_DIR/tools/ci-needs-full-lane.sh"
   before=$FAIL
-  expect "$MUT4" false "【变异后应失败】只改 tools/flow"        tools/flow/flow.py
-  expect "$MUT4" false "【变异后应失败】只改 release/notes"     release/notes/android/0.11.0.zh.txt
-  expect "$MUT4" false "【变异后应失败】只改 tools/test-flow.py" tools/test-flow.py
+  expect "$MUT4" false "【变异后应失败】只改 tools/flow"               tools/flow/a.sh
+  expect "$MUT4" false "【变异后应失败】只改 release/notes"            release/notes/android/0.11.0.zh.txt
+  expect "$MUT4" false "【变异后应失败】只改 .github/ISSUE_TEMPLATE/" .github/ISSUE_TEMPLATE/task.yml
   gained=$((FAIL - before))
   if [ "$gained" -eq 3 ]; then
     echo "  ✅ 三条断言在变异后全部变红 ⇒ 新清单真的在起作用，不是恒假式"
@@ -337,13 +378,23 @@ else
 fi
 
 echo
-echo "==> 7d. 变异反证戊（#1467）：去掉桌面 i18n 的登记，宽 lane 断言与派生断言都必须变红"
-MUT5="$TMP/mutated5.sh"
-grep -v 'apps/desktop/src/i18n/zh.json) return 1' "$SUT" >"$MUT5"
-if cmp -s "$SUT" "$MUT5"; then
+echo "==> 7d. 变异反证戊（#1467）：去掉桌面 i18n 的识别，宽 lane 断言与派生断言都必须变红"
+MUT5_DIR="$TMP/mut5"
+if ! prepare_mutant "$MUT5_DIR" '
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+old_r = "if readers and (lane != \"rust-workspace\" or any(pkg != graph.tauri_pkg for pkg in readers)):"
+old_en = "\"apps/desktop/src/i18n/en.json\","
+old_zh = "\"apps/desktop/src/i18n/zh.json\","
+assert old_r in s and old_en in s and old_zh in s, "anchor missing"
+s = s.replace(old_r, "if False:", 1).replace(old_en, "", 1).replace(old_zh, "", 1)
+p.write_text(s, encoding="utf-8")
+'; then
   echo "  ❌ 变异没生效（锚点没匹配上）—— 这一节等于没跑，判失败"
   FAIL=$((FAIL + 1))
 else
+  MUT5="$MUT5_DIR/tools/ci-needs-full-lane.sh"
   before=$FAIL
   expect_lane "$MUT5" rust-workspace true "【变异后应失败】桌面 i18n en" "$DIAG_EN"
   expect_lane "$MUT5" rust-workspace true "【变异后应失败】桌面 i18n zh" "$DIAG_ZH"
@@ -368,8 +419,10 @@ echo
 echo "==> 7e. #1467：base sha 模式下改名的旧路径也参与判定（把 gated 脚本挪进惰性目录必须要跑）"
 GR="$TMP/rename-repo"
 rename_decide() { # rename_decide <脚本>：临时仓库里把 tools/setup-rust-toolchain.sh 挪到 tools/flow/，按 base 判
-  rm -rf "$GR" && mkdir -p "$GR/tools" &&
+  rm -rf "$GR" && mkdir -p "$GR/tools" "$GR/.github/workflows" &&
     seq 1 50 >"$GR/tools/setup-rust-toolchain.sh" &&
+    printf 'jobs:\n  t:\n    steps:\n      - run: tools/setup-rust-toolchain.sh\n' >"$GR/.github/workflows/ci-rust.yml" &&
+    printf 'jobs:\n  d:\n    steps:\n      - run: echo d\n' >"$GR/.github/workflows/ci-desktop.yml" &&
     git -C "$GR" init -q --template= &&
     git -C "$GR" add -A && git -C "$GR" -c user.name=t -c user.email=t@invalid commit -q -m base &&
     local b && b="$(git -C "$GR" rev-parse HEAD)" &&
@@ -385,12 +438,19 @@ else
   echo "  ❌ 改名 tools/setup-rust-toolchain.sh → tools/flow/ → 期望 true，实得 ${got}"
   FAIL=$((FAIL + 1))
 fi
-MUT6="$TMP/mutated6.sh"
-sed 's/git diff --no-renames --name-only/git diff --name-only/' "$SUT" >"$MUT6"
-if cmp -s "$SUT" "$MUT6"; then
+MUT6_DIR="$TMP/mut6"
+if ! prepare_mutant "$MUT6_DIR" '
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+old = "\"--no-renames\", "
+assert old in s, "anchor missing"
+p.write_text(s.replace(old, "", 1), encoding="utf-8")
+'; then
   echo "  ❌ 变异没生效（锚点没匹配上）—— 这一节等于没跑，判失败"
   FAIL=$((FAIL + 1))
 else
+  MUT6="$MUT6_DIR/tools/ci-needs-full-lane.sh"
   got="$(rename_decide "$MUT6")"
   if [ "$got" = "false" ]; then
     echo "  ✅ 反证：去掉 --no-renames 后同一改名判 false ⇒ 用例有判别力"
@@ -471,12 +531,20 @@ else
 fi
 
 echo "  -- 反证：去掉闭包追溯（只看直接引用），辅助脚本必须判 false --"
-MUT7="$TMP/mutated7.sh"
-grep -v '# 闭包追溯' "$SUT" >"$MUT7"
-if [ "$(wc -l <"$SUT")" -ne "$(( $(wc -l <"$MUT7") + 1 ))" ]; then
-  echo "  ❌ 变异没生效（锚点没匹配上 1 行）—— 这一节等于没跑，判失败"
+MUT7_DIR="$TMP/mut7"
+if ! prepare_mutant "$MUT7_DIR" '
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+old = "seen.add(r)\n                queue.append(r)"
+new = "continue"
+assert old in s, "anchor missing"
+p.write_text(s.replace(old, new, 1), encoding="utf-8")
+'; then
+  echo "  ❌ 变异没生效（锚点没匹配上）—— 这一节等于没跑，判失败"
   FAIL=$((FAIL + 1))
 else
+  MUT7="$MUT7_DIR/tools/ci-needs-full-lane.sh"
   before=$FAIL
   cexpect "$MUT7" default true "【变异后应失败】被 source 的辅助脚本" tools/helper.sh
   cexpect "$MUT7" default true "直接调用的脚本（变异不影响）"       tools/gated.sh
@@ -492,13 +560,20 @@ else
 fi
 
 echo "  -- 反证：忽略 git grep 的退出码，垫片下 lonely.sh 必须判 false --"
-MUT8="$TMP/mutated8.sh"
-# shellcheck disable=SC2016 # 字面量写进夹具，不展开
-sed 's/if \[ "\$rc" -gt 1 \]; then/if false; then/' "$SUT" >"$MUT8"
-if cmp -s "$SUT" "$MUT8"; then
+MUT8_DIR="$TMP/mut8"
+if ! prepare_mutant "$MUT8_DIR" '
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+old = "if grep_err:"
+new = "if False:"
+assert old in s, "anchor missing"
+p.write_text(s.replace(old, new, 1), encoding="utf-8")
+'; then
   echo "  ❌ 变异没生效（锚点没匹配上）—— 这一节等于没跑，判失败"
   FAIL=$((FAIL + 1))
 else
+  MUT8="$MUT8_DIR/tools/ci-needs-full-lane.sh"
   got="$(shim_decide "$MUT8")"
   if [ "$got" = "false" ]; then
     echo "  ✅ 忽略退出码后同一垫片判 false ⇒ git grep 出错的用例有判别力"
@@ -528,12 +603,20 @@ echo
 echo "==> 7g. 变异反证（#1545）：去掉 .coderabbit.yaml 登记，可跳断言必须变红"
 expect "$SUT" false "#1545：只改 .coderabbit.yaml" .coderabbit.yaml
 expect_lane "$SUT" rust-workspace false "#1545：只改 .coderabbit.yaml（宽 lane）" .coderabbit.yaml
-MUT9="$TMP/mutated9.sh"
-grep -v '^[ ]*\.coderabbit\.yaml) return 0 ;;$' "$SUT" >"$MUT9"
-if [ "$(wc -l <"$SUT")" -ne "$(( $(wc -l <"$MUT9") + 1 ))" ]; then
+MUT9_DIR="$TMP/mut9"
+if ! prepare_mutant "$MUT9_DIR" '
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+old = "if rel_path == \".coderabbit.yaml\":\n        return True"
+new = "if False:\n        return True"
+assert old in s, "anchor missing"
+p.write_text(s.replace(old, new, 1), encoding="utf-8")
+'; then
   echo "  ❌ 变异没生效（锚点没匹配上）—— 这一节等于没跑，判失败"
   FAIL=$((FAIL + 1))
 else
+  MUT9="$MUT9_DIR/tools/ci-needs-full-lane.sh"
   before=$FAIL
   expect "$MUT9" false "【变异后应失败】只改 .coderabbit.yaml" .coderabbit.yaml
   gained=$((FAIL - before))

@@ -28,6 +28,18 @@ class CleanFlowEngineTests(unittest.TestCase):
         self.assertIn("python3 -B -I tools/tests/test_bump_version_cleanup.py", g_tool_py)
         g_doc = flow.pick_gates(["docs/a.md"], str(ROOT))
         self.assertEqual(g_doc, ["just md-check"])
+        g_just = flow.pick_gates(["justfile"], str(ROOT))
+        self.assertEqual(g_just, ["just ci-docs"])
+        g_split_just = flow.pick_gates(["tools/just/checks.just"], str(ROOT))
+        self.assertEqual(g_split_just, ["just ci-docs"])
+        g_desk_i18n = flow.pick_gates(["apps/desktop/src/i18n/en.json"], str(ROOT))
+        self.assertIn("pnpm -C apps/desktop test", g_desk_i18n)
+        self.assertIn("cargo nextest run -p diag", g_desk_i18n)
+        self.assertIn("cargo nextest run --manifest-path apps/desktop/src-tauri/Cargo.toml -p p-pass-desktop", g_desk_i18n)
+        g_rules = flow.pick_gates(["docs/desktop/business-rules.zh-CN.md"], str(ROOT))
+        self.assertIn("cargo nextest run -p daemon", g_rules)
+        self.assertIn("cargo nextest run --manifest-path apps/desktop/src-tauri/Cargo.toml -p p-pass-desktop", g_rules)
+        self.assertIn("pnpm -C apps/desktop test", g_rules)
 
     def test_2_blocks_exam_files_and_source_string_fake_tests(self) -> None:
         tmp = tempfile.mkdtemp(prefix="v3_ft_")

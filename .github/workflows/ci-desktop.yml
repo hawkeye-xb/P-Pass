@@ -24,7 +24,7 @@ on:
   # Pending）。本 lane 实测 1m11s，是四条业务 lane 里最便宜的一条。
   # ⚠️ 谁要给本 lane 加回 paths，请先把 main 的必需检查里 desktop 那条
   # 摘掉，否则不碰 apps/desktop/** 的 PR 会全部卡死。
-  # #1468：合入 main 后批量跑全量（含 Windows）。PR 上只跑快检，Windows 留到这里。
+  # #1468 / #2089：四端 PR 对称门禁，PR 与合入 main 均按 changes 影响范围触发（含 Windows）。
   # 同组同一时间只跑一次：正在跑的不取消（cancel-in-progress 对 push 为 false），
   # 排队只留最新（GitHub concurrency 原生行为：新来的替掉还在排队的）。
   push:
@@ -34,7 +34,7 @@ on:
   # #1187：发版前由 release.yml 以全量模式调用（changes 对非 pull_request 事件恒定全跑）。
   # #1555：Linux 桌面 job 已整个移除（产品不发 Linux 包），不再需要 `release_call`
   # 输入来识别发版调用——发版调用与 push 到 main 跑同一套桌面检查（只剩
-  # desktop-windows），PR 上照 #1468 跳过 Windows。
+  # desktop-windows），PR 与 push 到 main / 发版均按 changes 影响范围跑同一套桌面检查。
   workflow_call:
 
 permissions:
@@ -82,7 +82,9 @@ jobs:
       # 这一步红 ⇒ changes job 红 ⇒ 下游按 `!= 'false'` 照常全跑（fail-closed）。
       - name: 判据自检（含变异反证）
         shell: bash
-        run: tools/test-ci-needs-full-lane.sh
+        run: |
+          python3 -B -I tools/test-ci-impact.py
+          tools/test-ci-needs-full-lane.sh
       - id: decide
         shell: bash
         run: |
@@ -132,8 +134,7 @@ jobs:
   # `!cancelled()` 是状态函数，它让本 job 在 changes 失败时**仍然执行**
   # （否则 needs 的隐式 success() 会把它跳掉，又回到 fail-open）。
   #
-  # #1468：PR 上跳过本 job（汇报 skipped，对必需检查算通过，名字不变），
-  # 合入 main 后的 push 全量与 Release 调用照跑。
+  # #2089 四端 PR 对称门禁：PR 与合入 main 后的 push 全量 / Release 均按 changes 影响范围触发。
 
   # CI-06（#164，2026-09-20）：Windows 这条是这次里程碑新加的。
   # 在此之前**整个 CI 里没有一台 Windows 机器**——ci-rust.yml 里那个叫
@@ -151,9 +152,8 @@ jobs:
   desktop-windows:
     name: desktop (windows-latest)
     needs: changes
-    # #1468：PR 上不跑 Windows（跳过汇报 skipped，对必需检查算通过，名字不变），
-    # 合入 main 后的 push 全量与 Release 调用照跑。
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.changes.outputs.run_heavy != 'false' }}
+    # #2089 四端 PR 对称门禁：PR 与 main push / Release 均按 changes 影响范围执行。
+    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: windows-latest
     # Windows 冷构建（tauri 依赖树 + MSVC 链接）比 Linux 慢得多，30min 不够；
     # 显式给到 45。cargo test 没有单测级超时，真挂死（DAE-06 #176 那种 300s

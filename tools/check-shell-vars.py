@@ -8,7 +8,7 @@ Linux 的 bash 5 不受影响，所以只在 macOS 上（发布链的 macOS job�
 先崩了，重试没有发生（#772 的重试机制形同虚设）。
 
 规则只有一条：`$` 后面紧跟变量名、再紧跟非 ASCII 字符 = 违规。改成 `${name}` 即可。
-扫描范围：git 跟踪的 *.sh / *.bash、.github/workflows/*.yml、justfile，以及无扩展名但
+扫描范围：git 跟踪的 *.sh / *.bash、.github/workflows/*.yml、justfile 与 tools/just/*.just，以及无扩展名但
 shebang 是 bash/sh 的脚本（tools/e3、tools/hooks、tools/heavy-lock 等）。整行注释不查。
 
 用法：python3 tools/check-shell-vars.py [--self-test]
@@ -53,7 +53,7 @@ def scanned_files():
             out.append(f)
         elif f.startswith(".github/workflows/") and f.endswith((".yml", ".yaml")):
             out.append(f)
-        elif f == "justfile":
+        elif f == "justfile" or (f.startswith("tools/just/") and f.endswith(".just")):
             out.append(f)
         elif "." not in f.rsplit("/", 1)[-1] and _is_bash_script(f):
             # 无扩展名但 shebang 是 bash/sh 的脚本（tools/e3、tools/hooks、tools/heavy-lock 等），
@@ -74,9 +74,13 @@ def self_test():
         if violations(s):
             print(f"self-test: 误报 {s!r}")
             ok = False
-    # 扫描范围也必须自测：漏扫无扩展名 bash 脚本是 #1611 没被 CI 抓到的根因。
-    if "tools/e3/lock" not in scanned_files():
+    # 扫描范围也必须自测：漏扫无扩展名 bash 脚本（#1611）与拆出的 tools/just/*.just 都会让门禁漏检。
+    scanned = scanned_files()
+    if "tools/e3/lock" not in scanned:
         print("self-test: scanned_files 没覆盖 tools/e3/lock（无扩展名 bash 脚本）")
+        ok = False
+    if not any(f.startswith("tools/just/") and f.endswith(".just") for f in scanned):
+        print("self-test: scanned_files 没覆盖 tools/just/*.just")
         ok = False
     print("ok: self-test" if ok else "self-test FAILED")
     return ok

@@ -17,7 +17,7 @@ on:
   # #1187：路径判定从触发层挪到 job 层（.github/actions/changes），本 lane 进必过项。
   # 被 workflow 级 paths 过滤掉的 workflow 不汇报状态，设成必过就永久 Pending；job 级跳过
   # 汇报 skipped，对必过项算通过。没改到安卓相关路径的 PR 只跑十几秒的 changes 与 gate。
-  # #1468：合入 main 后批量跑全量（含 Windows）。PR 上只跑快检，Windows 留到这里。
+  # #1468 / #2089：PR 与合入 main 均按四端对称门禁触发；合入 main 后全量跑一次，PR 上按影响范围判定。
   # 同组同一时间只跑一次：正在跑的不取消（cancel-in-progress 对 push 为 false），
   # 排队只留最新（GitHub concurrency 原生行为：新来的替掉还在排队的）。
   push:
@@ -52,18 +52,7 @@ jobs:
       - id: c
         uses: ./.github/actions/changes
         with:
-          # 原 workflow 级 paths 原样搬来（PR 与 push 两份合并取并集）。
-          paths: |
-            .github/workflows/**
-            .github/actions/changes/**
-            apps/android/**
-            assets/i18n/**
-            # #1124：Kotlin 直接编译 libtransport.so 的 uniffi 绑定（控制面与 iOS 共用），Rust 侧改了导出要在这里编一遍。
-            crates/transport/**
-            crates/proto/**
-            crates/pair-pake/**
-            tools/build-android-iroh-blobs-bridge.sh
-            tools/ci-paths.sh
+          lane: android
 
   android:
     name: android (proto drift + assemble)

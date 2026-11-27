@@ -5,24 +5,12 @@ job 名必须写死**。理由和细节在这里。
 
 ## 什么时候跑什么
 
-- **三层（#1468，产品负责人 2026-11-06 定）**：
-  1. **PR 上快检**：只跑与改动相关的 job，是合入门禁。`test (windows)`、`clippy (windows)`、
-     `desktop (windows-latest)` 在 `pull_request` 事件下被 job 层 `if:` 跳过（汇报 `skipped`，
-     对必需检查算通过，名字不变）。
-  2. **合入 main 后全量**：五条 lane（rust / desktop / android / ios / docs）都有 `push: branches: [main]`，
-     push 事件下 `changes` 一律判全跑（含 Windows；android / ios / docs 也不按单次 push 的 diff 判，
-     因为排队会替掉中间的 push）。`concurrency` 的 group 带事件名，`cancel-in-progress` 只对 push 为 false：
-     同一时间只跑一次、正在跑的不取消、排队只留最新（GitHub concurrency 原生行为）。
-     main 红了不冻结、不挡其他合入，只修或回滚元凶 PR。
-  3. **发版前验证**：Release 用 `workflow_call` 调这五条 lane（调用方事件是 `workflow_dispatch`），
-     五条都按全量跑，只从全绿提交切 tag。P-Pass 不发 Linux 安装包：#1555 起 Linux 桌面检查
-     （`desktop-linux` / `desktop (ubuntu-latest)`）**永久移除**，桌面 lane 只剩 `desktop-windows`
-     （检查名 `desktop (windows-latest)`）；它在 PR 上按第 1 层跳过，push 到 main 与发版调用照跑。
-  - 第 1、2 层的不变量（三个 Windows job 在 PR 上跳过、五条 lane 有 `push: branches: [main]`、push 上
-    `cancel-in-progress` 为 false）由 `tools/test-ci-lane-invariants.sh`（`just ci-lane-invariants-test`，在 `flow-tests` 里）判红；
-    #1555 的移除事实（`ci-desktop.yml` 没有 `desktop-linux` job、gate 不再要它、共享 action 里
-    cargo-deny / advisory / vite build 四步不带任何 `if:`、`System deps` 不再回来，以及两条必需检查名与
-    `if: always()` 不变）也由同一脚本判红，带「加回去必须变红」的反证。
+- **三层（#1468 / #2089，四端 PR 对称门禁）**：
+  1. **PR 上快检**：五条 lane（rust / desktop / android / ios / docs）在 PR 上全部按影响图（`tools/ci/impact.py`）运行，四端（Linux / macOS / Windows / Android / iOS）对称拦截，`test (windows)`、`clippy (windows)`、`desktop (windows-latest)` 均在 PR 上直接运行，是合入门禁。`ci-ios.yml` 拆为 `ios-static`（ubuntu-latest）、`ios`（App XCTest，按 `--print-fingerprint` 缓存生成的 TransportFFI XCFramework）、`ios-packages`（SwiftPM）、`ios-ffi`（TransportFFI + daemon，PR 上按 `run_ffi` 判定）四路并行并汇入 `CI iOS gate`。
+  2. **合入 main 后全量**：五条 lane 都有 `push: branches: [main]`，push 事件下 `changes` 一律判全跑（不按单次 push diff 判，因为排队会替掉中间的 push）。`concurrency` 的 group 带事件名，`cancel-in-progress` 只对 push 为 false：同一时间只跑一次、正在跑的不取消、排队只留最新。main 红了不冻结、不挡其他合入，只修或回滚元凶 PR。
+  3. **发版前验证**：Release 用 `workflow_call` 调这五条 lane（调用方事件是 `workflow_dispatch`），五条都按全量跑，只从全绿提交切 tag。P-Pass 不发 Linux 安装包：#1555 起 Linux 桌面检查（`desktop-linux` / `desktop (ubuntu-latest)`）**永久移除**，桌面 lane 只剩 `desktop-windows`（检查名 `desktop (windows-latest)`）。
+  - 第 1、2 层的不变量（三个 Windows job 在 PR 上不得跳过且保留 `!cancelled() &&`、五条 lane 有 `push: branches: [main]`、push 上 `cancel-in-progress` 为 false、`ci-docs` `AGENTS.md`/`CLAUDE.md` 与 `ci-ios` 并行门禁结构）由 `tools/test-ci-lane-invariants.sh`（`just ci-lane-invariants-test`，在 `flow-tests` 里）判红；
+    #1555 的移除事实也由同一脚本判红，带「加回去必须变红」的反证。
 - **推分支不触发 CI**：`push` 限定 `branches: [main]`，只有合入才算。本地快验（按改动路径精准挑选，清单在
   `tools/flow/flow.py` 的 `pick_gates`）：纯文档 `just md-check`，`AGENTS.md` 跑 `just ci-docs`，
   各端/crate 只跑对应单测与秒级 `arch-check` + `fitness-check`，绝不因未知配置文件罚跑全仓 `just ci`。
@@ -30,11 +18,7 @@ job 名必须写死**。理由和细节在这里。
   - `ci-rust` / `ci-desktop`：workflow 层**不设** `pull_request.paths`（CI-07 #189）。
     它们的检查在 `main` 的必需列表里，而被 paths 跳过的 workflow **根本不汇报状态**，
     必需检查会永久停在 Pending 并挡住合并——带 paths + 设必需 = 自锁。
-  - 跳过被下放到 job 层（CI-11 #255）：`changes` job 用 `tools/ci-needs-full-lane.sh`
-    判断，改动不落在依赖面上（文档、流程脚本、更新说明等）时下游 job 被 `if:` 跳过。被 `if:` 跳过的 job 汇报 `skipped`，
-    `skipped` 对必需检查算通过（PR #260 实测）。
-  - `ci-android` / `site` / `ci-docs` 仍按 paths 只在改到自己域时跑，不进必需列表，
-    被跳过无害。
+  - 跳过被下放到 job 层（CI-11 #255 / #2089）：`ci-rust` / `ci-desktop` 的 `changes` job 调 `tools/ci-needs-full-lane.sh`，`ci-android` / `ci-ios` / `ci-docs` 的 `changes` job 调 `.github/actions/changes`（`lane:`），全部统一委托 `tools/ci/impact.py`；仅 `site` 仍按 workflow 级 `paths` 触发。被 `if:` 跳过的 job 汇报 `skipped`，`skipped` 对必需检查算通过。
 
 ## Release 的 test-channel 收敛（#1546）
 
@@ -76,35 +60,13 @@ stub `gh` 真跑两个脚本，再从 `release.yml` 抽收敛步骤的 run 块�
 （它在可复用 workflow 里不成立，但同样表示想跳过发版）；只跑发版（`inputs.release_call` 不带 `!`、
 `github.event_name == 'workflow_call'`）不算停用。测试用 `GATE_STATUS_WORKFLOW_DIR` 注入假 workflow 目录。
 
-## `tools/ci-needs-full-lane.sh` 的判据
+## 统一依赖图影响范围引擎（`tools/ci/impact.py`）与 `tools/ci-needs-full-lane.sh`
 
-- 判据是 **allowlist**：改动**全部**落在无害清单里才跳过，其余一律跑；**例外**是 `tools/` 下
-  没登记的文件——它们不看清单，按下面的引用闭包判。往清单里加
-  东西前先确认没有测试或构建脚本读它（`assets/i18n/**` 被 diag 测试消费，**不许加**）。
-- 两个 lane（CI-17 #373），因为 6 个 job 的依赖面不同：
-  - **默认** lane（无害 = `docs/`、`.claude/`、`*.md`，以及 #1467 按依赖面补进的
-    `tools/flow/`、`tools/e3/`、`tools/hooks/`、它们的自测、`tools/ci-paths.sh`、
-    `release/notes/`、`.github/ISSUE_TEMPLATE/`；完整清单与核实依据见脚本 `is_inert`）：给 `architecture enforcement`
-    与 `ci-desktop` 用（`arch-check.sh` 扫 `apps/**`，桌面壳门禁编的就是 `apps/desktop`）。
-  - **`rust-workspace`** lane 把 `apps/**` 也算惰性：给 `clippy` / `test` /
-    `test (windows)` / `license+deny` / `fmt` 用（`src-tauri` 是独立 workspace，
-    主 workspace 编不到它；`apps/` 的 Rust 由 `ci-desktop` 自己检查）。例外：主 workspace
-    读到的 `apps/` 文件（桌面 i18n 字典、两个手机端低空间常量文件）单独登记成要跑。
-- 不带 lane 参数 = 默认 lane，这是向后兼容契约；未知 lane 一律判要跑。
-- `tools/` 下**没登记**在清单里的文件按**引用闭包**判（`tools_closure_inert`，两条 lane 共用）：
-  用文件主名（basename 去掉扩展名）`git grep -lF` 找全仓引用方，逐个看——引用方自己在无害清单里
-  就不追；在 `tools/` 下就继续往上追它的引用方；判据脚本自身与自测（`tools/ci-needs-full-lane.sh`、
-  `tools/test-ci-needs-full-lane.sh`）不在清单里，但也会被显式跳过、不算引用方；是
-  `ci-rust.yml` / `ci-desktop.yml` 则要跑，`justfile` 与其它 `.github/workflows/` 都不触发；其余不认识的文件
-  一律要跑。文件在 HEAD 不存在（改名或删除）、
-  闭包超过 300 个文件、`git grep` 出错、门禁 workflow / action 用通配符或变量拼 `tools/` 路径导致追不全，
-  都判「要跑」。清单是这条判定的前置，结果只会更严不会更松；注释与阈值以脚本里
-  `tools_closure_inert` 为准。
-- 自测：`tools/test-ci-needs-full-lane.sh`（两个 lane 都做变异反证）。它从源码派生反向用例：
-  `crates/` 里 `include_str!` / `include_bytes!` 指向 `crates/` 之外的文件，以及
-  `ci-rust.yml`、`ci-desktop.yml` 与其 composite action 引用的 `tools/` 文件，两个 lane 都必须判要跑；
-  新增这类读取不用手工登记也会被自测抓到。
-- `ci-android` / `ci-ios` / `ci-docs` 是按正向路径触发的，#1467 已核对，没有收紧。
+- **云端与本地同源（#2089）**：`.github/actions/changes/action.yml`（`android` / `ios` / `ios-ffi` / `docs` / `docs-flow`）、`tools/ci-needs-full-lane.sh`（`default` / `rust-workspace`，保留原 CLI 契约）、`tools/flow/flow.py` 的 `pick_gates`、`tools/e3/verify` 的 Android lane 判定统一委托 `tools/ci/impact.py`。
+- **现场图推导**：直接解析 `Cargo.toml` / `apps/desktop/src-tauri/Cargo.toml` / `Cargo.lock`（含 `[patch.crates-io]` `third_party/noq-udp`）、跨目录 `include_str!` / `readFileSync` / `read_to_string` 契约消费者、`tools/build-ios-transport-xcframework.sh` 与 `apps/android/app/build.gradle.kts` `include(...)`、以及各 lane 活跃 workflow / action 的 `tools/` 引用闭包。
+- **fail-closed 口径**：未知路径、空改动列表、未知 lane、git diff / git grep 异常、HEAD 不存在的 `tools/` 文件、workflow/action 里的动态 `tools/*$` 引用一律保守返回 `true`；不调用 `just` 的 CI lane 不会被 `justfile` 或 `tools/just/*.just` 误触。
+- **两个 Rust/Desktop lane**：`default`（`arch-check.sh` 扫 `apps/**` 与 `ci-desktop`）与 `rust-workspace`（主 workspace 专属，把未消费的 `apps/**` 算惰性），包含关系 `run_heavy=true ⇒ run_arch=true` 由 `tools/test-ci-needs-full-lane.sh` 与 `tools/test-ci-impact.py` 双方检验。
+- **justfile 拆分**：根 `justfile` 按领域拆至 `tools/just/` 并通过 `import` 引入；本地与 `ci-docs` 共用同一份 `flow-tests` 清单（在 `tools/just/checks.just`）。
 
 ## job 名
 
@@ -129,9 +91,9 @@ stub `gh` 真跑两个脚本，再从 `release.yml` 抽收敛步骤的 run 块�
 
 ## 流程自测 flow-tests（#1493）
 
-流程门禁脚本（`tools/flow/`、本地提交拦截、重编译锁、main 红了开卡等）的自测，清单只有一份：justfile 的 `flow-tests` recipe。
+流程门禁脚本（`tools/flow/`、本地提交拦截、重编译锁、main 红了开卡等）的自测，清单只有一份：`tools/just/checks.just` 的 `flow-tests` recipe。
 本地 `just ci` / `just ci-docs` 依赖它，CI 上 `ci-docs.yml` 里名字写死的 job `flow-tests` 在 ubuntu 上装 just 跑 `just flow-tests`，
-在 `CI Docs gate` 的 needs 里；PR 上按自己的路径判（`tools/**`、`justfile`、`.github/**`、`AGENTS.md`），push 到 main 与发版调用时全跑。
+在 `CI Docs gate` 的 needs 里；PR 上按影响图 `docs-flow` 判定（`tools/**`、`justfile`、`tools/just/*.just`、`.github/**`、`AGENTS.md` 等），push 到 main 与发版调用时全跑。
 已在别的 job 里跑的（md-check、token-check、shell-vars-check、identity-check、supply-chain-check）不进这份清单，免得重复。
 
 新加流程/门禁测试时：能在 ubuntu 上跑的进 `flow-tests`（核心流程引擎自测统一在 `tools/test-flow.py`）；在 ubuntu 上会 SKIP 的（如 `heavy-lock-test` 依赖 macOS 的 `lockf`）留在 `ci-docs` 的直接依赖里。
@@ -171,13 +133,12 @@ owner 复核放行：PR 上评论 `/review-override <理由>` 触发 `issue_comm
 
 ## 删接口 / 升依赖时的全 lane 核对
 
-必需检查只是全部 lane 的子集；`test (windows)`、`clippy (windows)`、`desktop (windows-latest)` 在 PR 上还被跳过，
-只在合入 main 后跑（#1468）。iOS FFI、Windows、E2E 这些 lane 专门覆盖跨端、真进程路径，正是删协议最容易炸的地方。
+必需检查只是全部 lane 的子集（如 iOS / Android 等各自对应不同端），PR 上四端对称快检均按影响图触发。iOS FFI、Windows、E2E 这些 lane 专门覆盖跨端、真进程路径，正是删协议最容易炸的地方。
 
 - 删方法 / 协议：`git grep` 覆盖全仓所有语言（`*.swift` `*.kt` `*.sh` `*.py`、
   `tools/`、`apps/*/Tests`），本地验证按 `.github/workflows/` 的每条 lane 对一遍。
 - 改 trait / 门禁清单：除了 `just ci`，再跑 `for t in tools/test-*.sh; do bash "$t"; done`。
 - 升依赖：先 `git ls-files '*Cargo.lock'`，每一份锁（主 workspace + `src-tauri`）都要改到；
   本地 `cargo deny fetch` 拉最新公告库再验。
-- 批 PR 合并前等 PR 上**全部** lane 结束，不只看必需检查。Windows 三个 job 在 PR 上不跑，合入后看 main 上 push 全量的结果，
+- 批 PR 合并前等 PR 上**全部** lane 结束，不只看必需检查；Windows 三个 job 在 PR 上也按影响图运行（#2089），合入后再由 main 上 push 全量兜底，
   红了按上面「main 红了自动开卡」处理。

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# #1489：#1468「Windows 挪到合入 main 后、PR 上只跑快检」的不变量，此前只有 actionlint 管语法，改坏了 CI 照绿。
+# #1489 / #2089：四端 PR 对称门禁与 5 条 lane 的不变量（含 ci-ios 并行结构与 ci-docs lane）。
 #
 # 判据（读 .github/workflows 下五条 lane 的 YAML：ci-rust / ci-desktop / ci-android / ci-ios / ci-docs，
 # 以及 ci-desktop 引用的共享 action .github/actions/desktop-checks/action.yml）：
 #   1. 每条 lane 的 on.push.branches 恰为 [main]（合入 main 后批量跑全量的入口）；
 #   2. 每条 lane 的 concurrency.cancel-in-progress 以 `${{ github.event_name != 'push'` 开头、其后只许接 `&&` 合取项
 #      或直接收尾、整式不许出现 `||`（push 上恒为 false：正在跑的不取消、排队只留最新）；字面量 true、缺了这一项都红；
-#   3. 这五个文件里 runs-on 含 windows 的 job，if 必须以 `${{ !cancelled() && github.event_name != 'pull_request' &&`
-#      开头、整式不许出现 `||`（顶层合取项，PR 上 job 层跳过、汇报 skipped）；且 test (windows)、clippy (windows)、
+#   3. #2089 四端 PR 对称门禁：这五个文件里 runs-on 含 windows 的 job，if 必须以 `${{ !cancelled() &&`
+#      开头、整式不许出现 `||`、且不得再跳过 `pull_request`；test (windows)、clippy (windows)、
 #      desktop (windows-latest) 三个名字写死的 job 必须都在（防删 job 后断言落空还报绿）。
 #   4. #1555：Linux 桌面检查整个摘掉（产品不发 Linux 包）。ci-desktop.yml 不许再有 desktop-linux job、
 #      不许再汇报 `desktop (ubuntu-latest)` 这个检查名，gate.needs 也不许再要它；共享 action 里的
@@ -58,7 +58,7 @@ fi
 
 # check <仓库根>：有问题逐条打印到 stdout，退出码 1；全过退出 0、不打印。
 check() {
-  python3 - "$1" "$ROOT/tools/ci-paths.sh" <<'PY'
+  python3 - "$1" "$ROOT/tools/ci-paths.sh" "$ROOT/tools/ci/impact.py" "$ROOT" <<'PY'
 import os, re, subprocess, sys, yaml
 
 root = sys.argv[1]
@@ -68,7 +68,7 @@ codecs_action_path = os.path.join(root, ".github", "actions", "system-codecs", "
 LANES = ["ci-rust.yml", "ci-desktop.yml", "ci-android.yml", "ci-ios.yml", "ci-docs.yml"]
 WIN_NAMES = {"test (windows)", "clippy (windows)", "desktop (windows-latest)"}
 CANCEL_RE = re.compile(r"^\$\{\{\s*github\.event_name\s*!=\s*'push'\s*(&&[^|]*)?\}\}$", re.S)
-WIN_IF_RE = re.compile(r"^\$\{\{\s*!cancelled\(\)\s*&&\s*github\.event_name\s*!=\s*'pull_request'\s*&&", re.S)
+WIN_IF_RE = re.compile(r"^\$\{\{\s*!cancelled\(\)\s*&&", re.S)
 # #1556：release.yml workflow 级 concurrency.group 的形态：test → 固定 key，其余 → 另一 key。
 RELEASE_GROUP_RE = re.compile(
     r"^\$\{\{\s*contains\(inputs\.tag,\s*'-test\.'\)\s*&&\s*'([^']+)'\s*\|\|\s*"
@@ -120,19 +120,62 @@ for lane in LANES:
         name = job.get("name", key)
         seen_win.add(name)
         cond = job.get("if")
-        if not isinstance(cond, str) or not WIN_IF_RE.match(cond.strip()) or "||" in cond:
-            bad.append(f"{lane}: Windows job「{name}」的 if 没有以 github.event_name != 'pull_request' 为顶层合取项（PR 上会跑），实为 {cond!r}")
+        if (
+            not isinstance(cond, str)
+            or not WIN_IF_RE.match(cond.strip())
+            or "||" in cond
+            or "pull_request" in cond
+        ):
+            bad.append(f"{lane}: Windows job「{name}」必须满足四端 PR 对称门禁（!cancelled() && 开头、无 ||、不得跳过 pull_request），实为 {cond!r}")
 
     if lane == "ci-docs.yml":
         steps = jobs.get("changes", {}).get("steps", [])
-        paths = next((step.get("with", {}).get("paths", "") for step in steps if step.get("id") == "c"), "")
-        globs = [line.strip() for line in paths.splitlines() if line.strip() and not line.lstrip().startswith("#")]
-        for name in ("AGENTS.md", "CLAUDE.md"):
-            if not globs or subprocess.run(
-                ["bash", sys.argv[2], "hit", "-", *globs], input=name + "\n",
-                capture_output=True, text=True, check=True,
-            ).stdout.strip() != "true":
-                bad.append(f"ci-docs.yml: only changing {name} must run the docs check")
+        c_with = next((step.get("with", {}) for step in steps if step.get("id") == "c"), {})
+        c_lane = c_with.get("lane", "")
+        if c_lane:
+            if c_lane != "docs":
+                bad.append(f"ci-docs.yml: changes step c lane 应为 docs，实为 {c_lane!r}")
+            for name in ("AGENTS.md", "CLAUDE.md"):
+                if subprocess.run(
+                    ["python3", "-B", "-I", sys.argv[3], "ci", "--repo", sys.argv[4], "--base", "-", "--lane", c_lane],
+                    input=name + "\n",
+                    capture_output=True, text=True, check=True,
+                ).stdout.strip() != "true":
+                    bad.append(f"ci-docs.yml: only changing {name} must run the docs check")
+        else:
+            paths = c_with.get("paths", "")
+            globs = [line.strip() for line in paths.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+            for name in ("AGENTS.md", "CLAUDE.md"):
+                if not globs or subprocess.run(
+                    ["bash", sys.argv[2], "hit", "-", *globs], input=name + "\n",
+                    capture_output=True, text=True, check=True,
+                ).stdout.strip() != "true":
+                    bad.append(f"ci-docs.yml: only changing {name} must run the docs check")
+
+    if lane == "ci-ios.yml":
+        for req_key, req_name in (
+            ("ios-static", "ios-static (lint & contract checks)"),
+            ("ios", "ios (xcodegen + xcodebuild test)"),
+            ("ios-packages", "ios-packages (SwiftPM)"),
+            ("ios-ffi", "ios-ffi (TransportFFI + local daemon)"),
+        ):
+            jobj = jobs.get(req_key)
+            if not isinstance(jobj, dict) or jobj.get("name") != req_name:
+                bad.append(f"ci-ios.yml: 缺 {req_key} job 或 name 不是「{req_name}」")
+        ios_gate = jobs.get("gate")
+        if not isinstance(ios_gate, dict):
+            bad.append("ci-ios.yml: 缺 gate job（CI iOS gate）")
+        else:
+            if ios_gate.get("name") != "CI iOS gate":
+                bad.append(f"ci-ios.yml: gate 的 name 应为「CI iOS gate」，实为 {ios_gate.get('name')!r}")
+            if ios_gate.get("if") != "always()":
+                bad.append(f"ci-ios.yml: gate 的 if 必须是 always()，实为 {ios_gate.get('if')!r}")
+            gneeds = ios_gate.get("needs")
+            if not isinstance(gneeds, list) or not {"changes", "ios-static", "ios", "ios-packages", "ios-ffi"} <= set(gneeds):
+                bad.append(f"ci-ios.yml: gate.needs 必须含 changes/ios-static/ios/ios-packages/ios-ffi，实为 {gneeds!r}")
+        with open(path, encoding="utf-8") as rf:
+            if re.search(r"^\s*target/\s*$", rf.read(), re.M):
+                bad.append("ci-ios.yml: 不得缓存 1.77 GiB target/ 目录（仅缓存 ios-xcframework-* 与轻量 crates）")
 
     # #1555：Linux 桌面 job 必须没有；桌面检查只剩 Windows。
     if lane == "ci-desktop.yml":
@@ -402,18 +445,26 @@ mutant() {
 }
 
 echo "== 反证：每种变异都必须判红 =="
-mutant "test (windows) 去掉 pull_request 跳过条件" .github/workflows/ci-rust.yml \
-  "/name: test \\(windows\\)/,/runs-on/ s/ github\\.event_name != 'pull_request' &&//"
-mutant "clippy (windows) 去掉 pull_request 跳过条件" .github/workflows/ci-rust.yml \
-  "/name: clippy \\(windows\\)/,/runs-on/ s/ github\\.event_name != 'pull_request' &&//"
-mutant "desktop (windows-latest) 去掉 pull_request 跳过条件" .github/workflows/ci-desktop.yml \
-  "/name: desktop \\(windows-latest\\)/,/runs-on/ s/ github\\.event_name != 'pull_request' &&//"
+mutant "test (windows) 加回 pull_request 跳过条件" .github/workflows/ci-rust.yml \
+  "/name: test \\(windows\\)/,/runs-on/ s/!cancelled\\(\\) &&/!cancelled() \\&\\& github.event_name != 'pull_request' \\&\\&/"
+mutant "clippy (windows) 加回 pull_request 跳过条件" .github/workflows/ci-rust.yml \
+  "/name: clippy \\(windows\\)/,/runs-on/ s/!cancelled\\(\\) &&/!cancelled() \\&\\& github.event_name != 'pull_request' \\&\\&/"
+mutant "desktop (windows-latest) 加回 pull_request 跳过条件" .github/workflows/ci-desktop.yml \
+  "/name: desktop \\(windows-latest\\)/,/runs-on/ s/!cancelled\\(\\) &&/!cancelled() \\&\\& github.event_name != 'pull_request' \\&\\&/"
+mutant "test (windows) 去掉 !cancelled()" .github/workflows/ci-rust.yml \
+  "/name: test \\(windows\\)/,/runs-on/ s/!cancelled\\(\\) && //"
 mutant "desktop (windows-latest) 整个 job 删掉" .github/workflows/ci-desktop.yml \
   "/^  desktop-windows:/,/^  [a-z][a-z0-9-]*:\$/{/^  desktop-windows:/d;/^  [a-z][a-z0-9-]*:\$/!d;}"
 mutant "desktop (windows-latest) 改名字" .github/workflows/ci-desktop.yml \
   "s/^    name: desktop \\(windows-latest\)\$/    name: desktop (windows)/"
-mutant "ci-docs misses changes to CLAUDE.md" .github/workflows/ci-docs.yml \
-  '/^            CLAUDE\.md$/d'
+mutant "ci-docs changes step c 切到错误 lane (android)" .github/workflows/ci-docs.yml \
+  's/^          lane: docs$/          lane: android/'
+mutant "CI iOS gate 漏掉 ios-ffi" .github/workflows/ci-ios.yml \
+  's/\[changes, ios-static, ios, ios-packages, ios-ffi\]/[changes, ios-static, ios, ios-packages]/'
+mutant "CI iOS gate 改名字" .github/workflows/ci-ios.yml \
+  's/^    name: CI iOS gate$/    name: CI iOS Gate/'
+mutant "ci-ios.yml 加回 target/ 缓存" .github/workflows/ci-ios.yml \
+  's|~/.cargo/git/db/|~/.cargo/git/db/\n            target/|'
 mutant "ci-docs 的 cancel-in-progress 改 true" .github/workflows/ci-docs.yml \
   "s/^  cancel-in-progress: .*/  cancel-in-progress: true/"
 mutant "ci-ios 的 cancel-in-progress 去掉 push 那一项" .github/workflows/ci-ios.yml \

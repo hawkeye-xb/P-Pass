@@ -32,7 +32,7 @@ NOTES_RE='^(release/notes/|CHANGELOG\.md$)'
 # 只认真实测试位置：*.test.* / *.spec.* 文件，或测试目录下的文件（test、tests、__tests__、androidTest、
 # sharedTest、iOS 的 PPassTests 与各包的 Tests 目录；对照过 build.gradle.kts / Package.swift / project.yml / Cargo）。
 # 注意 iOS 的 TransportFFITests/Package.swift 是 App 依赖的包清单，不是测试，所以不能按「*Tests 目录」放过。不按文件名后缀 Test 判，否则 SpeedTest.svelte 这种正式组件会被漏掉。
-TEST_RE='(\.(test|spec)\.[^/]*$)|((^|/)(PPassTests|Tests|tests|test|__tests__|androidTest|sharedTest)/)'
+TEST_RE='(\.(test|spec)\.[^/]*$)|((^|/)(PPassTests|Tests|tests|test|__tests__|androidTest|sharedTest)/)|((^|/)test-[^/]*\.(sh|py)$)'
 
 # 界面与文案路径（唯一真源）：碰到就算用户可见行为。
 UI_GLOBS="assets/i18n/** assets/design/** apps/android/app/src/main/res/** apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/** apps/desktop/src/** apps/ios/PPass/** site/** release/notes/**"
@@ -225,7 +225,7 @@ case "$MODE" in
         ;;
       core-hidden)
         adrs="$(adopted_in_body)"
-        tests="$(grep -E "$TEST_RE|(^|/)test-[^/]*\.sh$" "$FILES_F" | head -n 3)"
+        tests="$(grep -E "$TEST_RE" "$FILES_F" | head -n 3)"
         if [ -n "$adrs" ] && [ -n "$tests" ]; then
           echo "acceptance gate：核心改动、用户看不见，正文引用已采纳方案（$(printf '%s' "$adrs" | tr '\n' ' ')）且带测试 ✅"
           exit 0

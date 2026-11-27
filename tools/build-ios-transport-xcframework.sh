@@ -42,6 +42,7 @@ inputs = [
     "crates/transport",
     "crates/proto",
     "crates/pair-pake",
+    "third_party/noq-udp",
 ]
 
 h = hashlib.sha256()

@@ -45,7 +45,7 @@ on:
   # 墙钟约 4min）。公开仓不计费，这个代价是 0。
   # ⚠️ 谁要给本 lane 加回 paths，请先把 main 的必需检查里对应的三条摘掉，
   # 否则会把所有不碰 crates/** 的 PR 全部卡死。
-  # #1468：合入 main 后批量跑全量（含 Windows）。PR 上只跑快检，Windows 留到这里。
+  # #1468 / #2089：四端 PR 对称门禁，PR 与合入 main 均按影响范围跑全套 job（含 Windows）；
   # 同组同一时间只跑一次：正在跑的不取消（cancel-in-progress 对 push 为 false），
   # 排队只留最新（GitHub concurrency 原生行为：新来的替掉还在排队的）。
   push:
@@ -112,7 +112,9 @@ jobs:
       # 这一步红 ⇒ changes job 红 ⇒ 下游按 `!= 'false'` 照常全跑（fail-closed）。
       - name: 判据自检（含变异反证）
         shell: bash
-        run: tools/test-ci-needs-full-lane.sh
+        run: |
+          python3 -B -I tools/test-ci-impact.py
+          tools/test-ci-needs-full-lane.sh
       - id: decide
         shell: bash
         run: |
@@ -404,8 +406,8 @@ jobs:
   #     （只是 cargo check 一个 crate），正名留给**独立的一次操作**：
   #     删冗余步骤 + 改名 + 同步改分支保护，三件必须在同一次里成对完成。
   #
-  # ⚠️ 本 job **不进必需检查**。#1468 起它在 pull_request 上被下面的 if 跳过（汇报 skipped），
-  # 只在合入 main 后的 push 全量与 Release 调用里跑，不再拖 PR 的等待时间；main 上红了由
+  # ⚠️ 本 job **不进必需检查**。自 #2089 起与其它端保持四端 PR 对称，PR 上也按 changes 影响范围执行，
+  # 与合入 main 后的 push 全量 / Release 调用同一套 Windows 测试；main 上红了由
   # main-red.yml 自动开卡（#1469），修或回滚元凶 PR。不变量由 tools/test-ci-lane-invariants.sh 判红。
   test-windows:
     name: test (windows)
@@ -416,9 +418,8 @@ jobs:
     # `!cancelled()` 是状态函数，它让本 job 在 changes 失败时**仍然执行**
     # （否则 needs 的隐式 success() 会把它跳掉，又回到 fail-open）。
     needs: changes
-    # #1468：PR 上不跑 Windows（跳过汇报 skipped，对必需检查算通过，名字不变），
-    # 合入 main 后的 push 全量与 Release 调用照跑。
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.changes.outputs.run_heavy != 'false' }}
+    # #2089 四端 PR 对称门禁：PR 与 main push / Release 均按 changes 影响范围执行。
+    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: windows-latest
     # 冷缓存那次要建 vcpkg 静态 libheif（约 20min）+ 全量冷构建，给足余量；
     # 热缓存下应远低于此。cargo test 没有单测级超时，DAE-06 (#176) 那种 300s
@@ -431,7 +432,7 @@ jobs:
         shell: bash
         run: tools/setup-rust-toolchain.sh
 
-      # ⭐ 本 job 跑一次要多久，全看这一步：#1468 起 PR 上跳过，只在合入 main 与 Release 调用时跑；
+      # ⭐ 本 job 跑一次要多久，全看这一步（PR 与 main push / Release 均按影响范围触发）；
       # vcpkg 安装树有缓存（冷编约 20min）。
       # 钉住的 vcpkg 提交、特性、缓存键都在 composite action 里（版本来源 tools/codec-deps.env），
       # release / artifacts 的 Windows job 用的是同一个，键相同、共用同一份缓存。
@@ -552,8 +553,8 @@ jobs:
   # 为什么单独成一个 job，而不是往 `test (windows)` 里加一步：那条 job
   # 刻意**不进**必需检查（9–13 分钟，全仓最慢）。lint 挂在它身上，红了也
   # 挡不住合并，等于没加。单独成 job 才能按自己的耗时决定要不要设为必需。
-  # #1468 起两条 Windows job 在 PR 上都被跳过、都不挡合并，只在合入 main 后的 push 全量
-  # 与 Release 调用里跑，红了由 main-red.yml 开卡兜底；仍各自成 job，红了一眼分清是 lint 还是测试。
+  # 自 #2089 起两条 Windows job 在 PR 上同样按影响范围触发，合入 main 后的 push 全量与 Release 照跑，
+  # 红了由 main-red.yml 开卡兜底；仍各自成 job，红了一眼分清是 lint 还是测试。
   #
   # ⚠️ 与上面那条 `clippy` 的差别都是有理由的，不是抄漏了：
   #   - **不带 `--all-features`**：mobile-ffi 在 Windows 上编不过，理由见
@@ -569,9 +570,8 @@ jobs:
     name: clippy (windows)
     # CI-11 (#255)：**只有明确收到 'false' 才跳过**（fail-closed，理由同上）。
     needs: changes
-    # #1468：PR 上不跑 Windows（跳过汇报 skipped，对必需检查算通过，名字不变），
-    # 合入 main 后的 push 全量与 Release 调用照跑。
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.changes.outputs.run_heavy != 'false' }}
+    # #2089 四端 PR 对称门禁：PR 与 main push / Release 均按 changes 影响范围执行。
+    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: windows-latest
     # 冷缓存要建 vcpkg 静态 libheif（约 20min），给足余量；热缓存下远低于此。
     timeout-minutes: 45
