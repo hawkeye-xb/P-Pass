@@ -262,6 +262,19 @@ class ImpactEngineTests(unittest.TestCase):
             self.assertTrue(impact.decide_ci_from_base("", "android", tmp)[0])
             self.assertTrue(impact.decide_ci_from_base("0" * 40, "ios", tmp)[0])
 
+            # 惰性目录下的 tools/ 脚本若被静态 workflow 调用，闭包必须继续追踪 tools/ 下游引用方
+            _write(tmp / "tools/flow/check-native.sh", "#!/usr/bin/env bash\nbash tools/check-native-input.sh\n")
+            _write(tmp / "tools/check-native-input.sh", "#!/usr/bin/env bash\necho ok\n")
+            _write(
+                tmp / ".github/workflows/ci-android.yml",
+                _read(tmp / ".github/workflows/ci-android.yml") + "      - run: tools/flow/check-native.sh\n",
+            )
+            subprocess.run(["git", "-C", str(tmp), "add", "-A"], check=True, env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"})
+            subprocess.run(["git", "-C", str(tmp), "commit", "-q", "-m", "add-transitive-tools-flow"], check=True, env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"})
+            self.assertTrue(d("android", ["tools/check-native-input.sh"]))
+            self.assertFalse(d("ios", ["tools/check-native-input.sh"]))
+            self.assertFalse(d("default", ["tools/check-native-input.sh"]))
+
             # 注释中的 tools/ios/** 不误报动态通配；真实动态通配触发 fail-closed（含 tools/flow/ 等通常惰性脚本）
             self.assertFalse(d("ios-ffi", ["tools/clean-local-builds.sh"]))
             self.assertFalse(d("ios", ["tools/flow/pr-watch.sh"]))

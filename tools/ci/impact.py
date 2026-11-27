@@ -943,8 +943,9 @@ def _tools_closure_inert(
             search_token = "/".join(cur.rsplit("/", 2)[-2:])
 
         # 直接在当前 lane 活跃 workflow/action 非注释正文里命中 -> 必须跑
+        slice_token = base if cur.endswith(".py") else search_token
         for wrel, wtxt in slices.items():
-            if base in wtxt or cur in wtxt or (cur.endswith(".py") and re.search(rf"\b{re.escape(stem)}\b", wtxt)):
+            if slice_token in wtxt or cur in wtxt:
                 if cur == rel_path:
                     return False, f"「{rel_path}」被「{wrel}」引用（lane={lane}）→ 要跑"
                 return False, f"「{rel_path}」经「{cur}」被「{wrel}」引用（lane={lane}）→ 要跑"
@@ -968,15 +969,26 @@ def _tools_closure_inert(
                 if lane in ("docs", "docs-flow"):
                     return False, f"「{rel_path}」被「{r}」引用（lane={lane}）→ 要跑"
                 continue
-            if _static_inert_lane(r, lane, graph):
-                continue
             if r.endswith((".kt", ".java", ".swift", ".rs", ".js", ".ts", ".svelte")):
                 eff_r = _strip_c_comments(_read_text(repo_root / r))
-                if search_token not in eff_r:
+            else:
+                eff_r = _noncomment_lines(_read_text(repo_root / r))
+            if cur.endswith(".py"):
+                has_py_import = r.endswith(".py") and bool(
+                    re.search(
+                        rf"(?m)^\s*(?:from\s+(?:[A-Za-z0-9_]+\.)*{re.escape(stem)}\b|import\s+[^\n#]*\b{re.escape(stem)}\b)",
+                        eff_r,
+                    )
+                )
+                if base not in eff_r and cur not in eff_r and not has_py_import:
                     continue
+            elif search_token not in eff_r:
+                continue
             if r.startswith("tools/"):
                 seen.add(r)
                 queue.append(r)
+                continue
+            if _static_inert_lane(r, lane, graph):
                 continue
             if cur == rel_path:
                 return False, f"「{rel_path}」被「{r}」引用（门禁会用到或不认识）→ 要跑"

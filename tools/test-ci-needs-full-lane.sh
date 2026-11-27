@@ -363,7 +363,7 @@ p.write_text(s2, encoding="utf-8")
 else
   MUT4="$MUT4_DIR/tools/ci-needs-full-lane.sh"
   before=$FAIL
-  expect "$MUT4" false "【变异后应失败】只改 tools/flow"               tools/flow/flow.py
+  expect "$MUT4" false "【变异后应失败】只改 tools/flow"               tools/flow/a.sh
   expect "$MUT4" false "【变异后应失败】只改 release/notes"            release/notes/android/0.11.0.zh.txt
   expect "$MUT4" false "【变异后应失败】只改 .github/ISSUE_TEMPLATE/" .github/ISSUE_TEMPLATE/task.yml
   gained=$((FAIL - before))
