@@ -123,4 +123,35 @@ class CellRowLayoutTest {
         assertTrue("en-US 1.5× 必须判换行", newDecision)
         assertNotEquals("旧规则永远并排，与新判定相反——旧行为在这组必红", newDecision, oldRuleAlwaysSideBySide)
     }
+
+    /**
+     * #2110：Material3 ListItem 实际有左右各 16dp（90px）与 TrailingContentStartPadding 16dp（45px），
+     * 三星 384dp 屏（卡片 344dp = 968px，2.8125 px/dp）上真正留给 headline+trailing 内容的宽度是 833px。
+     * 精简后的「邮件反馈」+ ppass@hawkeye-xb.com 在 1.08× 稳稳单行，1.5× 或窄屏放不下时切换为堆叠。
+     */
+    @Test
+    fun about_email_row_stays_single_line_at_standard_scale_and_stacks_when_tight() {
+        val listItemAvailablePx = 968 - 2 * 45 - 45 // 833px：扣除 ListItem 左右 32dp 与尾部前置 16dp
+        val emailAt108Px = 468
+        val chevronAndGapAt108Px = 31 + 11
+        val conciseLabelAt108Px = 188 // 「邮件反馈」（4 个汉字 @ 15sp × 1.08）
+        val legacyLongLabelAt108Px = 376 // 旧文案「问题反馈（邮件）」（8 个汉字 @ 15sp × 1.08）
+
+        assertFalse(
+            "1.08× 标准字号下「邮件反馈」+ 邮箱必须单行并排",
+            cellRowStacks(conciseLabelAt108Px, emailAt108Px, listItemAvailablePx, chevronAndGapAt108Px),
+        )
+        assertTrue(
+            "1.08× 下旧长标题「问题反馈（邮件）」+ 邮箱扣除真实 16dp 尾部间距后超出可用宽，必须判堆叠而非折断标题",
+            cellRowStacks(legacyLongLabelAt108Px, emailAt108Px, listItemAvailablePx, chevronAndGapAt108Px),
+        )
+
+        val emailAt15Px = (emailAt108Px * 1.5 / 1.08).toInt()
+        val conciseLabelAt15Px = (conciseLabelAt108Px * 1.5 / 1.08).toInt()
+        val chevronAndGapAt15Px = 40 + 11
+        assertTrue(
+            "1.5× 大字号下「邮件反馈」+ 邮箱超出可用宽，必须切为堆叠",
+            cellRowStacks(conciseLabelAt15Px, emailAt15Px, listItemAvailablePx, chevronAndGapAt15Px),
+        )
+    }
 }

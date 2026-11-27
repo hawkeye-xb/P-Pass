@@ -4,14 +4,40 @@ import android.content.Intent
 import android.net.Uri
 import com.hawkeyexb.ppass.R
 import io.mockk.mockk
+import java.io.File
 import java.util.Locale
+import javax.xml.parsers.DocumentBuilderFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.w3c.dom.Element
 
 class AboutScreenTest {
+    private fun stringResourceValue(localeDir: String, name: String): String {
+        var dir = File(System.getProperty("user.dir"))
+        while (!File(dir, "apps/android").isDirectory) {
+            dir = dir.parentFile ?: error("apps/android not found above ${System.getProperty("user.dir")}")
+        }
+        val xml = File(dir, "apps/android/app/src/main/res/$localeDir/strings.xml")
+        val nodes = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+            .parse(xml)
+            .getElementsByTagName("string")
+        for (i in 0 until nodes.length) {
+            val element = nodes.item(i) as Element
+            if (element.getAttribute("name") == name) return element.textContent.trim()
+        }
+        error("string/$name missing from $localeDir/strings.xml")
+    }
+
+    @Test
+    fun about_feedback_labels_are_concise_in_zh_and_en() {
+        assertEquals("邮件反馈", stringResourceValue("values-zh", "about_feedback_email"))
+        assertEquals("社区反馈", stringResourceValue("values-zh", "about_feedback_discussions"))
+        assertEquals("Email feedback", stringResourceValue("values", "about_feedback_email"))
+        assertEquals("Community", stringResourceValue("values", "about_feedback_discussions"))
+    }
     @Test
     fun chinese_locale_detection_matches_zh_only() {
         assertTrue(isChineseLocale(Locale.SIMPLIFIED_CHINESE))

@@ -136,6 +136,7 @@ struct AboutScreen: View {
                                         .font(PPFont.sans(PPUI.TextSize.rowValue, relativeTo: .subheadline))
                                         .foregroundStyle(PPColor.ink40)
                                         .multilineTextAlignment(.trailing)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
                                 Image(systemName: "arrow.up.right")
                                     .font(PPFont.iconBadge)
@@ -146,8 +147,8 @@ struct AboutScreen: View {
                             Text(L.s(item.labelKey, bundle: bundle))
                                 .font(PPFont.sans(PPUI.TextSize.rowLabel))
                                 .foregroundStyle(PPColor.ink)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        .frame(minHeight: PPUI.Layout.rowMinHeight)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)

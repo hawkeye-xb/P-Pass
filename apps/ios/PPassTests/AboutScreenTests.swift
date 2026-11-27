@@ -13,15 +13,19 @@ final class AboutScreenTests: XCTestCase {
         return nil
     }
 
-    private func allLabelsText(in root: UIView) -> [String] {
-        var out: [String] = []
+    private func allLabels(in root: UIView) -> [UILabel] {
+        var out: [UILabel] = []
         if let label = root as? UILabel, let text = label.text, !text.isEmpty {
-            out.append(text)
+            out.append(label)
         }
         for sub in root.subviews {
-            out.append(contentsOf: allLabelsText(in: sub))
+            out.append(contentsOf: allLabels(in: sub))
         }
         return out
+    }
+
+    private func allLabelsText(in root: UIView) -> [String] {
+        allLabels(in: root).compactMap(\.text)
     }
 
     private func hostAboutScreen(
@@ -72,6 +76,10 @@ final class AboutScreenTests: XCTestCase {
         XCTAssertEqual(L.s("about_tagline", bundle: zh), "跨生态家庭的照片中心，不用自己搭服务器。")
         XCTAssertEqual(L.s("about_source_license", bundle: en), "AGPL-3.0")
         XCTAssertEqual(L.s("about_source_license", bundle: zh), "AGPL-3.0")
+        XCTAssertEqual(L.s("about_feedback_email", bundle: en), "Email feedback")
+        XCTAssertEqual(L.s("about_feedback_email", bundle: zh), "邮件反馈")
+        XCTAssertEqual(L.s("about_feedback_discussions", bundle: en), "Community")
+        XCTAssertEqual(L.s("about_feedback_discussions", bundle: zh), "社区反馈")
 
         for key in [
             "about_website",
@@ -172,6 +180,82 @@ final class AboutScreenTests: XCTestCase {
                 baseCv.contentSize.height,
                 "\(label): 1.5× 大字号下内容总高度(\(cv.contentSize.height))应大于标准字号(\(baseCv.contentSize.height))"
             )
+        }
+    }
+
+    func testAboutFeedbackEmailRowStaysSingleLineAtStandardSizeAndReadableAt1_5x() throws {
+        let enBundle = try XCTUnwrap(Bundle.main.path(forResource: "en", ofType: "lproj").flatMap(Bundle.init(path:)))
+        let zhBundle = try XCTUnwrap(Bundle.main.path(forResource: "zh-Hans", ofType: "lproj").flatMap(Bundle.init(path:)))
+
+        for (lang, bundle, langs, expectedEmailLabel, expectedCommunityLabel) in [
+            ("zh-Hans", zhBundle, ["zh-Hans-CN"], "邮件反馈", "社区反馈"),
+            ("en", enBundle, ["en-US"], "Email feedback", "Community"),
+        ] {
+            let items = AboutLinks.items(preferredLanguages: langs, bundle: bundle)
+            XCTAssertEqual(items[2].id, "feedback_email")
+            XCTAssertEqual(L.s(items[2].labelKey, bundle: bundle), expectedEmailLabel)
+            XCTAssertEqual(items[2].value, "ppass@hawkeye-xb.com")
+            XCTAssertEqual(items[3].id, "feedback_discussions")
+            XCTAssertEqual(L.s(items[3].labelKey, bundle: bundle), expectedCommunityLabel)
+            XCTAssertEqual(items[3].value, "GitHub")
+
+            let (baseWin, _, baseCv) = try hostAboutScreen(
+                bundle: bundle,
+                preferredLanguages: langs,
+                sizeCategory: .large
+            )
+            defer { baseWin.isHidden = true }
+
+            let websiteCell = try XCTUnwrap(
+                baseCv.cellForItem(at: IndexPath(item: 0, section: 1)),
+                "\(lang): 官网行未实例化"
+            )
+            let emailCell = try XCTUnwrap(
+                baseCv.cellForItem(at: IndexPath(item: 2, section: 1)),
+                "\(lang): 邮件反馈行未实例化"
+            )
+            let communityCell = try XCTUnwrap(
+                baseCv.cellForItem(at: IndexPath(item: 3, section: 1)),
+                "\(lang): 社区反馈行未实例化"
+            )
+
+            // 标准字号下邮件反馈行、社区反馈行必须与纯单行「官网」条目保持同一行高（无异常折行、也不被额外 minHeight 撑高）。
+            XCTAssertGreaterThanOrEqual(websiteCell.frame.height, PPUI.Layout.rowMinHeight)
+            XCTAssertGreaterThanOrEqual(emailCell.frame.height, PPUI.Layout.rowMinHeight)
+            XCTAssertLessThanOrEqual(
+                abs(emailCell.frame.height - websiteCell.frame.height),
+                2,
+                "\(lang): 标准字号下邮件行(\(emailCell.frame.height)pt)应与单行官网条目(\(websiteCell.frame.height)pt)同高，不得换行"
+            )
+            XCTAssertLessThanOrEqual(
+                abs(communityCell.frame.height - websiteCell.frame.height),
+                2,
+                "\(lang): 标准字号下社区行(\(communityCell.frame.height)pt)应与单行官网条目(\(websiteCell.frame.height)pt)同高"
+            )
+            XCTAssertLessThan(
+                emailCell.frame.height,
+                64,
+                "\(lang): 标准字号单行邮件条目行高不应异常偏大，实际 \(emailCell.frame.height)pt"
+            )
+
+            // 1.5× 动态字号下，邮件行随动态字号自然增高且不越出 393pt 视口。
+            let (largeWin, _, largeCv) = try hostAboutScreen(
+                bundle: bundle,
+                preferredLanguages: langs,
+                sizeCategory: .accessibilityMedium
+            )
+            defer { largeWin.isHidden = true }
+
+            let largeEmailCell = try XCTUnwrap(
+                largeCv.cellForItem(at: IndexPath(item: 2, section: 1)),
+                "\(lang): 1.5× 邮件反馈行未实例化"
+            )
+            XCTAssertGreaterThan(
+                largeEmailCell.frame.height,
+                emailCell.frame.height,
+                "\(lang): 1.5× 动态字号下邮件行高(\(largeEmailCell.frame.height)pt)应大于标准字号(\(emailCell.frame.height)pt)"
+            )
+            XCTAssertLessThanOrEqual(largeEmailCell.frame.maxX, 393)
         }
     }
 }

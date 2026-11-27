@@ -316,8 +316,8 @@
     <string name="about_tagline">A cross-platform family photo hub, without the server setup.</string>
     <string name="about_website">Website</string>
     <string name="about_faq">FAQ</string>
-    <string name="about_feedback_email">Feedback (Email)</string>
-    <string name="about_feedback_discussions">Feedback (Discussions)</string>
+    <string name="about_feedback_email">Email feedback</string>
+    <string name="about_feedback_discussions">Community</string>
     <string name="about_source_code">Source code</string>
     <string name="about_source_license">AGPL-3.0</string>
     <string name="about_privacy">Privacy policy</string>

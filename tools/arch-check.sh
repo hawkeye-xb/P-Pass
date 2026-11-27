@@ -745,7 +745,7 @@ M4_ANDROID_STOCK=$(cat <<'STOCK'
 apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/BucketScreen.kt	6
 apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/DecisionScreen.kt	3
 apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeNotices.kt	5
-apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt	44
+apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt	39
 apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/IdentityGate.kt	3
 apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/Onboarding.kt	10
 apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/PairCode.kt	1
