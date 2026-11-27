@@ -393,8 +393,8 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     expect(document.body.textContent).toContain("验证码已提交");
   });
 
-  // #1257 反证：二维码弹窗里放回 desktop-fingerprint ⇒ 这条红。
-  it("二维码弹窗显示本机名称，不显示电脑标识（核对在确认那一步）", async () => {
+  // #2092 / #1257：二维码弹窗只保留码、说明与操作，电脑名称与标识核对仅在确认弹窗出现。
+  it("二维码弹窗不显示电脑名称与电脑标识（核对在确认那一步）", async () => {
     const d = desktop();
     d.fingerprint = "AB12 CD34";
     d.desktopName = "客厅的 Mac";
@@ -402,8 +402,9 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     await settle();
     await fireEvent.click(screen.getByRole("button", { name: "显示配对二维码" }));
     await settle();
-    expect(screen.getByTestId("desktop-name").textContent).toContain("客厅的 Mac");
+    expect(screen.queryByTestId("desktop-name")).toBeNull();
     expect(screen.queryByTestId("desktop-fingerprint")).toBeNull();
+    expect(document.body.textContent).not.toContain("客厅的 Mac");
     expect(document.body.textContent).not.toContain("AB12 CD34");
   });
 

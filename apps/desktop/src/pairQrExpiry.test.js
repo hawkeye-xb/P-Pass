@@ -183,13 +183,13 @@ describe("#1264 二维码不会过期了还挂在屏幕上", () => {
     expect(err.textContent).toContain("配对二维码没能显示");
     expect(err.textContent).toContain("错误代码：pair_failed");
     expect(screen.queryByText("正在生成配对码…")).toBeNull();
-    expect(screen.queryByTestId("desktop-name")).toBeNull(); // 没有码，电脑名称不单独挂着
+    expect(screen.queryByTestId("desktop-name")).toBeNull();
     d.failStart = false;
     await fireEvent.click(screen.getByTestId("pair-qr-retry"));
     await settle();
     expect(screen.queryByTestId("pair-qr-error")).toBeNull();
     expect(screen.getByTestId("pair-qr")).toBeTruthy();
-    expect(screen.getByTestId("desktop-name").textContent).toContain("家里的电脑");
+    expect(screen.queryByTestId("desktop-name")).toBeNull();
   });
 
   it("关掉弹窗后不再换码", async () => {

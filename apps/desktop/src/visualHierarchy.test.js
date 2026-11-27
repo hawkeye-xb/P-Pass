@@ -45,6 +45,9 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 }));
 vi.mock("./lib/updateFlow.js", () => ({ runUpdate: vi.fn(async () => {}) }));
 
+import { open as openDialog, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
+import { check as checkUpdate } from "@tauri-apps/plugin-updater";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import App from "./App.svelte";
 import Wizard from "./Wizard.svelte";
 import WizardWindows from "./WizardWindows.svelte";
@@ -168,7 +171,7 @@ describe("#2083 + #2084 桌面端视觉权重、降噪、可点性与向导焦�
     handlers.clear();
   });
 
-  it("#2083 NavItem 选中态使用轻纸底边界 + 左侧 3px 指示条，收起态隐藏竖条并描边高亮", () => {
+  it("#2092 NavItem 选中态保留浅底、描边与加粗，不再渲染左侧竖条", () => {
     render(NavItem, { icon: HouseIcon, label: "总览", active: true });
     render(NavItem, { icon: HouseIcon, label: "照片", active: false });
 
@@ -178,10 +181,9 @@ describe("#2083 + #2084 桌面端视觉权重、降噪、可点性与向导焦�
     expect(activeTokens.has("data-[active=true]:bg-paper")).toBe(true);
     expect(activeTokens.has("data-[active=true]:text-ink")).toBe(true);
     expect(activeTokens.has("data-[active=true]:font-semibold")).toBe(true);
-    expect(activeTokens.has("data-[active=true]:before:w-[3px]")).toBe(true);
-    expect(activeTokens.has("data-[active=true]:before:bg-ink")).toBe(true);
-    expect(activeTokens.has("max-[1079px]:before:hidden")).toBe(true);
+    expect(activeTokens.has("data-[active=true]:shadow-[inset_0_0_0_1px_var(--color-border)]")).toBe(true);
     expect(activeTokens.has("max-[1079px]:data-[active=true]:shadow-[inset_0_0_0_1px_var(--color-border-strong)]")).toBe(true);
+    expect(Array.from(activeTokens).some((c) => c.includes("before:"))).toBe(false);
     expect(activeTokens.has("focus-visible:ring-3")).toBe(true);
 
     const idleBtn = screen.getByRole("button", { name: "照片" });
@@ -189,15 +191,25 @@ describe("#2083 + #2084 桌面端视觉权重、降噪、可点性与向导焦�
     expect(tokensOf(idleBtn).has("data-[active=false]:hover:bg-hairline/60")).toBe(true);
   });
 
-  it("#2083 总览页列宽按主次划分，已有设备时配对按钮降为次按钮，停止服务卡与弹窗关闭按钮退红降重", async () => {
+  it("#2092 总览两档主次双栏布局与已有设备时配对按钮降权", async () => {
     setupDaemon({ devices: [] });
     await openApp("#/overview");
 
-    const addHeading = screen.getByRole("heading", { name: "添加设备" });
-    const overviewGrid = addHeading.closest(".grid");
+    const overviewGrid = screen.getByTestId("overview-grid");
     const gridTokens = tokensOf(overviewGrid);
-    expect(gridTokens.has("min-[1080px]:grid-cols-[1.4fr_1fr]")).toBe(true);
-    expect(gridTokens.has("min-[1440px]:grid-cols-[1.35fr_1fr_1.1fr]")).toBe(true);
+    expect(gridTokens.has("grid-cols-1")).toBe(true);
+    expect(gridTokens.has("items-start")).toBe(true);
+    expect(gridTokens.has("min-[900px]:grid-cols-[minmax(0,1.55fr)_minmax(280px,1fr)]")).toBe(true);
+    expect(Array.from(gridTokens).some((c) => c.startsWith("min-[1440px]:"))).toBe(false);
+
+    // 左主列竖排「备份状态 → 最近动静」，右辅列自然高度放「添加设备」
+    const primaryCol = screen.getByTestId("overview-primary-col");
+    expect(tokensOf(primaryCol).has("flex-col")).toBe(true);
+    const leftHeadings = Array.from(primaryCol.querySelectorAll("h3")).map((el) => el.textContent);
+    expect(leftHeadings).toEqual(["备份状态", "最近活动"]);
+    const gridDirectChildren = Array.from(overviewGrid.children);
+    expect(gridDirectChildren[0]).toBe(primaryCol);
+    expect(gridDirectChildren[1].querySelector("h3")?.textContent).toBe("添加设备");
 
     // 0 台设备时「显示配对二维码」保持主按钮强调（bg-primary）
     const qrPrimaryBtn = screen.getByRole("button", { name: "显示配对二维码" });
@@ -211,28 +223,92 @@ describe("#2083 + #2084 桌面端视觉权重、降噪、可点性与向导焦�
     const qrSecondaryTokens = tokensOf(qrSecondaryBtn);
     expect(qrSecondaryTokens.has("bg-primary")).toBe(false);
     expect(qrSecondaryTokens.has("border-border-strong")).toBe(true);
+  });
 
-    // 扫码弹窗里的「关闭」按钮降为 secondary，文案链接不带安全绿 text-safe
-    await fireEvent.click(qrSecondaryBtn);
+  it("#2092 二维码弹窗删去 desktop-name 行并统一垂直间距与元素顺序", async () => {
+    setupDaemon({ devices: [makeDevice("a", "客厅的手机")] });
+    await openApp("#/overview");
+    await fireEvent.click(screen.getByRole("button", { name: "显示配对二维码" }));
     await vi.advanceTimersByTimeAsync(0);
+
+    const qrDialog = screen.getByRole("dialog", { name: "配对二维码" });
+    const dialogTokens = tokensOf(qrDialog);
+    expect(dialogTokens.has("flex-col")).toBe(true);
+    expect(dialogTokens.has("gap-[14px]")).toBe(true);
+    expect(screen.queryByTestId("desktop-name")).toBeNull();
+    const dialogChildTags = Array.from(qrDialog.children).map((el) => el.tagName);
+    expect(dialogChildTags).toEqual(["H3", "IMG", "P", "DIV", "BUTTON"]);
     const closeBtn = screen.getByRole("button", { name: "关闭" });
     const closeTokens = tokensOf(closeBtn);
     expect(closeTokens.has("bg-primary")).toBe(false);
     expect(closeTokens.has("border-border-strong")).toBe(true);
+  });
 
-    // 设置页停服卡容器恢复中性纸卡与墨色标题，仅按钮保留 danger
-    cleanup();
+  it("#2092 设置页单栏三层分组（核心 → 常规与支持 → 危险区）与全部交互无回归", async () => {
     setupDaemon({ devices: [makeDevice("a", "客厅的手机")] });
+    openUrl.mockClear();
+    checkUpdate.mockClear();
+    confirmDialog.mockClear();
+    openDialog.mockResolvedValueOnce(null);
     await openApp("#/settings");
+
+    const pageSettings = screen.getByTestId("page-settings");
+    expect(tokensOf(pageSettings).has("max-w-[680px]")).toBe(true);
+    const layers = screen.getByTestId("settings-layers");
+    expect(tokensOf(layers).has("flex-col")).toBe(true);
+
+    // 仅 3 张卡片：照片库、常规与支持（合并更新+关于）、危险区
+    const cards = Array.from(layers.children);
+    expect(cards).toHaveLength(3);
+    expect(cards[0].getAttribute("data-testid")).toBe("settings-library-card");
+    expect(cards[1].getAttribute("data-testid")).toBe("about-card");
+    expect(cards[2].getAttribute("data-testid")).toBe("settings-danger-zone");
+
+    // ① 核心区：路径、磁盘水位、打开/搬迁交互
+    expect(cards[0].textContent).toContain("/Users/demo/照片库");
+    expect(screen.getByRole("progressbar", { name: "磁盘空间" }).getAttribute("aria-valuenow")).toBe("95");
+    await fireEvent.click(screen.getByRole("button", { name: "打开照片库" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(invokeMock).toHaveBeenCalledWith("reveal_library");
+    await fireEvent.click(screen.getByTestId("change-library"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(invokeMock).toHaveBeenCalledWith("pick_library_dir", {
+      fromDefault: false,
+      title: "更改照片库位置",
+    });
+
+    // ② 常规与支持：软件更新、状态行、壳/服务版本、外链同卡收敛且交互正常
+    const aboutCard = screen.getByTestId("about-card");
+    expect(aboutCard.textContent).toContain("软件更新");
+    expect(aboutCard.querySelector('[data-testid="update-status"]')).toBeTruthy();
+    expect(aboutCard.querySelector('[data-testid="about-shell-version"]')?.textContent).toContain("v0.6.0");
+    expect(aboutCard.querySelector('[data-testid="about-service-version"]')?.textContent).toContain("v0.6.0");
+
+    await fireEvent.click(screen.getByRole("button", { name: "检查更新" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(checkUpdate).toHaveBeenCalled();
+
+    await fireEvent.click(screen.getByTestId("about-link-website"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openUrl).toHaveBeenCalledWith("https://p-pass.hawkeye-xb.com/zh/");
+
+    // ③ 危险区：紧凑横排（左标题与后果 + 右红色危险按钮），容器保持中性纸卡
+    const dangerZone = screen.getByTestId("settings-danger-zone");
+    const dangerTokens = tokensOf(dangerZone);
+    expect(dangerTokens.has("flex-row")).toBe(true);
+    expect(dangerTokens.has("justify-between")).toBe(true);
+    expect(dangerTokens.has("border-act")).toBe(false);
+    expect(dangerTokens.has("bg-act-bg")).toBe(false);
     const stopHeading = screen.getByRole("heading", { name: "停止后台服务" });
     expect(tokensOf(stopHeading).has("text-ink")).toBe(true);
     expect(tokensOf(stopHeading).has("text-act")).toBe(false);
-    const stopCard = stopHeading.closest('[data-slot="card"]');
-    expect(stopCard).toBeTruthy();
-    expect(tokensOf(stopCard).has("border-act")).toBe(false);
-    expect(tokensOf(stopCard).has("bg-act-bg")).toBe(false);
+    expect(dangerZone.textContent).toContain("停止后备份暂停");
     const stopBtn = screen.getByRole("button", { name: "停止后台服务" });
     expect(tokensOf(stopBtn).has("text-act")).toBe(true);
+    await fireEvent.click(stopBtn);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(confirmDialog).toHaveBeenCalled();
+    expect(invokeMock).toHaveBeenCalledWith("stop_daemon");
   });
 
   it("#2084 + #2079 设备页显示改名铅笔提示、文件夹文字按钮，并保留已配对「断开」/已断开「移除」的柔和危险权重", async () => {

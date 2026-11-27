@@ -501,7 +501,6 @@ msg_keys! {
     UI_ERR_PAIR_CODE_WRONG => "ui.err_pair_code_wrong",
     UI_PAIR_VERIFYING => "ui.pair_verifying",
     UI_PAIR_DESKTOP_IDENTITY => "ui.pair_desktop_identity",
-    UI_PAIR_DESKTOP_NAME => "ui.pair_desktop_name",
     UI_AUDIT_PAIR_CODE_FAILED => "ui.audit_pair_code_failed",
     /// #1406：设备名为空时设备列表里的兜底名「手机 · <ID 前 4 位>」。
     UI_DEVICE_FALLBACK_NAME => "ui.device_fallback_name",
@@ -848,7 +847,6 @@ mod tests {
             UI_ERR_PAIR_CODE_WRONG,
             UI_PAIR_VERIFYING,
             UI_PAIR_DESKTOP_IDENTITY,
-            UI_PAIR_DESKTOP_NAME,
             UI_AUDIT_PAIR_CODE_FAILED,
             UI_DEVICE_FALLBACK_NAME,
             UI_ERR_UPDATE_NONE,
@@ -901,7 +899,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 385);
+        assert_eq!(ALL.len(), 384);
     }
 
     #[test]

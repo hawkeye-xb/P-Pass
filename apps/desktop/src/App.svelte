@@ -1904,43 +1904,69 @@
                  （T-082 反转过一次是为了贴设计稿，现在不追设计稿了）；
                  中屏两栏并排时"添加设备"卡内容天然比"备份状态"空
                  状态多，不等高会让水位卡下面露出一大块空白背景。 -->
-            <div class="grid grid-cols-1 gap-[22px] min-[1080px]:grid-cols-[1.4fr_1fr] min-[1440px]:grid-cols-[1.35fr_1fr_1.1fr]">
-              <Card class="text-[16px]">
-                <h3 class="mb-[12px] text-[15px] font-semibold">{t("ui.backup_status")}</h3>
-                {#if devicesError}
-                  <!-- DESK-63 (#946): the service may be running fine while
-                       this one data call failed. Say it here, never turn the
-                       service badge red for it. -->
-                  <p class="m-0 mb-[10px] text-[13px] leading-[1.6] text-act" data-testid="devices-error">
-                    {devicesError.text}<span class="mt-[2px] block text-[12px]">{errCodeLine(devicesError)}</span>
-                  </p>
-                {/if}
-                {#if pairedCount === 0}
-                  <!-- 2026-08-17：等高后空状态垂直居中——不然矮内容顶在
-                       卡片顶部，下面一截空白显得像没做完。 -->
-                  <div class="flex flex-1 items-center justify-center">
-                    <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{noDevicesText(disconnectedCount)}</p>
-                  </div>
-                {:else}
-                  <ul class="m-0 list-none p-0">
-                    {#each waterRows.shown as { d, row }}
-                      <li class="flex items-center gap-[10px] border-b border-divider py-[10px] last:border-b-0">
-                        <!-- T-091: 右侧接 device.watermarks 真数据（设计稿总览
-                             水位卡为单行结构）。T-092: 行点变四色——哨兵 act >
-                             连接态（direct=safe / relay=wait / offline·unknown=idle）。 -->
-                        <span class="h-[9px] w-[9px] flex-none rounded-full {DOT_BG[row.dot]}"></span>
-                        <span class="flex-1 text-[15px] font-semibold">{displayName(d)}</span>
-                        <span class="flex-none text-[13.5px] {row.alert ? 'text-act' : 'text-ink-40'}">{row.right}</span>
-                      </li>
-                    {/each}
-                  </ul>
-                  {#if waterRows.moreOk > 0}
-                    <Button variant="link" class="mt-px self-start" onclick={() => go("devices")}
-                      >{t("ui.water_more_ok", { n: waterRows.moreOk })} ›</Button
-                    >
+            <div
+              class="grid grid-cols-1 items-start gap-[22px] min-[900px]:grid-cols-[minmax(0,1.55fr)_minmax(280px,1fr)]"
+              data-testid="overview-grid"
+            >
+              <div class="flex min-w-0 flex-col gap-[22px]" data-testid="overview-primary-col">
+                <Card class="text-[16px]">
+                  <h3 class="mb-[12px] text-[15px] font-semibold">{t("ui.backup_status")}</h3>
+                  {#if devicesError}
+                    <!-- DESK-63 (#946): the service may be running fine while
+                         this one data call failed. Say it here, never turn the
+                         service badge red for it. -->
+                    <p class="m-0 mb-[10px] text-[13px] leading-[1.6] text-act" data-testid="devices-error">
+                      {devicesError.text}<span class="mt-[2px] block text-[12px]">{errCodeLine(devicesError)}</span>
+                    </p>
                   {/if}
-                {/if}
-              </Card>
+                  {#if pairedCount === 0}
+                    <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{noDevicesText(disconnectedCount)}</p>
+                  {:else}
+                    <ul class="m-0 list-none p-0">
+                      {#each waterRows.shown as { d, row }}
+                        <li class="flex items-center gap-[10px] border-b border-divider py-[10px] last:border-b-0">
+                          <!-- T-091: 右侧接 device.watermarks 真数据（设计稿总览
+                               水位卡为单行结构）。T-092: 行点变四色——哨兵 act >
+                               连接态（direct=safe / relay=wait / offline·unknown=idle）。 -->
+                          <span class="h-[9px] w-[9px] flex-none rounded-full {DOT_BG[row.dot]}"></span>
+                          <span class="flex-1 text-[15px] font-semibold">{displayName(d)}</span>
+                          <span class="flex-none text-[13.5px] {row.alert ? 'text-act' : 'text-ink-40'}">{row.right}</span>
+                        </li>
+                      {/each}
+                    </ul>
+                    {#if waterRows.moreOk > 0}
+                      <Button variant="link" class="mt-px self-start" onclick={() => go("devices")}
+                        >{t("ui.water_more_ok", { n: waterRows.moreOk })} ›</Button
+                      >
+                    {/if}
+                  {/if}
+                </Card>
+
+                <Card class="gap-[12px] text-[16px]">
+                  <h3 class="mb-0 text-[15px] font-semibold">{t("ui.recent_activity")}</h3>
+                  <div>
+                    {#if visibleAudit.length === 0}
+                      <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.no_activity")}</p>
+                    {:else}
+                      <!-- 单行紧凑文案（设备+事件+相对时间连成一行，不分列、
+                           行间不加分隔线），跟主活动记录页的双列卡片行是两种
+                           密度，故意不共用 .log-rows。 -->
+                      <ul class="m-0 flex list-none flex-col gap-[10px] p-0 text-[14px] text-ink">
+                        <!-- DESK-08: key = 审计主键 e.id。原本是 `e.ts + ":" + e.action`
+                             ——WATCH-02 一次删 N 张会在同一毫秒写 N 条
+                             asset.removed_external，key 撞了 Svelte 直接抛
+                             each_key_duplicate。时间戳不是身份。 -->
+                        {#each visibleAudit.slice(0, 3) as e (e.id)}
+                          {@const at = humanTime(e.ts, nowMs)}
+                          {@const actor = auditActorParts(e, devices)}
+                          <li title={auditWho(e, devices)}><b class="font-semibold">{actor.name}</b> {auditText(e)}{#if at} · {at}{/if}</li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  </div>
+                  <Button variant="link" class="self-start" onclick={() => go("log")}>{t("ui.all_activity")} ›</Button>
+                </Card>
+              </div>
 
               <!-- 卡片本身不居中——标题、说明文字都是左对齐的普通文本；
                    只有按钮内文字（Button 基类自带 justify-center）和底部
@@ -1949,46 +1975,11 @@
                    状态消失；扫码后的允许/拒绝也走模态。 -->
               <Card class="gap-[12px] text-[16px]">
                 <h3 class="mb-0 text-[15px] font-semibold">{t("ui.add_device")}</h3>
-                <p class="m-0 flex-1 text-[13px] leading-[1.6] text-ink-40">{t("ui.add_device_body")}</p>
+                <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.add_device_body")}</p>
                 <Button variant={pairedCount === 0 ? "primary" : "secondary"} class="w-full" onclick={() => startPairing()}>{t("ui.generate_qr")}</Button>
                 <!-- 设计稿 v2：无法扫码的退路提升到卡片级——不打开弹窗也
                      能复制配对串（copyPairQuiet 静默取串，主路径仍是扫码）。 -->
                 <Button variant="link" class="w-full" onclick={copyPairQuiet}>{t("ui.qr_fallback")}</Button>
-              </Card>
-
-              <!-- 「最近动静」摘要卡——不再靠 hidden+断点整卡消失。中屏
-                   （1080-1439px）沉到第二行占满两栏宽度；大屏（≥1440px）
-                   回到第三栏；小屏（<1080px）跟其它卡一样单栏竖排。数据
-                   是活动记录前 3 条，复用同一套 auditWho/auditText，不是
-                   另开一套数据源。 -->
-              <Card class="gap-[12px] text-[16px] min-[1080px]:col-span-2 min-[1440px]:col-span-1">
-                <h3 class="mb-0 text-[15px] font-semibold">{t("ui.recent_activity")}</h3>
-                <!-- 2026-08-17：内容包一层 flex-1——大屏三栏等高时这张卡
-                     内容天然比左边两张少（最多 3 行），没有这层撑底的话
-                     链接会紧贴在短内容下面、卡片下半段留一截空白，看起来
-                     跟左边两张卡"高度不一样"（其实外框是等高的，只是内容
-                     没撑满，视觉上像矮了一截）。 -->
-                <div class="flex-1">
-                  {#if visibleAudit.length === 0}
-                    <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.no_activity")}</p>
-                  {:else}
-                    <!-- 单行紧凑文案（设备+事件+相对时间连成一行，不分列、
-                         行间不加分隔线），跟主活动记录页的双列卡片行是两种
-                         密度，故意不共用 .log-rows。 -->
-                    <ul class="m-0 flex list-none flex-col gap-[10px] p-0 text-[14px] text-ink">
-                      <!-- DESK-08: key = 审计主键 e.id。原本是 `e.ts + ":" + e.action`
-                           ——WATCH-02 一次删 N 张会在同一毫秒写 N 条
-                           asset.removed_external，key 撞了 Svelte 直接抛
-                           each_key_duplicate。时间戳不是身份。 -->
-                      {#each visibleAudit.slice(0, 3) as e (e.id)}
-                        {@const at = humanTime(e.ts, nowMs)}
-                        {@const actor = auditActorParts(e, devices)}
-                        <li title={auditWho(e, devices)}><b class="font-semibold">{actor.name}</b> {auditText(e)}{#if at} · {at}{/if}</li>
-                      {/each}
-                    </ul>
-                  {/if}
-                </div>
-                <Button variant="link" class="self-start" onclick={() => go("log")}>{t("ui.all_activity")} ›</Button>
               </Card>
             </div>
           {/if}
@@ -2271,14 +2262,15 @@
           <p class="mt-[10px] text-[13px] leading-[1.6] text-ink-40">{t("ui.log_footnote")}</p>
         </section>
       {:else if page === "settings"}
-        <section class="page" data-testid="page-settings">
+        <section class="page max-w-[680px]" data-testid="page-settings">
           <!-- DESK-08: 设置页已迁 Tailwind + Card/Button；所有 IPC 调用与
                条件渲染（serviceIsStale 重启行/磁盘水位行）一字未动。 -->
           <div>
             <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.settings")}</h2>
           </div>
-          <div class="flex items-start gap-[22px] max-[1079px]:flex-col">
-            <Card class="flex-[1.2_1_0%] text-[16px]">
+          <div class="flex flex-col gap-[22px]" data-testid="settings-layers">
+            <!-- ① 核心区：照片库 -->
+            <Card class="text-[16px]" data-testid="settings-library-card">
               <h3 class="mb-[12px] text-[15px] font-semibold">{t("ui.library")}</h3>
               {#if status?.library_dir}
                 <code class="block rounded-sm bg-linen px-[16px] py-[12px] text-[14px] break-all">{status.library_dir}</code>
@@ -2320,156 +2312,154 @@
               <!-- #639：后果说明随入口恢复，文案改为整库搬迁。 -->
               <p class="m-0 mt-[10px] text-[13px] leading-[1.6] text-ink-40">{t("ui.library_change_hint")}</p>
             </Card>
-            <div class="flex flex-1 flex-col gap-[22px]">
-              <Card size="flush" class="min-h-0 flex-1 overflow-y-auto text-[16px]">
-                <!-- UI-19（2026-10-01 验收人拍板）：语言切换入口**暂时隐藏**——
-                     观感不佳，先不露面。i18n 机制与文案一律未删：LANG_OPTIONS /
-                     langPref / changeLanguage 原样保留，字典键也在。
-                     恢复方式：把 issue #608 卡面里保存的那段标记放回本位置即可
-                     （源码契约测试见 languageSetting.test.js
-                     「入口已隐藏 + 能力未损坏」两条）。 -->
-                <!-- DESK-02①: 更新通道零 UI——由构建推导（版本含 -test. →
-                     test），旧 REL-02 通道选择行已删。 -->
-                <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
-                  <span>{t("ui.software_update")}</span>
-                  <Button variant="secondary" onclick={() => checkForUpdate(true)} disabled={updateBusy}>
-                    {t("ui.check_update")}
+
+            <!-- ② 常规与支持：软件更新 + 关于（版本与外链）合进同一张紧凑分组列表卡 -->
+            <Card size="flush" class="text-[16px]" data-testid="about-card">
+              <!-- UI-19（2026-10-01 验收人拍板）：语言切换入口**暂时隐藏**——
+                   观感不佳，先不露面。i18n 机制与文案一律未删：LANG_OPTIONS /
+                   langPref / changeLanguage 原样保留，字典键也在。
+                   恢复方式：把 issue #608 卡面里保存的那段标记放回本位置即可
+                   （源码契约测试见 languageSetting.test.js
+                   「入口已隐藏 + 能力未损坏」两条）。 -->
+              <!-- DESK-02①: 更新通道零 UI——由构建推导（版本含 -test. →
+                   test），旧 REL-02 通道选择行已删。 -->
+              <!-- #1044 B13：「关于」——壳与后台服务（内核）版本分开列；两者不一致
+                   （daemon 下发的 status.shell_relation ≠ same）时标出来。 -->
+              <h3 class="m-0 border-b border-divider px-[22px] py-[14px] text-[15px] font-semibold">{t("ui.about")}</h3>
+              <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[13px] text-[15px] font-medium">
+                <span>{t("ui.software_update")}</span>
+                <Button variant="secondary" onclick={() => checkForUpdate(true)} disabled={updateBusy}>
+                  {t("ui.check_update")}
+                </Button>
+              </div>
+              <!-- UPD-06 (#616)：状态机的显式状态行——过程可见、失败可重试；
+                   #1132 D4：常驻 role="status" 区域（ARIA22），空闲时零高度。 -->
+              <div role="status" data-testid="update-status" class={updatePhase === "idle" ? "text-[13px] leading-[1.6] text-ink-40" : "border-b border-divider px-[22px] py-[12px] text-[13px] leading-[1.6] text-ink-40"}>
+                {#if updatePhase === "checking"}
+                  <span>{t("ui.update_checking")}</span>
+                {:else if updatePhase === "up-to-date"}
+                  <span>{t("ui.update_up_to_date")}</span>
+                {:else if updatePhase === "available"}
+                  <span>{t("ui.update_available_short", { version: pendingVersion })}</span>
+                {:else if updatePhase === "downloading"}
+                  <span>{t("ui.update_downloading")}{updateProgress === null ? "" : ` ${updateProgress}%`}</span>
+                  {#if updateProgress !== null}
+                    <div
+                      class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"
+                      role="progressbar"
+                      aria-label={t("ui.update_downloading")}
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      aria-valuenow={updateProgress}
+                    >
+                      <div class="h-full rounded-full bg-ink" style="width:{updateProgress}%"></div>
+                    </div>
+                  {/if}
+                {:else if updatePhase === "installing"}
+                  <span>{t("ui.update_installing")}</span>
+                {:else if updatePhase === "installed" || updatePhase === "relaunching"}
+                  <span>{t("ui.update_installed_state")}</span>
+                {:else if updatePhase === "failed"}
+                  <span role="alert" class="text-act">{updateError?.text}{#if updateError}<span class="mt-[2px] block text-[12px]">{errCodeLine(updateError)}</span>{/if}</span>
+                  <Button variant="secondary" class="ml-[10px]" onclick={() => checkForUpdate(true)}>
+                    {t("ui.update_retry")}
+                  </Button>
+                {/if}
+              </div>
+              <!-- UPD-06 (#616)：壳旧 ⇒ 换壳。 -->
+              {#if shellIsStale}
+                <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[13px] text-[15px] font-medium">
+                  <span>{t("ui.shell_restart_needed", { version: installedVersion })}</span>
+                  <Button variant="secondary" onclick={relaunchShellNow} disabled={updateBusy}>
+                    {t("ui.restart_app_now")}
                   </Button>
                 </div>
-                <!-- UPD-06 (#616)：状态机的显式状态行——过程可见、失败可重试，
-                     不再只靠一闪而过的 toast（旧实现连按钮都不禁用）。
-                     #1132 D4：状态行用 role="status"（隐式 aria-live=polite）
-                     播报变化；失败用 role="alert"；进度条补 progressbar 语义。
-                     区域常驻（ARIA22：live region 要先挂载、后写内容——点「检查
-                     更新」时区域和首条消息同时插入，读屏可能不播报首条）；
-                     空闲时内容为空、不带边框与内边距，零高度不占版面。 -->
-                <div role="status" data-testid="update-status" class={updatePhase === "idle" ? "text-[13px] leading-[1.6] text-ink-40" : "border-b border-divider px-[22px] py-[14px] text-[13px] leading-[1.6] text-ink-40"}>
-                    {#if updatePhase === "checking"}
-                      <span>{t("ui.update_checking")}</span>
-                    {:else if updatePhase === "up-to-date"}
-                      <span>{t("ui.update_up_to_date")}</span>
-                    {:else if updatePhase === "available"}
-                      <span>{t("ui.update_available_short", { version: pendingVersion })}</span>
-                    {:else if updatePhase === "downloading"}
-                      <span>{t("ui.update_downloading")}{updateProgress === null ? "" : ` ${updateProgress}%`}</span>
-                      {#if updateProgress !== null}
-                        <div
-                          class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"
-                          role="progressbar"
-                          aria-label={t("ui.update_downloading")}
-                          aria-valuemin="0"
-                          aria-valuemax="100"
-                          aria-valuenow={updateProgress}
-                        >
-                          <div class="h-full rounded-full bg-ink" style="width:{updateProgress}%"></div>
-                        </div>
-                      {/if}
-                    {:else if updatePhase === "installing"}
-                      <span>{t("ui.update_installing")}</span>
-                    {:else if updatePhase === "installed" || updatePhase === "relaunching"}
-                      <span>{t("ui.update_installed_state")}</span>
-                    {:else if updatePhase === "failed"}
-                      <span role="alert" class="text-act">{updateError?.text}{#if updateError}<span class="mt-[2px] block text-[12px]">{errCodeLine(updateError)}</span>{/if}</span>
-                      <Button variant="secondary" class="ml-[10px]" onclick={() => checkForUpdate(true)}>
-                        {t("ui.update_retry")}
-                      </Button>
-                    {/if}
-                  </div>
-                <!-- UPD-06 (#616)：**壳旧** ⇒ 换壳。磁盘上已经是新版、运行中的壳还是旧的
-                     ——这一行是「更新装完没换壳」的唯一出路（旧实现这里给的是方向相反的
-                     「重启后台服务」，按了永远不收敛）。 -->
-                {#if shellIsStale}
-                  <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
-                    <span>{t("ui.shell_restart_needed", { version: installedVersion })}</span>
-                    <Button variant="secondary" onclick={relaunchShellNow} disabled={updateBusy}>
-                      {t("ui.restart_app_now")}
-                    </Button>
-                  </div>
-                {/if}
-                <!-- DAE-04: 桌面壳更新后 daemon 还是旧版（版本不一致）才
-                     显示——一致时不出现，避免误杀正常运行的服务。 -->
-                {#if serviceIsStale && kernelPhase === "restarting"}
-                  <!-- #667：壳启动时已在自动换内核——给事实句，不给按钮（避免叠两次重启）。 -->
-                  <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.kernel_converge_restarting")}</p>
-                {:else if serviceIsStale}
-                  <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
-                    <span>{t("ui.restart_service")}</span>
-                    <Button variant="secondary" onclick={() => restartDaemonProcess("update")} disabled={restartingService}>
-                      {restartingService ? t("ui.restarting_service") : t("ui.restart_service_btn")}
-                    </Button>
-                  </div>
-                  <!-- #667：正在传输时自动换版被推迟——说事实（传完自动换），按钮留给想立刻换的人。 -->
-                  <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{kernelPhase === "deferred" ? t("ui.kernel_converge_deferred") : t("ui.restart_service_hint")}</p>
-                {/if}
-                <!-- #550：诊断包入口已收进托盘菜单（「导出诊断包」），设置页不再展示。 -->
-              </Card>
-              <!-- #1044 B13：「关于」——壳与后台服务（内核）版本分开列；两者不一致
-                   （daemon 下发的 status.shell_relation ≠ same）时标出来。
-                   日常只显示一个产品版本号（页脚），这里才把两者摆开。 -->
-              <Card size="flush" class="text-[16px]" data-testid="about-card">
-                <h3 class="m-0 px-[22px] pt-[16px] text-[15px] font-semibold">{t("ui.about")}</h3>
-                <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[14px] text-[15px] font-medium">
-                  <span>{t("ui.about_shell_version")}</span>
-                  <span class="font-mono text-[13.5px] font-normal text-ink-40" data-testid="about-shell-version">{shellVersion ? `v${shellVersion}` : "—"}</span>
-                </div>
-                <div class="flex items-center justify-between gap-[12px] px-[22px] py-[14px] text-[15px] font-medium">
-                  <span>{t("ui.about_service_version")}</span>
-                  <span class="flex items-center gap-[8px] font-mono text-[13.5px] font-normal text-ink-40" data-testid="about-service-version">
-                    {#if versionsDiffer}
-                      <span class="env-badge" data-testid="about-versions-differ">{t("ui.about_versions_differ")}</span>
-                    {/if}
-                    {serviceVersion ? `v${serviceVersion}` : "—"}
-                  </span>
-                </div>
-                {#each aboutLinks(getLocale()) as link (link.id)}
-                  <button
-                    type="button"
-                    class="flex w-full cursor-pointer items-center justify-between gap-[12px] border-t border-divider bg-transparent px-[22px] py-[13px] text-left font-sans text-[15px] font-medium text-ink transition-colors outline-none hover:bg-linen focus-visible:ring-3 focus-visible:ring-ring"
-                    data-testid={`about-link-${link.id}`}
-                    onclick={() => openAboutLink(link.url)}
-                  >
-                    <span>{t(link.labelKey)}</span>
-                    <span class="flex items-center gap-[6px] text-[13.5px] font-normal text-ink-40">
-                      {#if link.valueKey || link.value}
-                        <span>{link.valueKey ? t(link.valueKey) : link.value}</span>
-                      {/if}
-                      <ExternalLinkIcon class="size-[15px] shrink-0" aria-hidden="true" />
-                    </span>
-                  </button>
-                {/each}
-              </Card>
-              {#if canStopService(serviceState)}
-                <Card class="text-[16px]">
-                  <h3 class="mb-[12px] text-[15px] font-semibold text-ink">{t("ui.stop_service")}</h3>
-                  <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.stop_hint")}</p>
-                  <Button variant="danger" class="self-start" onclick={stopService}>{t("ui.stop_service")}</Button>
-                </Card>
               {/if}
-            </div>
+              <!-- DAE-04: 桌面壳更新后 daemon 还是旧版时才显示。 -->
+              {#if serviceIsStale && kernelPhase === "restarting"}
+                <p class="m-0 border-b border-divider px-[22px] py-[13px] text-[13px] leading-[1.6] text-ink-40">{t("ui.kernel_converge_restarting")}</p>
+              {:else if serviceIsStale}
+                <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[13px] text-[15px] font-medium">
+                  <span>{t("ui.restart_service")}</span>
+                  <Button variant="secondary" onclick={() => restartDaemonProcess("update")} disabled={restartingService}>
+                    {restartingService ? t("ui.restarting_service") : t("ui.restart_service_btn")}
+                  </Button>
+                </div>
+                <p class="m-0 border-b border-divider px-[22px] py-[12px] text-[13px] leading-[1.6] text-ink-40">{kernelPhase === "deferred" ? t("ui.kernel_converge_deferred") : t("ui.restart_service_hint")}</p>
+              {/if}
+              <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[13px] text-[15px] font-medium">
+                <span>{t("ui.about_shell_version")}</span>
+                <span class="font-mono text-[13.5px] font-normal text-ink-40" data-testid="about-shell-version">{shellVersion ? `v${shellVersion}` : "—"}</span>
+              </div>
+              <div class="flex items-center justify-between gap-[12px] px-[22px] py-[13px] text-[15px] font-medium">
+                <span>{t("ui.about_service_version")}</span>
+                <span class="flex items-center gap-[8px] font-mono text-[13.5px] font-normal text-ink-40" data-testid="about-service-version">
+                  {#if versionsDiffer}
+                    <span class="env-badge" data-testid="about-versions-differ">{t("ui.about_versions_differ")}</span>
+                  {/if}
+                  {serviceVersion ? `v${serviceVersion}` : "—"}
+                </span>
+              </div>
+              {#each aboutLinks(getLocale()) as link (link.id)}
+                <button
+                  type="button"
+                  class="flex w-full cursor-pointer items-center justify-between gap-[12px] border-t border-divider bg-transparent px-[22px] py-[12px] text-left font-sans text-[15px] font-medium text-ink transition-colors outline-none hover:bg-linen focus-visible:ring-3 focus-visible:ring-ring"
+                  data-testid={`about-link-${link.id}`}
+                  onclick={() => openAboutLink(link.url)}
+                >
+                  <span>{t(link.labelKey)}</span>
+                  <span class="flex items-center gap-[6px] text-[13.5px] font-normal text-ink-40">
+                    {#if link.valueKey || link.value}
+                      <span>{link.valueKey ? t(link.valueKey) : link.value}</span>
+                    {/if}
+                    <ExternalLinkIcon class="size-[15px] shrink-0" aria-hidden="true" />
+                  </span>
+                </button>
+              {/each}
+            </Card>
+
+            <!-- ③ 危险区：底部低权重独立紧凑区 -->
+            {#if canStopService(serviceState)}
+              <Card
+                class="flex-row flex-wrap items-center justify-between gap-[16px] py-[16px] text-[16px]"
+                data-testid="settings-danger-zone"
+              >
+                <div class="min-w-0 flex-1 basis-[260px]">
+                  <h3 class="m-0 text-[14px] font-semibold text-ink">{t("ui.stop_service")}</h3>
+                  <p class="m-0 mt-[4px] text-[13px] leading-[1.5] text-ink-40">{t("ui.stop_hint")}</p>
+                </div>
+                <Button variant="danger" class="flex-none" onclick={stopService}>{t("ui.stop_service")}</Button>
+              </Card>
+            {/if}
           </div>
         </section>
       {/if}
     </main>
     <!-- T4 (H-10b): 配对状态机模态——二维码弹窗 + 允许/拒绝弹窗。
          #1132 D1：弹窗要读得出名称（axe `aria-dialog-name`）。 -->
-    <Dialog open={showPairModal} onClose={closePairModal} ariaLabel={t("ui.pair_qr_title")}>
+    <Dialog
+      open={showPairModal}
+      onClose={closePairModal}
+      class="flex flex-col items-center gap-[14px]"
+      ariaLabel={t("ui.pair_qr_title")}
+    >
       <!-- 设计稿 v2：弹窗标题「配对二维码 · 放大版」——亮码用途一目了然 -->
-      <h3>{t("ui.pair_qr_title")}</h3>
+      <h3 class="m-0 text-[15px] font-semibold">{t("ui.pair_qr_title")}</h3>
       {#if qrDataUrl && qrState === "expired"}
         <!-- #1264：过期的码不留在屏幕上——盖住，只留刷新入口（失效时刻以 daemon 为准）。 -->
-        <div class="qr-lg qr-expired" data-testid="pair-qr-expired">
+        <div class="qr-lg qr-expired m-0" data-testid="pair-qr-expired">
           <p class="m-0 font-semibold">{t("ui.pair_qr_expired")}</p>
           <Button onclick={() => startPairing()}>{t("ui.refresh_qr")}</Button>
         </div>
-        <div class="modal-actions">
+        <div class="modal-actions m-0">
           <Button variant="secondary" onclick={closePairModal}>{t("ui.close")}</Button>
         </div>
       {:else if qrDataUrl}
-        <img class="qr-lg" src={qrDataUrl} alt={t("ui.pair_qr_title")} data-testid="pair-qr" />
-        <p class="hint modal-hint">
+        <img class="qr-lg m-0" src={qrDataUrl} alt={t("ui.pair_qr_title")} data-testid="pair-qr" />
+        <p class="hint modal-hint m-0">
           {t("ui.pair_qr_body")}
         </p>
-        <div class="modal-actions">
+        <div class="modal-actions m-0">
           <Button variant="secondary" onclick={() => startPairing()}>{t("ui.refresh_qr")}</Button>
           <Button variant="secondary" onclick={closePairModal}>{t("ui.close")}</Button>
         </div>
@@ -2478,11 +2468,11 @@
         <Button variant="link" onclick={copyPairString}>{t("ui.qr_fallback")}</Button>
       {:else if qrError}
         <!-- F4：生成失败——说原因 + 错误代码，给「重试」；联系不上后台服务的那几类再给「重启后台服务」。 -->
-        <div class="modal-hint" role="alert" data-testid="pair-qr-error">
+        <div class="modal-hint m-0" role="alert" data-testid="pair-qr-error">
           <p class="m-0">{qrError.text}</p>
           <p class="m-0 text-[12px] text-ink-40">{errCodeLine(qrError)}</p>
         </div>
-        <div class="modal-actions">
+        <div class="modal-actions m-0">
           {#if offersServiceRestart(qrError.key)}
             <Button variant="secondary" disabled={restartingService} onclick={() => restartDaemonProcess("recover")}>
               {restartingService ? t("ui.restarting_service") : t("ui.restart_service")}
@@ -2491,13 +2481,7 @@
           <Button disabled={qrRefreshing} onclick={() => startPairing()} data-testid="pair-qr-retry">{t("ui.retry")}</Button>
         </div>
       {:else}
-        <p class="hint modal-hint">{t("ui.pair_generating")}</p>
-      {/if}
-      <!-- #1118：这台电脑的名字（二维码生成前也显示）。#1257：电脑标识不在这里——核对发生在输验证码那一步，
-           只在确认弹窗里给。 -->
-      <!-- F4 跟进：电脑名称是配合二维码核对用的；生成失败时没有码，这行不显示。 -->
-      {#if status?.desktop_name && !qrError}
-        <p class="pair-identity" data-testid="desktop-name">{t("ui.pair_desktop_name", { name: status.desktop_name })}</p>
+        <p class="hint modal-hint m-0">{t("ui.pair_generating")}</p>
       {/if}
     </Dialog>
 
@@ -2627,7 +2611,7 @@
               <div class="photo-viewer-loading">{t("ui.loading")}</div>
             {/if}
           </div>
-      <div class="modal-actions">
+      <div class="modal-actions mt-[14px]">
         <Button variant="secondary" onclick={revealPhotoInFinder} disabled={!viewerPath}>
           {t("ui.photos_open_in_finder")}
         </Button>
@@ -2788,10 +2772,14 @@
     display: flex;
     flex-direction: column;
     gap: 22px;
-    /* 设计稿基准档（16 寸/1080-1439）内容区就是填满侧栏之外的可用宽度，
-     * 不设人为上限——之前写死 880px，任何比 880+侧栏宽的窗口右边全是
-     * 死区（用户实测反馈）。max-width 只在 ≥1440px 才需要（见文件尾
-     * 的响应式媒体查询），防真的超宽屏内容无限拉伸。 */
+    max-width: 1120px;
+    margin: 0 auto;
+  }
+  main[data-page="photos"] .page {
+    max-width: none;
+  }
+  main[data-page="settings"] .page {
+    max-width: 680px;
   }
 
 
@@ -2920,7 +2908,7 @@
     max-width: 100%;
     image-rendering: pixelated;
     border-radius: var(--pp-radius-control-sm);
-    margin: 14px 0 4px;
+    margin: 0;
   }
   /* #1264：盖住过期的码——占原来二维码的位置，居中放一句话和刷新按钮。 */
   .qr-expired {
@@ -2933,13 +2921,13 @@
     background: var(--pp-idle-bg);
   }
   .modal-hint {
-    margin: 12px 0 16px;
+    margin: 0;
   }
   .modal-actions {
     display: flex;
     gap: 10px;
     justify-content: center;
-    margin-top: 4px;
+    margin: 0;
   }
   /* UX-08: pending 全量列表——一屏一行，逐行允许/拒绝 */
   .pending-list {
@@ -3085,23 +3073,6 @@
     .service-label {
       display: none;
     }
-  }
-  /* ≥1440：三栏，内容区居中不无限拉伸。总览卡片区（水位/添加设备/
-     最近动静）改用 grid（见模板内联类），断点行为不靠这里的 @media，
-     小屏单栏竖排是 grid-cols-1 默认值自然得到的，不需要额外规则。
-     照片墙是缩略图网格不是读文字，没有"一行多少字读得舒服"的考量，
-     豁免这条居中限宽，让墙铺满可用宽度（用户实测反馈：右边留白）。 */
-  @media (min-width: 1440px) {
-    .page {
-      max-width: 1180px;
-      /* 2026-08-13 二次走查：只限宽不居中 = 右侧死区（1920px 下实测
-         486px）——"内容区居中不无限拉伸"要两个都做，margin auto 居中。 */
-      margin: 0 auto;
-    }
-    main[data-page="photos"] .page {
-      max-width: none;
-    }
-
   }
   }
 </style>

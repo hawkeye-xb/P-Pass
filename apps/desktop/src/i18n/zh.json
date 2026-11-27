@@ -163,7 +163,6 @@
   "ui.pending_enter_code": "输入验证码",
   "ui.err_pair_code_wrong": "验证码不正确，配对已取消。请点「重新显示二维码」，再用手机扫码。",
   "ui.pair_verifying": "验证码已提交，正在等「{name}」确认。",
-  "ui.pair_desktop_name": "电脑名称：{name}",
   "ui.pair_desktop_identity": "电脑标识 {fingerprint}",
   "ui.pending_known_title": "{name} 请求重新加入",
   "ui.pending_one_title": "{name} 请求加入",
