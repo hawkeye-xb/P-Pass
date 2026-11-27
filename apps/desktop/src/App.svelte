@@ -1831,15 +1831,15 @@
                 <h2 class="m-0 font-serif text-[32px] font-normal leading-[1.25] text-ink">
                   {#if photoCount !== null}{t("ui.overview_title_count", { n: photoCount })}{:else}{t("ui.overview_title")}{/if}
                 </h2>
-                <p class="mt-[6px] text-[14px] text-ink-40">
-                  {#if lastBackupOverall}
+                {#if lastBackupOverall}
+                  <p class="mt-[6px] text-[14px] text-ink-40">
                     {t("ui.overview_last_backup", { time: humanTime(lastBackupOverall.at, nowMs), name: lastBackupOverall.name })}
-                  {:else}
-                    {t("ui.paired_count", { n: pairedCount })}{#if photoCount !== null}{` · ${t("ui.overview_library_count", { n: photoCount })}`}{/if}
-                  {/if}
-                  {disconnectedClause(disconnectedCount)}
-                  {#if status?.removed_devices > 0}{t("ui.revoked_count", { n: status.removed_devices })}{/if}
-                </p>
+                  </p>
+                {:else if pairedCount === 0}
+                  <p class="mt-[6px] text-[14px] text-ink-40">
+                    {t("ui.paired_count", { n: pairedCount })}{disconnectedClause(disconnectedCount)}{#if status?.removed_devices > 0}{t("ui.revoked_count", { n: status.removed_devices })}{/if}
+                  </p>
+                {/if}
               {/if}
             </div>
             {#if !blocker && pairedCount > 0}
@@ -1855,7 +1855,7 @@
               class="flex flex-wrap items-center gap-x-[14px] gap-y-[6px] border-y border-divider py-[10px] text-[13px] text-ink-60"
               data-testid="overview-summary-strip"
             >
-              <span>{t("ui.paired_count", { n: pairedCount })}</span>
+              <span>{t("ui.paired_count", { n: pairedCount })}{disconnectedClause(disconnectedCount)}{#if status?.removed_devices > 0}{t("ui.revoked_count", { n: status.removed_devices })}{/if}</span>
               {#if diskFree !== null && diskTotal !== null}
                 <span class="text-border-strong" aria-hidden="true">|</span>
                 <span>{t("ui.overview_disk_summary", { free: diskFree, total: diskTotal })}</span>
