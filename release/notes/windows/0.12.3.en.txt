@@ -1,0 +1,3 @@
+Paired devices now disconnect before removal to prevent unpairing.
+Refined Overview and Settings; jump to devices and get the phone link.
+Added website, FAQ, feedback, and privacy links in About.
