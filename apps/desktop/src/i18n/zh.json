@@ -284,7 +284,6 @@
   "ui.overview_title_count": "全家 {n} 张照片，保存在这台电脑上",
   "ui.overview_title": "全家的照片，保存在这台电脑上",
   "ui.overview_last_backup": "最近一次备份：{time} · 来自 {name}",
-  "ui.overview_library_count": "照片库 {n} 张",
   "ui.overview_disk_summary": "磁盘可用 {free} / 共 {total}",
   "ui.overview_health_ok": "一切正常",
   "ui.overview_devices_attention": "{n} 台设备需关注",

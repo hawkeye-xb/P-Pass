@@ -82,6 +82,8 @@ function setupDaemon({
   statusError = null,
   devicesError = null,
   pairedOverride = null,
+  photoCountOverride = null,
+  removedDevices = 0,
 } = {}) {
   invokeMock.mockImplementation(async (cmd) => {
     switch (daemonMethodOf(cmd) ? "daemon" : cmd) {
@@ -114,12 +116,12 @@ function setupDaemon({
             return {
               version: "v0.6.0",
               pending_pairs: 0,
-              photo_sources: photos.length,
-              photo_count: photos.length,
+              photo_sources: photoCountOverride ?? photos.length,
+              photo_count: photoCountOverride ?? photos.length,
               paired_devices:
                 pairedOverride ?? devices.filter((d) => d.removal === "none").length,
               disconnected_devices: devices.filter((d) => d.removal === "disconnected").length,
-              removed_devices: 0,
+              removed_devices: removedDevices,
               library_dir: "/Users/demo/照片库",
               disk_free_bytes: 5_000_000_000,
               disk_total_bytes: 100_000_000_000,
@@ -728,5 +730,29 @@ describe("#2083 + #2084 桌面端视觉权重、降噪、可点性与向导焦�
       "about-card",
       "settings-danger-zone",
     ]);
+  });
+
+  it("#2104 有已配对设备但无最近备份记录时，已配对设备只出现 1 次于摘要带且不重复展示照片库张数", async () => {
+    setupDaemon({
+      devices: [
+        makeDevice("a", "客厅的手机"),
+        makeDevice("b", "旧手机", { removal: "disconnected" }),
+      ],
+      photoCountOverride: 385,
+      removedDevices: 2,
+    });
+    await openApp("#/overview");
+
+    const overviewPage = screen.getByTestId("page-overview");
+    const pageText = overviewPage.textContent || "";
+    expect(pageText).toContain("全家 385 张照片，保存在这台电脑上");
+    expect(pageText).not.toContain("照片库 385 张");
+    expect(pageText.match(/已配对设备/g) ?? []).toHaveLength(1);
+    expect(overviewPage.querySelector("h2 + p")).toBeNull();
+
+    const strip = screen.getByTestId("overview-summary-strip");
+    expect(strip.textContent).toContain("已配对设备 1 台");
+    expect(strip.textContent).toContain("另有 1 台已断开");
+    expect(strip.textContent).toContain("另有 2 台已移除");
   });
 });

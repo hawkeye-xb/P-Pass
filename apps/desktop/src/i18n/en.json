@@ -284,7 +284,6 @@
   "ui.overview_title_count": "{n} family photos, saved on this computer",
   "ui.overview_title": "The family's photos, saved on this computer",
   "ui.overview_last_backup": "Last backup: {time} · from {name}",
-  "ui.overview_library_count": "{n} photos in library",
   "ui.overview_disk_summary": "Disk {free} free of {total}",
   "ui.overview_health_ok": "All good",
   "ui.overview_devices_attention": "{n} device(s) need attention",

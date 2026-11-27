@@ -383,7 +383,6 @@ msg_keys! {
     UI_OVERVIEW_TITLE_COUNT => "ui.overview_title_count",
     UI_OVERVIEW_TITLE => "ui.overview_title",
     UI_OVERVIEW_LAST_BACKUP => "ui.overview_last_backup",
-    UI_OVERVIEW_LIBRARY_COUNT => "ui.overview_library_count",
     UI_BACKUP_STATUS => "ui.backup_status",
     UI_WATER_MORE_OK => "ui.water_more_ok",
     UI_ADD_DEVICE_BODY => "ui.add_device_body",
@@ -760,7 +759,6 @@ mod tests {
             UI_OVERVIEW_TITLE_COUNT,
             UI_OVERVIEW_TITLE,
             UI_OVERVIEW_LAST_BACKUP,
-            UI_OVERVIEW_LIBRARY_COUNT,
             UI_BACKUP_STATUS,
             UI_WATER_MORE_OK,
             UI_ADD_DEVICE_BODY,
@@ -907,7 +905,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 388);
+        assert_eq!(ALL.len(), 387);
     }
 
     #[test]
