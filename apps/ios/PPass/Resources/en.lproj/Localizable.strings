@@ -92,7 +92,7 @@
 "hero_unreconciled_title" = "Recounting photos";
 "hero_unreconciled_body" = "No computer or Wi-Fi needed. Progress shows when the count is done.";
 "dog_last_success" = "Last success %1$@";
-"last_success_never" = "No successful backup yet";
+"last_success_never" = "No backups yet";
 "last_just_now" = "just now";
 "last_mins_ago" = "%1$ld min ago";
 "last_hours_ago" = "%1$ld h ago";

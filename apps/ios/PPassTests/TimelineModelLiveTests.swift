@@ -259,6 +259,31 @@ final class TimelineModelLiveTests: XCTestCase {
         XCTAssertTrue(connected.hasPrefix(L.f("storage_detail_connected", L.s("last_success_never"))))
     }
 
+    func testLastSuccessNeverLocalizedInBothLanguages() throws {
+        let en = try XCTUnwrap(Bundle.main.path(forResource: "en", ofType: "lproj").flatMap(Bundle.init(path:)))
+        let zh = try XCTUnwrap(Bundle.main.path(forResource: "zh-Hans", ofType: "lproj").flatMap(Bundle.init(path:)))
+        XCTAssertEqual(L.s("last_success_never", bundle: zh), "暂未备份")
+        XCTAssertEqual(L.s("last_success_never", bundle: en), "No backups yet")
+        XCTAssertEqual(
+            String(format: L.s("storage_detail_connected", bundle: zh), L.s("last_success_never", bundle: zh)),
+            "已连接 · 暂未备份"
+        )
+        XCTAssertEqual(
+            String(format: L.s("storage_detail_offline", bundle: zh), L.s("last_success_never", bundle: zh)),
+            "未连接 · 暂未备份"
+        )
+        XCTAssertEqual(
+            String(format: L.s("storage_detail_connected", bundle: en), L.s("last_success_never", bundle: en)),
+            "Connected · No backups yet"
+        )
+        XCTAssertEqual(
+            String(format: L.s("storage_detail_offline", bundle: en), L.s("last_success_never", bundle: en)),
+            "Not connected · No backups yet"
+        )
+        XCTAssertEqual(LastSuccessText.fragment(nil), L.s("last_success_never"))
+        XCTAssertEqual(LastSuccessText.line(nil), L.s("last_success_never"))
+    }
+
     /// 状态点颜色跟正文同一份状态：绿=连上、红=配对失效、琥珀=重连中、灰=断开/未知。
     func testStorageDetailDotColorFollowsTheUnifiedStatus() {
         XCTAssertTrue(UIColor(storageDetailDotColor(.connected)).isEqual(UIColor(PPColor.safe)))

@@ -92,7 +92,7 @@
 "hero_unreconciled_title" = "正在重新统计照片";
 "hero_unreconciled_body" = "无需连接电脑或 Wi-Fi，统计完成后会显示备份进度。";
 "dog_last_success" = "最近成功 %1$@";
-"last_success_never" = "还没有成功备份过";
+"last_success_never" = "暂未备份";
 "last_just_now" = "刚刚";
 "last_mins_ago" = "%1$ld 分钟前";
 "last_hours_ago" = "%1$ld 小时前";
