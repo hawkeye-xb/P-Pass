@@ -310,15 +310,15 @@ class HomeScreenSemanticsTest {
         }
     }
 
-    /** 英雄区状态行（已结算）：报「Delivered N」（failed=0 时没有后半句，与生产拼法一致）。 */
+    /** 英雄区状态行（有失败）：部分送达+部分失败也只报失败句，不再拼送达张数（#1459）。 */
     @Test
-    fun hero_line_reads_delivery_result() {
+    fun hero_line_reads_failure_result_only() {
         heroLineTest(
-            PickedBatchSummary(batchId = 1, total = 2, open = 0, delivered = 2, alreadyThere = 0, failed = 0),
+            PickedBatchSummary(batchId = 1, total = 2, open = 0, delivered = 1, alreadyThere = 0, failed = 1),
         ) { line ->
             when (line) {
                 is SingleTransferStatus.Line.Result ->
-                    line.delivered?.let { testContext.getString(R.string.picked_result_delivered, it) } ?: ""
+                    testContext.getString(R.string.picked_result_failed, line.failed)
                 is SingleTransferStatus.Line.Progress -> error("不该出进度句")
             }
         }

@@ -291,7 +291,6 @@
     <string name="pick_from_files_label">Choose from Files</string>
     <!-- #1798 单次入口的文件选择（SAF）：与相册入口共用同一条 Picked 队列。 -->
     <string name="picked_progress">Sending %1$d/%2$d</string>
-    <string name="picked_result_delivered">Delivered %1$d</string>
     <string name="picked_result_failed">%1$d couldn\'t be sent. Please pick them again.</string>
     <!-- #1789：混合范围（目录 + 相册）照片权限未完整——文件夹还在传，只说相册侧；出口只有「调整范围」。 -->
     <string name="hero_mixed_album_incomplete">Backing up folders · Photos access incomplete</string>

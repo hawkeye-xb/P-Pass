@@ -112,14 +112,9 @@ struct BackupTriplet: Equatable {
 
 enum HomeProjection {
     static func pickedLine(_ batch: PickedBatchSummary?) -> String? {
-        guard let batch, !batch.interrupted else { return nil }
+        guard let batch, !batch.interrupted, batch.total > 0 else { return nil }
         if batch.open > 0 { return L.f("picked_progress", batch.settled + 1, batch.total) }
-        let reached = batch.delivered + batch.alreadyThere
-        let head: String? = reached == 0 ? nil
-            : L.f("picked_result_delivered", reached)
-        let tail = batch.failed > 0 ? L.f("picked_result_failed", batch.failed) : nil
-        let line = [head, tail].compactMap { $0 }.joined(separator: " · ")
-        return line.isEmpty ? nil : line
+        return batch.failed > 0 ? L.f("picked_result_failed", batch.failed) : nil
     }
 
     static func pickedInterruptedLine(_ batch: PickedBatchSummary?) -> String? {

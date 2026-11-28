@@ -459,15 +459,11 @@ internal fun HomeScreen(
                             fontSize = 13.sp, color = PPColor.Ink60,
                             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                         )
-                        is SingleTransferStatus.Line.Result -> {
-                            val head = picked.delivered?.let { stringResource(R.string.picked_result_delivered, it) }
-                            val tail = picked.failed.takeIf { it > 0 }?.let { stringResource(R.string.picked_result_failed, it) }
-                            Text(
-                                listOfNotNull(head, tail).joinToString(" · "),
-                                fontSize = 13.sp, color = PPColor.Ink60,
-                                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                            )
-                        }
+                        is SingleTransferStatus.Line.Result -> Text(
+                            stringResource(R.string.picked_result_failed, picked.failed),
+                            fontSize = 13.sp, color = PPColor.Ink60,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        )
                     }
                 }
             }

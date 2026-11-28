@@ -17,7 +17,7 @@ import java.io.File
  * 1. 已是「部分照片」时开自动备份不再申请权限（拒绝两次后 READ_MEDIA_IMAGES 是 USER_FIXED，系统不再弹框），
  *    直接打开本 App 的系统设置页；回到前台按真实权限现算，只接一次（同 iOS）。
  * 2. 不再弹「已把你允许的 N 张传到电脑…」：弹出时照片还没传。
- * 3. 手选结果行只说「送达 N 张」。
+ * 3. 手选结果行不再保留已废除的送达文案（#1459：全部送达后不显示结果句，只保留失败句）。
  */
 class RuleEnableWhenPartialTest {
     private val main by lazy { File("src/main/java/com/hawkeyexb/ppass/MainActivity.kt").readText() }
@@ -171,13 +171,16 @@ class RuleEnableWhenPartialTest {
     }
 
     @Test
-    fun no_limited_sent_snackbar_and_picked_line_only_says_delivered() {
+    fun no_limited_sent_snackbar_and_removed_picked_delivered_strings() {
         assertFalse(main.contains("auto_backup_rule_limited_sent"))
         assertFalse(home.contains("picked_result_with_existing"))
-        assertFalse(File("src/main/res/values-zh/strings.xml").readText().contains("picked_result_with_existing"))
+        assertFalse(home.contains("picked_result_delivered"))
         // 不用的提示句连词条一起删掉（两种语言）。
         for (dir in listOf("values", "values-zh")) {
-            assertFalse(dir, File("src/main/res/$dir/strings.xml").readText().contains("auto_backup_rule_limited_sent"))
+            val xml = File("src/main/res/$dir/strings.xml").readText()
+            assertFalse(dir, xml.contains("auto_backup_rule_limited_sent"))
+            assertFalse(dir, xml.contains("picked_result_with_existing"))
+            assertFalse(dir, xml.contains("picked_result_delivered"))
         }
     }
 
