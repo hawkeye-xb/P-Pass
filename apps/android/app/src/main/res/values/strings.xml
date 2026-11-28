@@ -149,7 +149,7 @@
     <string name="hero_unreconciled_body">No computer or Wi-Fi needed. Progress shows when the count is done.</string>
     <string name="dog_last_success">Last success %1$s</string>
     <!-- T-080 defect(b): never render an epoch-0 date when nothing ever succeeded -->
-    <string name="last_success_never">No successful backup yet</string>
+    <string name="last_success_never">No backups yet</string>
     <string name="last_just_now">just now</string>
     <string name="last_mins_ago">%1$d min ago</string>
     <string name="last_hours_ago">%1$d h ago</string>

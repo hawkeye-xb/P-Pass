@@ -3,7 +3,7 @@ import PPassCore
 
 /// 「最近成功」的人话：英雄卡（带「最近成功 ·」前缀）与存储电脑详情（不带前缀）共用同一个裁决。
 enum LastSuccessText {
-    /// 无前缀的时间片段：刚刚 / N 分钟前 / N 小时前 / MM-dd HH:mm；从未成功 = 「还没有成功的备份」。
+    /// 无前缀的时间片段：刚刚 / N 分钟前 / N 小时前 / MM-dd HH:mm；从未成功 = 「暂未备份」。
     static func fragment(_ ts: Int64?) -> String {
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         switch HomeProjection.lastSuccess(ts: ts ?? 0, now: now) {

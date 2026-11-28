@@ -138,7 +138,7 @@
     <string name="hero_unreconciled_body">无需连接电脑或 Wi-Fi，统计完成后会显示备份进度。</string>
     <string name="dog_last_success">最近成功 %1$s</string>
     <!-- T-080 缺陷(b): 从未成功备份（时间戳 0）绝不渲染 epoch 日期 -->
-    <string name="last_success_never">还没有成功备份过</string>
+    <string name="last_success_never">暂未备份</string>
     <string name="last_just_now">刚刚</string>
     <string name="last_mins_ago">%1$d 分钟前</string>
     <string name="last_hours_ago">%1$d 小时前</string>

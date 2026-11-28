@@ -16,7 +16,7 @@ import javax.xml.parsers.DocumentBuilderFactory
 /**
  * T-080: 状态条裁决逻辑（纯函数）——锁死两个真机确认过的缺陷：
  *  (a) 待备份 K > 0 时顶部状态不得出现「照片都存好了」类文案；
- *  (b) 从未成功备份（时间戳 <= 0）必须走「还没有成功备份过」，
+ *  (b) 从未成功备份（时间戳 <= 0）必须走「暂未备份」（last_success_never），
  *      日期分支绝不接到 epoch 0（真机曾渲染「01-01 08:00」假话）。
  *
  * 裁决 → 文案的映射固定为：Pending → state_pending、AllSafe → state_safe、
@@ -70,9 +70,11 @@ class BackupStatusTest {
         val now = 1_754_400_000_000L // 2026-08-05 前后，任意固定 now
         assertEquals(LastSuccess.Never, lastSuccessOf(0L, now))
         assertEquals(LastSuccess.Never, lastSuccessOf(-1L, now))
-        // Never 对应的真实文案：
-        val never = zhStrings().getValue("last_success_never")
-        assertTrue("last_success_never 文案不对: $never", never.contains("还没有成功备份过"))
+        // Never 对应的真实文案（#1584 产品定案更新为「暂未备份」/「No backups yet」）：
+        val neverZh = zhStrings().getValue("last_success_never")
+        val neverEn = stringsFor("values").getValue("last_success_never")
+        assertEquals("last_success_never 中文文案不对: $neverZh", "暂未备份", neverZh)
+        assertEquals("last_success_never 英文文案不对: $neverEn", "No backups yet", neverEn)
         // 日期分支（At）只有正时间戳才可达：
         val old = lastSuccessOf(now - 3 * 24 * 3600_000L, now)
         assertTrue(old is LastSuccess.At)
