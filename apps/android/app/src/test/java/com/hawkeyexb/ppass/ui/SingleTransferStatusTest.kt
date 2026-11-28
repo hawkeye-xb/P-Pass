@@ -54,25 +54,20 @@ class SingleTransferStatusTest {
     }
 
     @Test
-    fun settled_batch_shows_the_result_sentence() {
-        assertEquals(
-            SingleTransferStatus.Line.Result(delivered = 3, failed = 0),
-            SingleTransferStatus.heroLine(batch(total = 3, delivered = 3, open = 0)),
-        )
-        // 电脑上已有的也算送达（2026-11-04 口径）。
-        assertEquals(
-            SingleTransferStatus.Line.Result(delivered = 3, failed = 0),
-            SingleTransferStatus.heroLine(batch(total = 3, delivered = 1, alreadyThere = 2, open = 0)),
-        )
-        assertEquals(
-            SingleTransferStatus.Line.Result(delivered = 2, failed = 1),
-            SingleTransferStatus.heroLine(batch(total = 3, delivered = 2, failed = 1, open = 0)),
-        )
-        // 全部失败：没有送达半句，只有失败。
-        assertEquals(
-            SingleTransferStatus.Line.Result(delivered = null, failed = 2),
-            SingleTransferStatus.heroLine(batch(total = 2, failed = 2, open = 0)),
-        )
+    fun settled_batch_hides_delivered_and_only_shows_failures() {
+        // #1459：全部送达（含电脑上已有）后不再显示结果句。
+        assertNull(SingleTransferStatus.heroLine(batch(total = 3, delivered = 3, open = 0)))
+        assertNull(SingleTransferStatus.heroLine(batch(total = 3, delivered = 1, alreadyThere = 2, open = 0)))
+        // 部分送达 + 部分失败：只显示失败张数，不再拼「送达 N 张」。
+        val partialFail = SingleTransferStatus.heroLine(batch(total = 3, delivered = 2, failed = 1, open = 0))
+        assertTrue(partialFail is SingleTransferStatus.Line.Result)
+        assertEquals(1, (partialFail as SingleTransferStatus.Line.Result).failed)
+        assertFalse("结果句不再携带送达计数", partialFail.toString().contains("delivered"))
+        // 全部失败：同样只产出失败张数。
+        val allFail = SingleTransferStatus.heroLine(batch(total = 2, failed = 2, open = 0))
+        assertTrue(allFail is SingleTransferStatus.Line.Result)
+        assertEquals(2, (allFail as SingleTransferStatus.Line.Result).failed)
+        assertFalse("结果句不再携带送达计数", allFail.toString().contains("delivered"))
     }
 
     @Test
@@ -118,13 +113,16 @@ class SingleTransferStatusTest {
         // 对照：latestBatch 的单批口径正是缺陷本体——只报新一批 3 行，旧批 4 个未结束在英雄区消失。
         assertEquals(3, store.latestBatch()!!.total)
 
-        // 全部结算后（没有未结束项）：出结果句（验收「没有未结束项时，再显示结算结果」）。
+        // 全部送达后（无失败）：英雄区不再显示结果句（#1459）。
         (2L..5L).forEach { store.mark(it, PickedState.DELIVERED) }
         (6L..8L).forEach { store.mark(it, PickedState.ALREADY_THERE) }
-        assertEquals(
-            SingleTransferStatus.Line.Result(delivered = 7, failed = 0),
-            SingleTransferStatus.heroLine(store.summary()),
-        )
+        assertNull(SingleTransferStatus.heroLine(store.summary()))
+
+        // 只要有失败项：结算后只产出失败张数。
+        store.mark(8L, PickedState.FAILED)
+        val withFailure = SingleTransferStatus.heroLine(store.summary())
+        assertTrue(withFailure is SingleTransferStatus.Line.Result)
+        assertEquals(1, (withFailure as SingleTransferStatus.Line.Result).failed)
     }
 
     /** 设置入口、轮询及决定页的共用回调都读跨批次汇总，不能只展示最后一批。 */

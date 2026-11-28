@@ -176,7 +176,6 @@
 "pick_from_photos_label" = "Choose from Photos";
 "pick_from_files_label" = "Choose from Files";
 "picked_progress" = "Sending %1$ld/%2$ld";
-"picked_result_delivered" = "Delivered %1$ld";
 "picked_result_failed" = "%1$ld couldn't be sent. Please pick them again.";
 "hero_mixed_album_incomplete" = "Backing up folders · Photos access incomplete";
 "hero_adjust_scope_action" = "Adjust scope";

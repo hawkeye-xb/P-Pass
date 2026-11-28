@@ -176,7 +176,6 @@
 "pick_from_photos_label" = "从相册选择";
 "pick_from_files_label" = "从文件选择";
 "picked_progress" = "正在传 %1$ld/%2$ld";
-"picked_result_delivered" = "送达 %1$ld 张";
 "picked_result_failed" = "有 %1$ld 张没传成，请重新挑选。";
 "hero_mixed_album_incomplete" = "文件夹备份中 · 相册未完整授权";
 "hero_adjust_scope_action" = "调整范围";
